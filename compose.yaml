@@ -1,0 +1,20 @@
+# 可选的本机 PostgreSQL 环境；后端仍通过 cargo run 启动。
+# 密码必须由环境变量提供，不在仓库保存。
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: questionnaire
+      POSTGRES_USER: questionnaire
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD first}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U questionnaire -d questionnaire"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  postgres_data:
