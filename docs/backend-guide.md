@@ -14,8 +14,9 @@
 
 ```powershell
 $Base = 'http://localhost:3000'
+$Origin = 'http://localhost:3000' # 使用前端配置时改为 http://localhost:5173，需与 PUBLIC_ORIGIN 一致
 $WriteOptions = @{
-    Headers = @{ Origin = $Base; 'X-CSRF-Protection' = '1' }
+    Headers = @{ Origin = $Origin; 'X-CSRF-Protection' = '1' }
     ContentType = 'application/json; charset=utf-8'
     ErrorAction = 'Stop'
 }
@@ -120,7 +121,7 @@ $Public.document.purpose
 $Public.privacy
 ```
 
-发布请求只传 `revision`，发布的是服务器已经保存的草稿，不是另传一份 Document。`share_url` 是同源公开 API 路径，不是前端填写页面。实际面向用户的客户端必须在填写前展示收集目的及 `privacy` 提示。
+发布请求只传 `revision`，发布的是服务器已经保存的草稿，不是另传一份 Document。`share_url` 是同源公开 API 路径。Vue 前端将其对应到网页 `/s/:id`，并在填写前展示收集目的及 `privacy` 提示，详见 [前端指南](frontend-guide.md)。
 
 ### 1.4 提交一份答卷，并重试同一次提交
 
@@ -431,4 +432,4 @@ psql -h 127.0.0.1 -p 5432 -U questionnaire -d $RestoreDb -W -c "SELECT s.id AS s
 
 ## 7. 当前交付边界
 
-这是后端 API 与数据一致性实现，不含前端布局/移动端界面、性能压测报告或公众长期运营的隐私合规流程；HTTPS/TLS 终止、反向代理与应用容器镜像同样不在项目范围内。全局内存限流只保护单实例固定窗口，不按身份判断人次，也不在多个实例间共享。对外运营还涉及告知同意、合法收集范围、数据保留与删除、运维权限及事件响应，不能用“匿名模式”三个字替代这些责任。
+本文说明后端 API 与数据一致性实现；新增 Vue 前端及移动布局见 [前端指南](frontend-guide.md)。性能压测报告、公众长期运营的隐私合规流程、HTTPS/TLS 终止、部署反向代理与应用容器镜像不在项目范围内。全局内存限流只保护单实例固定窗口，不按身份判断人次，也不在多个实例间共享。对外运营还涉及告知同意、合法收集范围、数据保留与删除、运维权限及事件响应，不能用“匿名模式”三个字替代这些责任。

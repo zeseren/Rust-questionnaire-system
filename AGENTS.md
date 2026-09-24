@@ -4,11 +4,11 @@
 
 ## Project Overview
 
-`questionnaire-api` is a Rust HTTP JSON API for a questionnaire/survey system (learning project; **no frontend in this repo** — share "links" are JSON endpoints, not pages).
+`questionnaire-api` 是问卷调查系统的 Rust HTTP JSON API；`frontend/` 现有连接真实接口的 Vue 3 前端 MVP。后端 `share_url` 仍指向 JSON 接口，前端填写页面为 `/s/:id`。
 
 Domain: publishers create surveys with 6 question types (single/multiple choice, text, textarea, number, rating), publish immutable versions, collect answers anonymously or one-per-account, then view per-version statistics and export CSV. Admins govern users/surveys with an audit trail.
 
-Layout: a single-member Cargo workspace (`backend/`, package `questionnaire-api`, lib + thin bin). Docs: `README.md` (operator runbook), `docs/backend-guide.md` (code-reading tour + REST walkthrough), `docs/requirements-analysis.md` (requirements baseline + §11 verification ledger).
+项目保留单成员 Cargo workspace（`backend/`，包名 `questionnaire-api`），前端位于独立的 `frontend/`。使用与阅读说明见 `README.md`、`docs/backend-guide.md`、`docs/frontend-guide.md`；需求及分阶段验证记录见 `docs/requirements-analysis.md` 第 11、12 节。
 
 ## Architecture & Data Flow
 
@@ -30,6 +30,7 @@ Request trace example — `POST /api/surveys/{id}/publish`: `surveys::publish` �
 
 - `backend/src/` — all source, flat (one file per feature area, no subdirectories).
 - `backend/tests/` — integration tests (`domain.rs` is currently the entire suite).
+- `frontend/` — Vue 3、TypeScript、Vite、Vue Router、Pinia；`prototype.html` 保留为独立风格原型，`src/` 为真实应用。
 - `docs/` — Chinese design docs (`backend-guide.md`, `requirements-analysis.md`).
 - repo root — `Cargo.toml` / `Cargo.lock` (workspace + lockfile), `compose.yaml` (optional Postgres 18 only), `.env.example`.
 
@@ -97,7 +98,14 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 - `backend/Cargo.toml` — MSRV/edition/features; `Cargo.lock` — exact pins.
 - `backend/tests/domain.rs` — the whole test suite.
 - `compose.yaml`, `.env.example` — optional DB and the env contract.
-- `README.md`, `docs/backend-guide.md`, `docs/requirements-analysis.md` — runbook, architecture walkthrough, requirements + §11 "verified vs unverified" ledger. Note: the requirements doc also describes a planned Vue frontend and performance targets that **do not exist in this repo** — treat README and code as current.
+- `README.md`、`docs/backend-guide.md`、`docs/frontend-guide.md`、`docs/requirements-analysis.md` — 运行说明、前后端代码指南与分阶段验证记录。前端 MVP 已实现，性能目标仍未经过压测；以当前代码和验证记录为准。
+
+## 前端 MVP 约定
+
+- 延续极简 Fluent × Metro 风格，使用纯色表面与直角控件，支持浅色、深色和系统主题，不添加毛玻璃、背景模糊、渐变或投影。
+- 在 `frontend/` 运行 `npm ci`、`npm run dev`；必要构建使用 `npm run build`。开发和预览固定使用 `http://localhost:5173`，后端 `PUBLIC_ORIGIN` 必须匹配。
+- `/api` 经 Vite 同源代理访问后端，目标由服务器变量 `API_PROXY_TARGET` 配置；保留 Cookie 和 Origin 校验，不将秘密放入浏览器变量。
+- 用户要求按 MVP 范围推进，只做必要验证，不主动扩展测试工程或异常场景联调；静态原型无需测试。
 
 ## Runtime/Tooling Preferences
 

@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- 主题在首次绘制前生效，业务数据不会写入浏览器存储。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f7f7f7" />
+    <meta name="description" content="问序，让每一个想法都被听见。创建问卷、收集回答、发现洞察。" />
+    <title>问序</title>
+    <script>
+      try {
+        const preference = localStorage.getItem('wenxu-theme') || 'system'
+        document.documentElement.dataset.theme =
+          preference === 'dark' ||
+          (preference === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+            ? 'dark'
+            : 'light'
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
