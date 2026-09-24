@@ -8,10 +8,10 @@ use axum::{
     extract::{Request, State},
     http::{HeaderValue, Method, StatusCode, header},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use std::{
-    sync::Mutex,
+    sync::{Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -41,7 +41,8 @@ impl Limits {
 }
 
 fn admit(window: &Mutex<Window>, maximum: u32) -> AppResult<()> {
-    let mut window = window.lock().map_err(AppError::internal)?;
+    // 临界区只有计数赋值，中毒时数据仍然完整；恢复使用，避免此后每个请求都返回 500。
+    let mut window = window.lock().unwrap_or_else(PoisonError::into_inner);
     if window.started.elapsed() >= Duration::from_secs(60) {
         window.started = Instant::now();
         window.count = 0;
@@ -57,11 +58,23 @@ fn admit(window: &Mutex<Window>, maximum: u32) -> AppResult<()> {
     Ok(())
 }
 
-pub(crate) async fn guard(
-    State(state): State<AppState>,
-    request: Request,
-    next: Next,
-) -> AppResult<Response> {
+/// 统一请求闸门。CSRF 与限流拒绝也经过同一出口，所有响应都带 no-store 和 nosniff。
+pub(crate) async fn guard(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let mut response = match check(&state, &request) {
+        Ok(()) => next.run(request).await,
+        Err(error) => error.into_response(),
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+fn check(state: &AppState, request: &Request) -> AppResult<()> {
     let method = request.method();
     if !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
         let origin = request
@@ -93,13 +106,5 @@ pub(crate) async fn guard(
             )?;
         }
     }
-    let mut response = next.run(request).await;
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response.headers_mut().insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    Ok(response)
+    Ok(())
 }

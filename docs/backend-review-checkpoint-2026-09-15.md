@@ -210,3 +210,20 @@ python target\backend-review-20260915-0135\probe.py   # 分页粒度与严格性
 | 管理列表 | `admin.rs:92-99/214-220/174` | `count` 与分页无快照事务；排序无匹配索引（`surveys_owner_created` 首列是 owner）；逐行整份 `Document` 解析只为取标题，一行异常即整页 500 |
 
 已实测判定为非问题（不再记录为风险）：启动失败的 anyhow 错误链**不含** DATABASE_URL 口令（`grep` 计数 0）；无 `unsafe`、无 `unwrap/expect/panic`（唯一 `expect` 在 `reports.rs:41` 的编译期常量）；14 项类别（own/err/mem/async/conc/num/serde/pat/coll/perf/proj/lint/anti/name）逐条核对为合规，详见本轮报告。
+
+## 11. 修复记录（2026-09-24）
+
+分支 `feat/frontend-mvp`，按 rust-skills 相关规则修复：
+
+| 项 | 规则 | 修复 |
+| --- | --- | --- |
+| A 显式分页 400 | `serde-custom-with` | `http.rs` 的 `Pagination` 两个字段改用 `optional_u64`，同时接受数字和纯十进制字符串；`flatten` 缓冲后的字符串也能解析，`+1`、`abc` 仍为 `400 invalid_query`，范围仍由 `bounds()` 返回 422 |
+| B 撤销后迟到写入 | — | 新增 `repository::lock_session_user`（锁账号 → 同事务重验原 Session → 核对身份）；`lock_owned_survey` 与 `create_survey` 统一经过它，`submissions.rs` 的同类逻辑改为复用 |
+| C 题目未知字段 | `serde-deny-unknown-fields`、`serde-flatten` | `Question` 反序列化不再用 `flatten`：取出公共字段后交给带 `deny_unknown_fields` 的 `QuestionKind`；新增领域测试 `misspelled_question_fields_are_rejected_instead_of_dropped` |
+| D 提前拒绝缺安全头 | — | `security::guard` 拆出 `check`，拒绝结果先转成响应再统一补头；删除 `reports.rs` 导出接口的重复头 |
+| 限流锁中毒 | `own-mutex-interior` | `lock().unwrap_or_else(PoisonError::into_inner)` |
+| 配置错误无变量名 | `err-context-chain` | 三个数值变量解析失败时报出变量名 |
+
+验证：`cargo fmt --check`、`cargo test`（8 个领域测试）、`cargo clippy -D warnings` 通过；`target\backend-review-20260915-0135\verify_fix.py` 在临时 PostgreSQL 18.1 上 21 项断言全部通过，包括迟到写入返回 `401 unauthorized` 且库中 revision 未变，以及 403/429 响应均带 `no-store`/`nosniff`。
+
+尚未处理（需另行决定或属于较大改动）：数字词法分支（与 `backend-guide.md` 4.2 节的现行约定冲突，需确认契约）、认证时间侧信道、过期会话回收、`type-no-stringly` 字符串状态/角色、管理列表快照与索引、`change_status` 的通配匹配。

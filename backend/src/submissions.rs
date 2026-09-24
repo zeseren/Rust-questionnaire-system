@@ -341,11 +341,8 @@ async fn lock_public_survey(
         ));
     }
     if let Some(subject_id) = respondent_id {
-        repository::lock_user(&tx, subject_id).await?;
         // 等待锁时可能发生退出、改密或禁用；必须在同一事务内重新验证会话。
-        if auth::authenticate(headers, &tx).await?.id != subject_id {
-            return Err(AppError::unauthorized());
-        }
+        repository::lock_session_user(&tx, headers, subject_id).await?;
     }
     Ok(LockedSurvey {
         tx,

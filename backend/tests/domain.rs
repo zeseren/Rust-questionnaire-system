@@ -348,3 +348,46 @@ fn numeric_bounds_survive_json_storage_round_trip() {
         Some(id(1))
     );
 }
+
+#[test]
+fn misspelled_question_fields_are_rejected_instead_of_dropped() {
+    let doc = document(vec![
+        question(1, true, QuestionKind::SingleChoice { options: choices() }),
+        question(
+            2,
+            false,
+            QuestionKind::Number {
+                integer: false,
+                min: Some(5.0),
+                max: Some(10.0),
+            },
+        ),
+    ]);
+    let stored = serde_json::to_value(&doc).unwrap();
+    let restored: Document = serde_json::from_value(stored.clone()).unwrap();
+    assert_eq!(restored, doc);
+
+    // 把 min 拼成 minimum 时，若静默丢弃，下界会变成 null 并接受越界答案。
+    let mut misspelled = stored.clone();
+    let number = misspelled["questions"][1].as_object_mut().unwrap();
+    let min = number.remove("min").unwrap();
+    number.insert("minimum".into(), min);
+    assert!(serde_json::from_value::<Document>(misspelled).is_err());
+
+    // 公共层级的多余字段同样拒绝，不能借题型配置混入。
+    let mut extra = stored.clone();
+    extra["questions"][0]["shuffle"] = json!(true);
+    assert!(serde_json::from_value::<Document>(extra).is_err());
+
+    // 其他题型的合法字段也不属于本题。
+    let mut foreign = stored.clone();
+    foreign["questions"][1]["max_length"] = json!(20);
+    assert!(serde_json::from_value::<Document>(foreign).is_err());
+
+    let mut missing = stored;
+    missing["questions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("required");
+    assert!(serde_json::from_value::<Document>(missing).is_err());
+}

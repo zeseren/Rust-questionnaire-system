@@ -5,7 +5,7 @@
 use axum::{
     Json, Router,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{get, patch, post, put},
 };
 use chrono::{DateTime, Utc};
@@ -266,9 +266,10 @@ pub(crate) fn router() -> Router<AppState> {
 async fn create(
     State(state): State<AppState>,
     user: AuthUser,
+    headers: HeaderMap,
     ApiJson(input): ApiJson<CreateSurvey>,
 ) -> AppResult<(StatusCode, Json<SurveyDetail>)> {
-    let result = create_survey(&state, user.id, input.document).await?;
+    let result = create_survey(&state, user.id, &headers, input.document).await?;
     Ok((StatusCode::CREATED, Json(result)))
 }
 
@@ -341,10 +342,13 @@ async fn detail(
 async fn save_draft(
     State(state): State<AppState>,
     user: AuthUser,
+    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<SaveDraft>,
 ) -> AppResult<Json<SurveyDetail>> {
-    Ok(Json(save_survey_draft(&state, user.id, id, input).await?))
+    Ok(Json(
+        save_survey_draft(&state, user.id, &headers, id, input).await?,
+    ))
 }
 
 /// 预览已保存草稿，不产生正式答卷
@@ -402,9 +406,10 @@ async fn preview(
 async fn copy(
     State(state): State<AppState>,
     user: AuthUser,
+    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<(StatusCode, Json<SurveyDetail>)> {
-    let result = copy_survey(&state, user.id, id).await?;
+    let result = copy_survey(&state, user.id, &headers, id).await?;
     Ok((StatusCode::CREATED, Json(result)))
 }
 
@@ -425,9 +430,10 @@ async fn copy(
 async fn delete(
     State(state): State<AppState>,
     user: AuthUser,
+    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<StatusCode> {
-    delete_survey(&state, user.id, id).await?;
+    delete_survey(&state, user.id, &headers, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -453,10 +459,11 @@ async fn delete(
 async fn publish(
     State(state): State<AppState>,
     user: AuthUser,
+    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<PublishSurvey>,
 ) -> AppResult<(StatusCode, Json<PublishedSurvey>)> {
-    let result = publish_survey(&state, user.id, id, input.revision).await?;
+    let result = publish_survey(&state, user.id, &headers, id, input.revision).await?;
     Ok((StatusCode::CREATED, Json(result)))
 }
 
@@ -481,10 +488,13 @@ async fn publish(
 async fn collection(
     State(state): State<AppState>,
     user: AuthUser,
+    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<CollectionSettings>,
 ) -> AppResult<Json<SurveyDetail>> {
-    Ok(Json(update_collection(&state, user.id, id, input).await?))
+    Ok(Json(
+        update_collection(&state, user.id, &headers, id, input).await?,
+    ))
 }
 
 /// 主动关闭回收
@@ -506,10 +516,11 @@ async fn collection(
 async fn close(
     State(state): State<AppState>,
     user: AuthUser,
+    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<Json<SurveyDetail>> {
     Ok(Json(
-        change_status(&state, user.id, id, CollectionAction::Close).await?,
+        change_status(&state, user.id, &headers, id, CollectionAction::Close).await?,
     ))
 }
 
@@ -532,10 +543,11 @@ async fn close(
 async fn resume(
     State(state): State<AppState>,
     user: AuthUser,
+    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<Json<SurveyDetail>> {
     Ok(Json(
-        change_status(&state, user.id, id, CollectionAction::Resume).await?,
+        change_status(&state, user.id, &headers, id, CollectionAction::Resume).await?,
     ))
 }
 
@@ -558,10 +570,11 @@ async fn resume(
 async fn archive(
     State(state): State<AppState>,
     user: AuthUser,
+    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<Json<SurveyDetail>> {
     Ok(Json(
-        change_status(&state, user.id, id, CollectionAction::Archive).await?,
+        change_status(&state, user.id, &headers, id, CollectionAction::Archive).await?,
     ))
 }
 
@@ -594,15 +607,17 @@ async fn versions(
 }
 
 // 以下是业务层。所有写入只使用同一个 tx，绝不在事务中绕回连接池执行写入。
+// 写入函数接收原请求头，只用于持锁后重验 Session；授权主体仍是 owner_id。
 
 async fn create_survey(
     state: &AppState,
     owner_id: Uuid,
+    headers: &HeaderMap,
     document: Document,
 ) -> AppResult<SurveyDetail> {
     document.validate_draft()?;
     let tx = state.db.begin().await?;
-    repository::lock_user(&tx, owner_id).await?;
+    repository::lock_session_user(&tx, headers, owner_id).await?;
     let now = Utc::now();
     let record = insert_draft(&tx, owner_id, document, now).await?;
     let result = survey_detail(record, now)?;
@@ -735,12 +750,13 @@ async fn list_surveys(
 async fn save_survey_draft(
     state: &AppState,
     owner_id: Uuid,
+    headers: &HeaderMap,
     id: Uuid,
     input: SaveDraft,
 ) -> AppResult<SurveyDetail> {
     input.document.validate_draft()?;
     let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey(&tx, owner_id, id).await?;
+    let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
     let now = Utc::now();
     let record = repository::expire_survey(&tx, record, now).await?;
     ensure_editable(&record)?;
@@ -758,9 +774,14 @@ async fn save_survey_draft(
     Ok(result)
 }
 
-async fn copy_survey(state: &AppState, owner_id: Uuid, id: Uuid) -> AppResult<SurveyDetail> {
+async fn copy_survey(
+    state: &AppState,
+    owner_id: Uuid,
+    headers: &HeaderMap,
+    id: Uuid,
+) -> AppResult<SurveyDetail> {
     let tx = state.db.begin().await?;
-    let source = repository::lock_owned_survey(&tx, owner_id, id).await?;
+    let source = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
     let source_document = if source.status == "archived" {
         version::Entity::find()
             .filter(version::Column::SurveyId.eq(id))
@@ -782,9 +803,14 @@ async fn copy_survey(state: &AppState, owner_id: Uuid, id: Uuid) -> AppResult<Su
     Ok(result)
 }
 
-async fn delete_survey(state: &AppState, owner_id: Uuid, id: Uuid) -> AppResult<()> {
+async fn delete_survey(
+    state: &AppState,
+    owner_id: Uuid,
+    headers: &HeaderMap,
+    id: Uuid,
+) -> AppResult<()> {
     let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey(&tx, owner_id, id).await?;
+    let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
     if record.status != "unpublished" || record.current_version_id.is_some() {
         return Err(AppError::conflict(
             "survey_published",
@@ -799,11 +825,12 @@ async fn delete_survey(state: &AppState, owner_id: Uuid, id: Uuid) -> AppResult<
 async fn publish_survey(
     state: &AppState,
     owner_id: Uuid,
+    headers: &HeaderMap,
     id: Uuid,
     revision: i64,
 ) -> AppResult<PublishedSurvey> {
     let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey(&tx, owner_id, id).await?;
+    let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
     let now = Utc::now();
     let record = repository::expire_survey(&tx, record, now).await?;
     ensure_editable(&record)?;
@@ -868,11 +895,12 @@ async fn publish_survey(
 async fn update_collection(
     state: &AppState,
     owner_id: Uuid,
+    headers: &HeaderMap,
     id: Uuid,
     input: CollectionSettings,
 ) -> AppResult<SurveyDetail> {
     let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey(&tx, owner_id, id).await?;
+    let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
     let now = Utc::now();
     // 必须在覆盖 deadline 之前执行，否则延期会抹掉“已经到期”的事实。
     let record = repository::expire_survey(&tx, record, now).await?;
@@ -912,11 +940,12 @@ enum CollectionAction {
 async fn change_status(
     state: &AppState,
     owner_id: Uuid,
+    headers: &HeaderMap,
     id: Uuid,
     action: CollectionAction,
 ) -> AppResult<SurveyDetail> {
     let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey(&tx, owner_id, id).await?;
+    let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
     let now = Utc::now();
     let record = repository::expire_survey(&tx, record, now).await?;
     let current = SurveyStatus::from_stored(&record.status)?;

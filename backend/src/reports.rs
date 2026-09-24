@@ -448,13 +448,7 @@ async fn export_csv(
         ))
         .map_err(AppError::internal)?,
     );
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response.headers_mut().insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
+    // no-store / nosniff 由 security::guard 统一添加，这里不重复维护。
     Ok(response)
 }
 

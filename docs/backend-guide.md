@@ -223,7 +223,7 @@ main.rs: main
 - **`State(state): State<AppState>`**：这是 Axum 的参数提取与解构，意思是从 router 提供的共享状态取出 `state`；同理 `ApiJson(input): ApiJson<SaveDraft>` 解析出结构化请求，而不是在业务里反复解析 JSON。
 - **`Arc`**：`AppState.config: Arc<Config>` 和 `limits: Arc<Limits>` 让多个请求共享同一份配置/限流器。克隆 `Arc` 增加共享引用计数，不复制整份配置；它也不是数据库锁。数据库连接来自共享连接池，不是每个请求临时建立一条新连接。
 - **`enum`**：`QuestionKind` 把六种题型及各自字段放在六个分支中。`Rating` 有 `min_label`，`Text` 有 `max_length`，无需给所有题型塞一堆无意义的空字段。`SurveyStatus` 表达问卷状态，`match` 清楚列出状态分支。
-- **Serde**：`#[serde(tag = "type", rename_all = "snake_case")]` 使 `SingleChoice` 在 JSON 中成为 `"type":"single_choice"`；`Question.kind` 的 `flatten` 把题型配置展开到题目同层。`Document` 等输入 DTO 的 `deny_unknown_fields` 拒绝不认识的字段；不要靠多传 `role` 等字段绕过注册权限。`Serialize` 是把 Rust 值编码出去，`Deserialize` 是把输入解析成 Rust 值。
+- **Serde**：`#[serde(tag = "type", rename_all = "snake_case")]` 使 `SingleChoice` 在 JSON 中成为 `"type":"single_choice"`；题型配置在 JSON 中与 `id`、`title`、`required` 位于同一层。`Document` 等输入 DTO 的 `deny_unknown_fields` 拒绝不认识的字段；不要靠多传 `role` 等字段绕过注册权限。Serde 的 `flatten` 会让 `deny_unknown_fields` 失效，所以 `Question` 手写反序列化：先取出公共字段，其余字段交给带 `deny_unknown_fields` 的 `QuestionKind`，把 `min` 拼成 `minimum` 这类错误会返回 `400 invalid_json`，而不是静默丢弃规则。`Serialize` 是把 Rust 值编码出去，`Deserialize` 是把输入解析成 Rust 值。
 - **`Option` 不是通用兜底**：`current_version_id: None` 表示从未发布。回收设置中的 `deadline: Option<Option<DateTime<Utc>>>` 专门区分 PATCH 的三态：省略保持原值、`null` 清空、时间字符串替换。
 - **SeaORM 的 `Model`、`ActiveModel`、`Set`**：`survey::Model` 是查到的一行。`record.into_active_model()` 将它变成可更新对象，`active.draft = Set(...)` 明确标记该字段要写入；`active.update(&tx).await?` 执行 SQL，不是给内存对象赋值就自动保存。`insert_draft` 用 `survey::ActiveModel { id: Set(...), revision: Set(1), ... }` 插入新行；部分更新里的 `..Default::default()` 留下未设置字段，并不把其他列重置为默认值。
 - **`&tx` 与 `&state.db`**：前者是当前事务，后者是连接池。已进入业务事务后，相关读写必须继续用 `&tx`，否则可能跑到另一条连接，失去前面锁与原子性的保护。
@@ -260,7 +260,9 @@ SeaORM 做大部分查询和写入；`reports::response_snapshot` 使用参数�
 
 回收相关写入使用相同顺序：**发布者用户行 `FOR SHARE` → 问卷行 `FOR UPDATE`**。`repository::lock_owned_survey` 把这个顺序集中起来，随后检查归属。公开读题面也使用短事务检查资格，避免把失效状态的题面继续作为可填写内容返回。
 
-`submit_response` 通过 `lock_public_survey` 获取这些锁；登录限次还会锁填写者用户行为 `SHARE`，并在事务里重新 `authenticate`。等待锁期间可能改密、退出或被禁用，所以不能只信任事务前提取出的用户身份。
+`AuthUser` 提取器在读取请求体之前完成认证，请求体可能迟到。因此所有者写入（新建、保存、复制、删除、发布、回收设置、关闭/恢复/归档）都经 `repository::lock_session_user`：锁定账号行后，在同一事务里用原 Cookie 重新 `authenticate` 并核对身份。退出、改密、禁用都要取得同一账号的 `NO KEY UPDATE` 锁，所以持锁后的重验看得到撤销结果，迟到请求返回 `401`，不会写入。
+
+`submit_response` 通过 `lock_public_survey` 获取这些锁；登录限次同样经 `lock_session_user` 锁填写者用户行为 `SHARE` 并重验 Session。等待锁期间可能改密、退出或被禁用，所以不能只信任事务前提取出的用户身份。
 
 登录创建 Session、修改密码以及管理员改变用户状态使用用户行 **`FOR NO KEY UPDATE`**，不是更强的 `FOR UPDATE`。它与提交持有的 `SHARE` 冲突，能把资格改变和提交排队；同时与外键检查用的 `KEY SHARE` 兼容，避免并发治理写审计时因不必要的强锁互相卡住。治理问卷仍遵循发布者 `SHARE` → 问卷 `UPDATE`，在同一事务写审计。
 

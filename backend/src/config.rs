@@ -62,9 +62,15 @@ impl Config {
                 .context("LISTEN_ADDR 必须是 IP:端口")?,
             public_origin,
             cookie_secure,
-            session_ttl_seconds: value("SESSION_TTL_SECONDS", "86400")?.parse()?,
-            auth_requests_per_minute: value("AUTH_REQUESTS_PER_MINUTE", "60")?.parse()?,
-            submissions_per_minute: value("SUBMISSIONS_PER_MINUTE", "600")?.parse()?,
+            session_ttl_seconds: value("SESSION_TTL_SECONDS", "86400")?
+                .parse()
+                .context("SESSION_TTL_SECONDS 必须是整数秒")?,
+            auth_requests_per_minute: value("AUTH_REQUESTS_PER_MINUTE", "60")?
+                .parse()
+                .context("AUTH_REQUESTS_PER_MINUTE 必须是正整数")?,
+            submissions_per_minute: value("SUBMISSIONS_PER_MINUTE", "600")?
+                .parse()
+                .context("SUBMISSIONS_PER_MINUTE 必须是正整数")?,
         };
         if !(1..=2_592_000).contains(&config.session_ttl_seconds)
             || config.auth_requests_per_minute == 0

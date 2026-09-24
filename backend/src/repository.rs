@@ -1,5 +1,6 @@
 //! 共享的归属查询和行锁。所有回收写操作先锁用户，再锁问卷，形成一致的并发顺序。
 
+use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait,
@@ -8,6 +9,7 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::{
+    auth,
     entities::{survey, user},
     error::{AppError, AppResult},
 };
@@ -23,6 +25,22 @@ pub(crate) async fn lock_user_record(tx: &DatabaseTransaction, id: Uuid) -> AppR
 pub(crate) async fn lock_user(tx: &DatabaseTransaction, id: Uuid) -> AppResult<user::Model> {
     let user = lock_user_record(tx, id).await?;
     if user.disabled {
+        return Err(AppError::unauthorized());
+    }
+    Ok(user)
+}
+
+/// 锁定当前登录账号，并在同一事务内重验请求携带的原 Session。
+///
+/// 提取器在读取请求体之前就完成认证；等待请求体或行锁期间可能发生退出、改密或禁用。
+/// 这些操作都要取得同一账号的 NO KEY UPDATE 锁，所以持锁后的重验不会再看到过期身份。
+pub(crate) async fn lock_session_user(
+    tx: &DatabaseTransaction,
+    headers: &HeaderMap,
+    id: Uuid,
+) -> AppResult<user::Model> {
+    let user = lock_user(tx, id).await?;
+    if auth::authenticate(headers, tx).await?.id != id {
         return Err(AppError::unauthorized());
     }
     Ok(user)
@@ -48,12 +66,14 @@ pub(crate) async fn owned_survey(
         .ok_or_else(AppError::not_found)
 }
 
+/// 所有者写入的统一入口：先锁并重验当前账号，再锁问卷并核对归属。
 pub(crate) async fn lock_owned_survey(
     tx: &DatabaseTransaction,
+    headers: &HeaderMap,
     owner_id: Uuid,
     id: Uuid,
 ) -> AppResult<survey::Model> {
-    lock_user(tx, owner_id).await?;
+    lock_session_user(tx, headers, owner_id).await?;
     let survey = lock_survey(tx, id).await?;
     if survey.owner_id != owner_id {
         return Err(AppError::not_found());

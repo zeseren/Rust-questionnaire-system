@@ -61,40 +61,46 @@ pub struct Question {
 
 impl<'de> Deserialize<'de> for Question {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+
         // JSONB 会把指数写法展开为大整数。先按配置的 f64 类型解析边界，
-        // 避免 Serde 的 flatten 内容缓冲器收到它不支持的 i128；答案仍保留原始精度。
-        let mut value = Value::deserialize(deserializer)?;
-        if value.get("type").and_then(Value::as_str) == Some("number") {
+        // 避免 Serde 的内容缓冲器收到它不支持的 i128；答案仍保留原始精度。
+        let Value::Object(mut fields) = Value::deserialize(deserializer)? else {
+            return Err(D::Error::custom("题目必须是 JSON 对象"));
+        };
+        if fields.get("type").and_then(Value::as_str) == Some("number") {
             for field in ["min", "max"] {
-                if let Some(Value::Number(number)) = value.get_mut(field) {
+                if let Some(Value::Number(number)) = fields.get_mut(field) {
                     *number = number
                         .as_f64()
                         .and_then(Number::from_f64)
-                        .ok_or_else(|| serde::de::Error::custom("数值边界必须是有限数字"))?;
+                        .ok_or_else(|| D::Error::custom("数值边界必须是有限数字"))?;
                 }
             }
         }
-        #[derive(Deserialize)]
-        struct Fields {
-            id: Uuid,
-            title: String,
-            required: bool,
-            #[serde(flatten)]
-            kind: QuestionKind,
-        }
-        let fields: Fields = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        // 不用 flatten：Serde 的 flatten 与 deny_unknown_fields 不能同时生效。
+        // 先取出公共字段，其余字段全部交给严格的 QuestionKind，拼错的配置项会被拒绝而不是丢弃。
+        let mut common = |name: &'static str| {
+            fields
+                .remove(name)
+                .ok_or_else(|| D::Error::missing_field(name))
+        };
+        let id = common("id")?;
+        let title = common("title")?;
+        let required = common("required")?;
         Ok(Self {
-            id: fields.id,
-            title: fields.title,
-            required: fields.required,
-            kind: fields.kind,
+            id: Uuid::deserialize(id).map_err(D::Error::custom)?,
+            title: String::deserialize(title).map_err(D::Error::custom)?,
+            required: bool::deserialize(required).map_err(D::Error::custom)?,
+            kind: QuestionKind::deserialize(Value::Object(fields)).map_err(D::Error::custom)?,
         })
     }
 }
 
 /// 六种题型的配置；JSON 使用 `type` 字段和 snake_case 题型名区分。
+/// 除 `type` 外只接受所选题型自己的配置项，未知字段直接拒绝。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum QuestionKind {
     /// 单选题，答案是一个合法选项的 UUID 字符串。
     SingleChoice {
