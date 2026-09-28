@@ -1,4 +1,5 @@
 //! 所有写请求携带 CSRF 标记；网络失败不被误报为操作成功。
+//! 30 秒截止覆盖到响应正文消费结束，而不是只覆盖到收到响应头。
 import { isSafeNumber, LosslessNumber, parse, stringify } from 'lossless-json'
 
 export class ApiError extends Error {
@@ -32,7 +33,13 @@ export function query(values: Record<string, string | number | null | undefined>
   })
   return search.size ? `?${search}` : ''
 }
-export async function request(path: string, method = 'GET', body?: unknown): Promise<Response> {
+// 截止时间由调用方在读完正文后清除；失败路径立即清除，不遗留定时器。
+// 否则响应头到达后正文可以无限期停留，界面既不超时也拿不到结果。
+async function send(
+  path: string,
+  method = 'GET',
+  body?: unknown,
+): Promise<{ response: Response; timer: number }> {
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), 30_000)
   try {
@@ -61,8 +68,9 @@ export async function request(path: string, method = 'GET', body?: unknown): Pro
         detail?.question_id ?? null,
       )
     }
-    return response
+    return { response, timer }
   } catch (error) {
+    window.clearTimeout(timer)
     if (error instanceof ApiError) throw error
     throw new ApiError(
       0,
@@ -71,26 +79,33 @@ export async function request(path: string, method = 'GET', body?: unknown): Pro
         ? '无法连接服务，请检查网络或稍后重试。'
         : '尚未确认操作结果，请保留当前内容后重试。',
     )
+  }
+}
+export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const { response, timer } = await send(path, method, body)
+  try {
+    if (response.status === 204) return undefined as T
+    try {
+      return decode<T>(await response.text())
+    } catch {
+      throw new ApiError(
+        0,
+        'invalid_response',
+        '服务响应不完整，尚未确认操作结果，请保留内容后重试。',
+      )
+    }
   } finally {
     window.clearTimeout(timer)
   }
 }
-export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await request(path, method, body)
-  if (response.status === 204) return undefined as T
-  try {
-    return decode<T>(await response.text())
-  } catch {
-    throw new ApiError(
-      0,
-      'invalid_response',
-      '服务响应不完整，尚未确认操作结果，请保留内容后重试。',
-    )
-  }
-}
 export async function download(path: string, filename: string) {
-  const response = await request(path)
-  const blob = await response.blob()
+  const { response, timer } = await send(path)
+  let blob: Blob
+  try {
+    blob = await response.blob()
+  } finally {
+    window.clearTimeout(timer)
+  }
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url

@@ -1,5 +1,5 @@
 use questionnaire_api::domain::{
-    Answer, Choice, Document, MAX_TEXT_LENGTH, Question, QuestionKind,
+    Answer, Choice, Document, MAX_SUBMISSION_BYTES, MAX_TEXT_LENGTH, Question, QuestionKind,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -390,4 +390,96 @@ fn misspelled_question_fields_are_rejected_instead_of_dropped() {
         .unwrap()
         .remove("required");
     assert!(serde_json::from_value::<Document>(missing).is_err());
+}
+
+#[test]
+fn submission_budget_rejects_surveys_that_cannot_fit_one_request() {
+    let oversized = document(
+        (1..=60)
+            .map(|index| {
+                question(
+                    index,
+                    true,
+                    QuestionKind::Textarea {
+                        max_length: MAX_TEXT_LENGTH,
+                    },
+                )
+            })
+            .collect(),
+    );
+    // 单题合法，但整份最坏情况超过请求上限，发布必须提前拒绝而不是让填写者 413。
+    assert!(oversized.estimated_submission_bytes() > MAX_SUBMISSION_BYTES);
+    assert_eq!(
+        oversized
+            .ensure_submission_budget()
+            .unwrap_err()
+            .question_id,
+        None
+    );
+    // 题面本身仍然合法：预算与发布规则是两道独立关卡。
+    assert!(oversized.validate_publish().is_ok());
+
+    let within = document(
+        (1..=40)
+            .map(|index| {
+                question(
+                    index,
+                    true,
+                    QuestionKind::Textarea {
+                        max_length: MAX_TEXT_LENGTH,
+                    },
+                )
+            })
+            .collect(),
+    );
+    assert!(within.estimated_submission_bytes() <= MAX_SUBMISSION_BYTES);
+    assert!(within.ensure_submission_budget().is_ok());
+}
+
+#[test]
+fn estimated_submission_bytes_covers_a_worst_case_payload() {
+    let doc = document(vec![
+        question(
+            1,
+            true,
+            QuestionKind::Textarea {
+                max_length: MAX_TEXT_LENGTH,
+            },
+        ),
+        question(2, true, QuestionKind::Text { max_length: 100 }),
+        question(3, true, QuestionKind::SingleChoice { options: choices() }),
+        question(
+            4,
+            true,
+            QuestionKind::MultipleChoice {
+                options: choices(),
+                min_choices: 1,
+                max_choices: 2,
+            },
+        ),
+        question(
+            5,
+            true,
+            QuestionKind::Number {
+                integer: false,
+                min: None,
+                max: None,
+            },
+        ),
+    ]);
+    // 最坏情况载荷：每个标量占满 4 字节 UTF-8，数字取 f64 最长表示。
+    let answers = vec![
+        answer(1, json!("𝄞".repeat(MAX_TEXT_LENGTH))),
+        answer(2, json!("𝄞".repeat(100))),
+        answer(3, json!(id(101))),
+        answer(4, json!([id(101), id(102)])),
+        answer(5, json!(-1.7976931348623157e308)),
+    ];
+    let payload = json!({
+        "version_id": id(900).to_string(),
+        "idempotency_key": id(901).to_string(),
+        "answers": answers,
+    });
+    let bytes = serde_json::to_vec(&payload).unwrap().len();
+    assert!(bytes <= doc.estimated_submission_bytes());
 }

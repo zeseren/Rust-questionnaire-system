@@ -441,18 +441,20 @@ async fn delete(
 ///
 /// 首次发布前须设置填写模式且截止时间未到期。重新发布只切换当前版本；
 /// 关闭状态不会被发布操作恢复，历史版本和历史答卷始终保留。
+/// 草稿未变且内容与当前版本完全一致时按幂等重放返回现有版本，不新增版本号。
 #[utoipa::path(
     post, path = "/api/surveys/{id}/publish", tag = "问卷管理", request_body = PublishSurvey,
     security(("cookieAuth" = [])), params(("id" = Uuid, Path, description = "本人问卷 ID")),
     responses(
         (status = 201, description = "新版本已创建并成为当前版本", body = PublishedSurvey),
+        (status = 200, description = "内容与当前版本一致：未新增版本，返回当前版本", body = PublishedSurvey),
         (status = 401, description = "未登录或账号不可用", body = ErrorResponse),
         (status = 403, description = "请求来源未通过 CSRF 检查", body = ErrorResponse),
         (status = 404, description = "资源不存在或不属于当前用户", body = ErrorResponse),
         (status = 409, description = "修订冲突、已归档、未选模式或首次发布时已到期", body = ErrorResponse),
         (status = 400, description = "路径或 JSON 格式错误", body = ErrorResponse),
         (status = 413, description = "请求体超过 1 MiB", body = ErrorResponse),
-        (status = 422, description = "输入或完整题面校验失败", body = ErrorResponse),
+        (status = 422, description = "完整题面校验失败，或最坏情况答卷超出单次提交上限", body = ErrorResponse),
         (status = 500, description = "服务端错误", body = ErrorResponse)
     )
 )]
@@ -463,8 +465,8 @@ async fn publish(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<PublishSurvey>,
 ) -> AppResult<(StatusCode, Json<PublishedSurvey>)> {
-    let result = publish_survey(&state, user.id, &headers, id, input.revision).await?;
-    Ok((StatusCode::CREATED, Json(result)))
+    let (status, result) = publish_survey(&state, user.id, &headers, id, input.revision).await?;
+    Ok((status, Json(result)))
 }
 
 /// 设置填写模式或调整截止时间
@@ -828,20 +830,45 @@ async fn publish_survey(
     headers: &HeaderMap,
     id: Uuid,
     revision: i64,
-) -> AppResult<PublishedSurvey> {
+) -> AppResult<(StatusCode, PublishedSurvey)> {
     let tx = state.db.begin().await?;
     let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
     let now = Utc::now();
     let record = repository::expire_survey(&tx, record, now).await?;
     ensure_editable(&record)?;
     ensure_revision(&record, revision)?;
-    Document::deserialize(&record.draft)?.validate_publish()?;
+    let document = Document::deserialize(&record.draft)?;
+    document.validate_publish()?;
+    document.ensure_submission_budget()?;
     if record.mode.is_none() {
         return Err(AppError::conflict("mode_required", "请先设置填写模式"));
     }
     let first_publish = record.current_version_id.is_none();
     if first_publish {
         ensure_future_deadline(record.deadline, now)?;
+    }
+
+    // 内容与当前版本完全一致的重复发布（例如响应丢失后的重试）是幂等重放：
+    // 不新增版本，直接返回当前版本，避免同一份题面出现两个版本号。
+    if let Some(current_id) = record.current_version_id {
+        let current = version::Entity::find_by_id(current_id)
+            .filter(version::Column::SurveyId.eq(id))
+            .one(&tx)
+            .await?
+            .ok_or_else(|| AppError::internal("current version is missing"))?;
+        if current.document == record.draft {
+            let result = PublishedSurvey {
+                survey: survey_detail(record, now)?,
+                version: VersionSummary {
+                    id: current.id,
+                    number: current.number,
+                    published_at: current.published_at,
+                    is_current: true,
+                },
+            };
+            tx.commit().await?;
+            return Ok((StatusCode::OK, result));
+        }
     }
     let previous_number = version::Entity::find()
         .filter(version::Column::SurveyId.eq(id))
@@ -889,7 +916,7 @@ async fn publish_survey(
         },
     };
     tx.commit().await?;
-    Ok(result)
+    Ok((StatusCode::CREATED, result))
 }
 
 async fn update_collection(

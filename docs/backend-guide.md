@@ -251,6 +251,8 @@ SeaORM 做大部分查询和写入；`reports::response_snapshot` 使用参数�
 
 - `revision` 从 `1` 开始，每次成功保存整份草稿加一。保存和发布都要求传入最后读到的修订号；`ensure_revision` 在事务锁内比较，旧值返回 `409`，不会静默覆盖另一窗口保存的内容。这就是此处的乐观锁。
 - 发布插入新的 `versions` 行，然后切换 `surveys.current_version_id`。历史版本不被草稿编辑覆盖，答卷绑定提交时的版本。当前实现的不可变性由业务写路径维护；数据库运维人员仍可直接改数据，因此不要绕过 API 手改题面和答案。
+- 草稿 revision 未变、且内容与当前版本完全一致时，发布按幂等重放处理：不新增版本，返回 `200` 与当前版本；只有确实创建新版本才返回 `201`。这样响应丢失后的重试不会凭空产生第二个内容相同的版本号。
+- 发布还按最坏情况估算一次完整提交的字节数（`domain::Document::estimated_submission_bytes`），超过 `MAX_SUBMISSION_BYTES` 时返回 `422`，避免出现逐题合法、整份永远无法提交的问卷。该常量与 HTTP body limit 共用（1 MiB），估算假设客户端以 UTF-8 直传文本；主动转义非 ASCII 的客户端仍可能触发 `413`。
 - 发布不替你保存客户端尚未上传的内容，也不会让已关闭问卷自动恢复回收。第一次发布前必须设置 `anonymous` 或 `login_once`；首次发布后模式冻结。
 - `unpublished` 首次发布后变成 `collecting`；关闭或到期后视为 `closed`。到期后即使延长或清空 `deadline`，仍需显式调用 `resume`。`expire_survey` 先记住旧截止时间已到期的事实，再应用新设置，避免延期顺手抹掉关闭状态。
 - `archive` 不可撤销，禁止继续编辑、发布、恢复；保留版本、答卷、报表和复制能力。彻底删除只允许从未发布的问卷。
@@ -287,7 +289,7 @@ SeaORM 做大部分查询和写入；`reports::response_snapshot` 使用参数�
 
 ### 4.2 文本、缺失与数字
 
-- 草稿允许不完整，但容量、ID 唯一性、数值有限性等基本约束始终有效。发布再要求标题、目的、至少一道题、有效题型配置；最多 100 题，每道选择题最多 50 个选项。
+- 草稿允许不完整，但容量、ID 唯一性、数值有限性等基本约束始终有效。发布再要求标题、目的、至少一道题、有效题型配置；最多 100 题，每道选择题最多 50 个选项。单题上限之和可以合法超过单次提交的请求上限，因此发布期还按最坏情况总量预算把关（见 3.2）。
 - 文字按 Rust `chars()`，即 Unicode 标量值计数，不是 UTF-8 字节数，也不等同于用户眼里的字形数量。非空白答案保留原文；不会静默截断、修剪或按内容判断“有效性”。
 - `null`、空白文本、空多选视为缺失：可选题不存这一键，必填题拒绝。**合法数值 `0` 不等于缺失。** 单行文本拒绝换行，多行文本允许换行。
 - 题面文字、文本答案、治理原因拒绝 `U+0000`（NUL），不把无法存入 PostgreSQL 文本/JSONB 的输入拖到数据库层再报内部错误。文字作为纯文本使用，不是可信 HTML。
@@ -350,7 +352,7 @@ Invoke-RestMethod -Uri "$Base/api/surveys/$SurveyId/statistics?version_id=$Versi
 | PUT | `/api/surveys/{id}/draft` | 带 revision 保存整份草稿 |
 | GET | `/api/surveys/{id}/preview` | 已保存草稿与发布校验结果，不产生答卷 |
 | POST | `/api/surveys/{id}/copy` | 复制为新草稿 |
-| POST | `/api/surveys/{id}/publish` | 发布指定 revision |
+| POST | `/api/surveys/{id}/publish` | 发布指定 revision（内容未变时幂等返回当前版本） |
 | PATCH | `/api/surveys/{id}/collection` | 模式与截止设置 |
 | POST | `/api/surveys/{id}/close` | 关闭回收 |
 | POST | `/api/surveys/{id}/resume` | 显式恢复回收 |
@@ -379,7 +381,7 @@ Invoke-RestMethod -Uri "$Base/api/surveys/$SurveyId/statistics?version_id=$Versi
 | PATCH | `/api/admin/surveys/{id}` | `taken_down` 与必填 `reason` |
 | GET | `/api/admin/audits` | 治理审计分页列表 |
 
-通用分页从 `page=1` 开始，默认 `page_size=20`，范围 `1..=100`。请求体上限为 1 MiB。错误结构为 `{"error":{"code":"...","message":"...","question_id":null}}`，题目级错误会给出 UUID；JSON/路径格式错误通常为 `400`、无有效身份 `401`、拒绝权限或来源 `403`、资源不可访问 `404`、业务冲突 `409`、领域校验 `422`、限流 `429`。管理接口对他人问卷使用不可访问结果，不以猜测 UUID 的方式提供查询入口。
+通用分页从 `page=1` 开始，默认 `page_size=20`，范围 `1..=100`。请求体上限为 1 MiB（`domain::MAX_SUBMISSION_BYTES`，与发布期总量预算共用）。错误结构为 `{"error":{"code":"...","message":"...","question_id":null}}`，题目级错误会给出 UUID；JSON/路径格式错误通常为 `400`、无有效身份 `401`、拒绝权限或来源 `403`、资源不可访问 `404`、业务冲突 `409`、领域校验 `422`、限流 `429`。内部错误（`500`）的日志带 `error_id`、错误类别与发起位置，响应头 `X-Error-Id` 返回同一标识供检索；日志与响应都不含原始 SQL 或用户数据。管理接口对他人问卷使用不可访问结果，不以猜测 UUID 的方式提供查询入口。
 
 ## 6. 备份与独立恢复
 

@@ -17,6 +17,18 @@ pub const MAX_QUESTIONS: usize = 100;
 pub const MAX_CHOICES: usize = 50;
 /// 文本答案、调查说明和收集目的最多允许的 Unicode 标量值数。
 pub const MAX_TEXT_LENGTH: usize = 5000;
+/// 单次提交请求体的字节上限；HTTP body limit 与发布预算共用这一常量。
+pub const MAX_SUBMISSION_BYTES: usize = 1024 * 1024;
+/// 提交请求信封（版本、幂等键与答案数组框架）在最坏情况下的字节数。
+const SUBMISSION_ENVELOPE_BYTES: usize = 256;
+/// 单条答案对象框架（题目 ID 与 value 字段）在最坏情况下的字节数。
+const ANSWER_FRAME_BYTES: usize = 64;
+/// UUID 以 JSON 字符串出现时的字节数（36 字符加引号）。
+const UUID_JSON_BYTES: usize = 38;
+/// 数字答案按 f64 最短往返表示估算的字节数。
+const NUMBER_JSON_BYTES: usize = 32;
+/// 文本答案按 UTF-8 直传时每个 Unicode 标量的最大字节数。
+const TEXT_SCALAR_JSON_BYTES: usize = 4;
 
 /// 问卷标题的 Unicode 标量值上限。
 const MAX_DOCUMENT_TITLE_LENGTH: usize = 200;
@@ -146,6 +158,23 @@ pub enum QuestionKind {
         /// 最高分说明，最多 100 个 Unicode 标量值，可以留空。
         max_label: String,
     },
+}
+
+impl QuestionKind {
+    /// 一道题合法答案在最坏情况下的 JSON 字节数（不含题目 ID 与字段框架）。
+    ///
+    /// 多选按 `max_choices` 个选项全部选中估算，文本按 UTF-8 直传的每标量最多
+    /// 4 字节估算，数字与评分按 f64 最短往返表示估算。
+    fn estimated_answer_bytes(&self) -> usize {
+        match self {
+            Self::SingleChoice { .. } => UUID_JSON_BYTES,
+            Self::MultipleChoice { max_choices, .. } => max_choices * (UUID_JSON_BYTES + 1) + 1,
+            Self::Text { max_length } | Self::Textarea { max_length } => {
+                max_length * TEXT_SCALAR_JSON_BYTES
+            }
+            Self::Number { .. } | Self::Rating { .. } => NUMBER_JSON_BYTES,
+        }
+    }
 }
 
 /// 选择题的一个选项；文字可以重复，身份 ID 不能重复。
@@ -328,6 +357,38 @@ impl Document {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// 按最坏情况估算一次完整提交的 JSON 字节数。
+    ///
+    /// 假设客户端以 UTF-8 直传文本（浏览器与 serde 的默认行为），并按每种题型合法的
+    /// 最大答案计算；估算用于发布校验，不用于限制单次提交的实际大小。
+    pub fn estimated_submission_bytes(&self) -> usize {
+        let mut total = SUBMISSION_ENVELOPE_BYTES;
+        for question in &self.questions {
+            total += ANSWER_FRAME_BYTES + question.kind.estimated_answer_bytes();
+        }
+        total
+    }
+
+    /// 发布前的总量预算：最坏情况必须放得进单次提交的请求上限。
+    ///
+    /// 单题上限之和可以合法超过请求上限，因此在发布期提前拒绝，
+    /// 避免出现逐题合法、整份却永远无法提交的问卷。
+    ///
+    /// # Errors
+    /// 最坏情况估算超过 `MAX_SUBMISSION_BYTES` 时返回不带题目定位的错误。
+    pub fn ensure_submission_budget(&self) -> Result<(), ValidationError> {
+        let estimated = self.estimated_submission_bytes();
+        if estimated > MAX_SUBMISSION_BYTES {
+            return Err(ValidationError::new(
+                None,
+                format!(
+                    "问卷最坏情况下需要约 {estimated} 字节提交，超过单次提交上限 {MAX_SUBMISSION_BYTES} 字节，请减少题目数量、文本长度或选项数量"
+                ),
+            ));
         }
         Ok(())
     }

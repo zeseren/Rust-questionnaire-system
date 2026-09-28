@@ -352,3 +352,16 @@ NFR-07：提交失败保留当前页面输入，支持按既定幂等规则重�
 按 MVP 范围停止扩展测试，没有新增前端自动化测试框架。本次尚未完成答卷提交、统计/CSV、账号限次和管理员治理的浏览器闭环；提交结果未知时重试、修订/版本冲突、375 px 布局、深色主题持久化及完整键盘操作也没有完成运行核对，不报告这些场景通过。功能实现和构建通过不等于所有验收场景完成。
 
 原静态原型未进行测试。本次未重复执行 Rust 测试，也未执行跨浏览器兼容性或性能压测。
+
+## 13. 防御性修复实施与验证记录（2026-09-28）
+
+`improve/priority-fixes` 分支按《优先修复清单》（3 条用户可见 + 1 条运维可见）实施四项修复，在本机 PostgreSQL 18.1 临时实例与真实服务上验证；不改公开响应体契约。
+
+- 发布期提交预算：`domain::MAX_SUBMISSION_BYTES`（1 MiB，与 HTTP body limit 共用）与 `Document::estimated_submission_bytes` / `ensure_submission_budget`；发布超限返回 `422`。60 题 × 5000 的问卷 `preview` 仍 `publishable=true`，`publish` 返回 `422`，文案给出「约 1204096 字节 / 上限 1048576 字节」。
+- 发布幂等重放：草稿 revision 未变且内容与当前版本一致时，发布返回 `200` 与当前版本，不新增版本。同一 revision 二次发布 `version.id` 相同；改稿保存后发布得到 `201` 与 `version.number=2`；版本列表 `total=2`。
+- 请求截止覆盖正文：前端 `api.ts` 在读完 `text()` / `blob()` 后才清除定时器。临时 harness（真实 HTTP 服务器延迟正文 + 真实 fetch，把 30 s 压缩为 50 ms）显示修复前 3037 ms 完成、修复后 63 ms 中止为 `status=0 invalid_response`；截止 5 s 时 3 s 正文正常完成。
+- 内部错误标识：`AppError::internal` 记录 `error_id` / `error_kind` / `location`（`#[track_caller]` 贯穿 `?` 转换），内部错误响应头 `X-Error-Id` 返回同一标识，响应体不变。把 `versions.document` 改成过 CHECK、过不了 `Document` 反序列化的对象后，公开读取返回 `500`，日志与响应头标识一致（`error_kind=serde_json::error::Error`，`location=backend\src\submissions.rs:192:20`）。
+
+门禁：`cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked --workspace`（10/10，含 2 个新增预算测试）、`npm run build`、`npx prettier --check src/api.ts`。
+
+未执行：压测、浏览器闭环、第 3 项的浏览器实测、第 4 项的前端展示；临时数据库实例与验证脚本在收尾时清理，仓库内不保留。

@@ -132,7 +132,7 @@ fn router(state: AppState) -> Router {
                 "不支持此请求方法",
             )
         })
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(DefaultBodyLimit::max(crate::domain::MAX_SUBMISSION_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             security::guard,

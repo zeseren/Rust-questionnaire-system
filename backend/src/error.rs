@@ -2,7 +2,7 @@
 
 use axum::{
     Json,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
@@ -30,6 +30,8 @@ pub(crate) struct AppError {
     code: &'static str,
     message: String,
     question_id: Option<Uuid>,
+    /// 只有内部错误生成；日志与响应头用同一标识定位一次故障。
+    error_id: Option<String>,
 }
 
 impl AppError {
@@ -39,6 +41,7 @@ impl AppError {
             code,
             message: message.into(),
             question_id: None,
+            error_id: None,
         }
     }
 
@@ -73,44 +76,71 @@ impl AppError {
         Self::new(StatusCode::FORBIDDEN, "forbidden", "没有执行此操作的权限")
     }
 
-    pub fn internal(_error: impl std::fmt::Display) -> Self {
-        // ORM 错误可能包含数据库中的原始值，不能直接记录 error.to_string()。
-        tracing::error!("internal operation failed");
-        Self::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "服务暂时无法完成请求",
-        )
+    /// 内部错误的统一出口：记录错误类别与发起位置，并生成可回传检索的标识。
+    ///
+    /// 原始错误可能包含数据库中的原始值或 SQL 文本，绝不记录 `error.to_string()`；
+    /// `#[track_caller]` 让位置指向真正发起操作的位置，而不是本函数。
+    #[track_caller]
+    pub fn internal(error: impl std::fmt::Display) -> Self {
+        let error_id = Uuid::new_v4().simple().to_string();
+        let error_id = error_id[..16].to_owned();
+        tracing::error!(
+            error_id = %error_id,
+            error_kind = std::any::type_name_of_val(&error),
+            location = %std::panic::Location::caller(),
+            "internal operation failed"
+        );
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "internal_error",
+            message: "服务暂时无法完成请求".to_owned(),
+            question_id: None,
+            error_id: Some(error_id),
+        }
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    code: self.code.to_owned(),
-                    message: self.message,
-                    question_id: self.question_id,
-                },
-            }),
-        )
-            .into_response()
+        let Self {
+            status,
+            code,
+            message,
+            question_id,
+            error_id,
+        } = self;
+        let body = Json(ErrorResponse {
+            error: ErrorDetail {
+                code: code.to_owned(),
+                message,
+                question_id,
+            },
+        });
+        let mut response = (status, body).into_response();
+        // 响应头让客户端可以回传标识，日志侧凭同一标识定位故障；响应体契约不变。
+        if let Some(error_id) = error_id
+            && let Ok(value) = HeaderValue::from_str(&error_id)
+        {
+            response.headers_mut().insert("x-error-id", value);
+        }
+        response
     }
 }
 
 impl From<sea_orm::DbErr> for AppError {
+    #[track_caller]
     fn from(error: sea_orm::DbErr) -> Self {
         Self::internal(error)
     }
 }
 impl From<sqlx::Error> for AppError {
+    #[track_caller]
     fn from(error: sqlx::Error) -> Self {
         Self::internal(error)
     }
 }
 impl From<serde_json::Error> for AppError {
+    #[track_caller]
     fn from(error: serde_json::Error) -> Self {
         Self::internal(error)
     }
