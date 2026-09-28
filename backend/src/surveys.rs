@@ -372,7 +372,10 @@ async fn preview(
 ) -> AppResult<Json<SurveyPreview>> {
     let record = repository::owned_survey(&state.db, user.id, id).await?;
     let document: Document = serde_json::from_value(record.draft)?;
-    let validation_error = document.validate_publish().err();
+    let validation_error = document
+        .validate_publish()
+        .and_then(|()| document.ensure_submission_budget())
+        .err();
     Ok(Json(SurveyPreview {
         survey_id: record.id,
         revision: record.revision,

@@ -1,5 +1,7 @@
+//! 领域回归验证保持数字精度、历史答案兼容性与完整提交的容量保证。
 use questionnaire_api::domain::{
-    Answer, Choice, Document, MAX_SUBMISSION_BYTES, MAX_TEXT_LENGTH, Question, QuestionKind,
+    Answer, Choice, Document, MAX_NUMBER_JSON_BYTES, MAX_SUBMISSION_BYTES, MAX_TEXT_LENGTH,
+    Question, QuestionKind,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -416,11 +418,16 @@ fn submission_budget_rejects_surveys_that_cannot_fit_one_request() {
             .question_id,
         None
     );
-    // 题面本身仍然合法：预算与发布规则是两道独立关卡。
+    // 题面本身仍然合法，历史版本的小载荷答卷不能被新增的发布预算阻断。
     assert!(oversized.validate_publish().is_ok());
+    assert!(
+        oversized
+            .validate_answers((1..=60).map(|index| answer(index, json!("回答"))).collect())
+            .is_ok()
+    );
 
     let within = document(
-        (1..=40)
+        (1..=34)
             .map(|index| {
                 question(
                     index,
@@ -452,7 +459,16 @@ fn estimated_submission_bytes_covers_a_worst_case_payload() {
             4,
             true,
             QuestionKind::MultipleChoice {
-                options: choices(),
+                options: vec![
+                    Choice {
+                        id: id(103),
+                        label: "选项甲".into(),
+                    },
+                    Choice {
+                        id: id(104),
+                        label: "选项乙".into(),
+                    },
+                ],
                 min_choices: 1,
                 max_choices: 2,
             },
@@ -467,14 +483,15 @@ fn estimated_submission_bytes_covers_a_worst_case_payload() {
             },
         ),
     ]);
-    // 最坏情况载荷：每个标量占满 4 字节 UTF-8，数字取 f64 最长表示。
+    // 覆盖默认编码的控制字符转义、四字节 UTF-8 和较长的 f64 表示。
     let answers = vec![
-        answer(1, json!("𝄞".repeat(MAX_TEXT_LENGTH))),
+        answer(1, json!("\u{0001}".repeat(MAX_TEXT_LENGTH))),
         answer(2, json!("𝄞".repeat(100))),
         answer(3, json!(id(101))),
-        answer(4, json!([id(101), id(102)])),
+        answer(4, json!([id(103), id(104)])),
         answer(5, json!(-1.7976931348623157e308)),
     ];
+    doc.validate_answers(answers.clone()).unwrap();
     let payload = json!({
         "version_id": id(900).to_string(),
         "idempotency_key": id(901).to_string(),
@@ -482,4 +499,138 @@ fn estimated_submission_bytes_covers_a_worst_case_payload() {
     });
     let bytes = serde_json::to_vec(&payload).unwrap().len();
     assert!(bytes <= doc.estimated_submission_bytes());
+}
+
+#[test]
+fn text_budget_covers_json_escaping_and_quotes_at_request_boundary() {
+    let mut doc = document(
+        (1..=100)
+            .map(|index| {
+                question(
+                    index,
+                    true,
+                    QuestionKind::Text {
+                        max_length: if index <= 20 { 1737 } else { 1736 },
+                    },
+                )
+            })
+            .collect(),
+    );
+    // 100 条答案使字符串两端引号的遗漏无法被信封余量掩盖。
+    assert_eq!(doc.estimated_submission_bytes(), MAX_SUBMISSION_BYTES);
+    doc.ensure_submission_budget().unwrap();
+    for scalar in ["\u{0001}", "𝄞", "\"", "\\"] {
+        let answers: Vec<_> = (1..=100)
+            .map(|index| {
+                answer(
+                    index,
+                    json!(scalar.repeat(if index <= 20 { 1737 } else { 1736 })),
+                )
+            })
+            .collect();
+        doc.validate_answers(answers.clone()).unwrap();
+        let payload = json!({
+            "version_id": id(900), "idempotency_key": id(901), "answers": answers,
+        });
+        assert!(serde_json::to_vec(&payload).unwrap().len() <= doc.estimated_submission_bytes());
+    }
+    doc.questions[0].kind = QuestionKind::Text { max_length: 1738 };
+    assert_eq!(
+        doc.ensure_submission_budget().unwrap_err().question_id,
+        None
+    );
+}
+
+#[test]
+fn numeric_json_length_is_checked_before_normalization() {
+    for kind in [
+        QuestionKind::Number {
+            integer: false,
+            min: None,
+            max: None,
+        },
+        QuestionKind::Rating {
+            min: 0,
+            max: 5,
+            min_label: String::new(),
+            max_label: String::new(),
+        },
+    ] {
+        let doc = document(vec![question(1, true, kind)]);
+        // 小数和指数均可无限补零而不改变数值；必须检查原始表示长度。
+        for raw in [
+            format!("1.{}", "0".repeat(MAX_NUMBER_JSON_BYTES - 2)),
+            format!("1e+{}", "0".repeat(MAX_NUMBER_JSON_BYTES - 3)),
+            format!("1E{}", "0".repeat(MAX_NUMBER_JSON_BYTES - 3)),
+        ] {
+            let accepted = doc
+                .validate_answers(vec![answer(1, serde_json::from_str(&raw).unwrap())])
+                .unwrap();
+            assert_eq!(accepted[&id(1)].as_f64(), Some(1.0));
+            let rejected = doc
+                .validate_answers(vec![answer(
+                    1,
+                    serde_json::from_str(&format!("{raw}0")).unwrap(),
+                )])
+                .unwrap_err();
+            assert_eq!(rejected.question_id, Some(id(1)));
+        }
+    }
+}
+
+#[test]
+fn submission_budget_covers_unrounded_numeric_payloads() {
+    // 全数字问卷单独验证数字预算，混合问卷复现审查发现的超过 1 MiB 载荷。
+    for text_count in [0, 52] {
+        let doc = document(
+            (1..=100)
+                .map(|index| {
+                    question(
+                        index,
+                        true,
+                        if index <= text_count {
+                            QuestionKind::Textarea {
+                                max_length: MAX_TEXT_LENGTH,
+                            }
+                        } else {
+                            QuestionKind::Number {
+                                integer: false,
+                                min: None,
+                                max: None,
+                            }
+                        },
+                    )
+                })
+                .collect(),
+        );
+        let raw: Value =
+            serde_json::from_str(&format!("0.{}", "1".repeat(MAX_NUMBER_JSON_BYTES - 2))).unwrap();
+        let answers: Vec<_> = (1..=100)
+            .map(|index| {
+                answer(
+                    index,
+                    if index <= text_count {
+                        json!("𝄞".repeat(MAX_TEXT_LENGTH))
+                    } else {
+                        raw.clone()
+                    },
+                )
+            })
+            .collect();
+        doc.validate_answers(answers.clone()).unwrap();
+        let payload = json!({
+            "version_id": id(900), "idempotency_key": id(901), "answers": answers,
+        });
+        let bytes = serde_json::to_vec(&payload).unwrap().len();
+        assert!(bytes <= doc.estimated_submission_bytes());
+        if text_count == 0 {
+            doc.ensure_submission_budget().unwrap();
+        } else {
+            assert!(bytes > MAX_SUBMISSION_BYTES);
+            assert_eq!(
+                doc.ensure_submission_budget().unwrap_err().question_id,
+                None
+            );
+        }
+    }
 }

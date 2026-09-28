@@ -25,10 +25,10 @@ const SUBMISSION_ENVELOPE_BYTES: usize = 256;
 const ANSWER_FRAME_BYTES: usize = 64;
 /// UUID 以 JSON 字符串出现时的字节数（36 字符加引号）。
 const UUID_JSON_BYTES: usize = 38;
-/// 数字答案按 f64 最短往返表示估算的字节数。
-const NUMBER_JSON_BYTES: usize = 32;
-/// 文本答案按 UTF-8 直传时每个 Unicode 标量的最大字节数。
-const TEXT_SCALAR_JSON_BYTES: usize = 4;
+/// 数字与评分答案的 JSON 表示上限（包含符号、小数点和指数；正指数符号补齐）。
+pub const MAX_NUMBER_JSON_BYTES: usize = 64;
+/// 默认 JSON 编码中每个 Unicode 标量的最大字节数，覆盖控制字符的六字节转义。
+const TEXT_SCALAR_JSON_BYTES: usize = 6;
 
 /// 问卷标题的 Unicode 标量值上限。
 const MAX_DOCUMENT_TITLE_LENGTH: usize = 200;
@@ -139,6 +139,7 @@ pub enum QuestionKind {
         max_length: usize,
     },
     /// 数字题，只接受 JSON 数字，不接受字符串、布尔值或非有限数值。
+    /// 答案的 JSON 表示最多 64 字节，省略的正指数符号计入长度。
     Number {
         /// 为 true 时只接受数学意义上的整数，`1` 与 `1.0` 等价。
         integer: bool,
@@ -147,7 +148,7 @@ pub enum QuestionKind {
         /// 可选的闭区间上界，必须是有限数值。
         max: Option<f64>,
     },
-    /// 评分题，答案必须是指定闭区间内的整数。
+    /// 评分题，答案必须是指定闭区间内的整数，JSON 表示同样受 64 字节上限限制。
     Rating {
         /// 最低分，允许负数和零。
         min: i32,
@@ -163,16 +164,16 @@ pub enum QuestionKind {
 impl QuestionKind {
     /// 一道题合法答案在最坏情况下的 JSON 字节数（不含题目 ID 与字段框架）。
     ///
-    /// 多选按 `max_choices` 个选项全部选中估算，文本按 UTF-8 直传的每标量最多
-    /// 4 字节估算，数字与评分按 f64 最短往返表示估算。
+    /// 多选按 `max_choices` 个选项全部选中估算，文本包括引号与必需的控制字符转义，
+    /// 数字与评分按规范化之前可接受的 JSON 表示上限估算。
     fn estimated_answer_bytes(&self) -> usize {
         match self {
             Self::SingleChoice { .. } => UUID_JSON_BYTES,
             Self::MultipleChoice { max_choices, .. } => max_choices * (UUID_JSON_BYTES + 1) + 1,
             Self::Text { max_length } | Self::Textarea { max_length } => {
-                max_length * TEXT_SCALAR_JSON_BYTES
+                2 + max_length * TEXT_SCALAR_JSON_BYTES
             }
-            Self::Number { .. } | Self::Rating { .. } => NUMBER_JSON_BYTES,
+            Self::Number { .. } | Self::Rating { .. } => MAX_NUMBER_JSON_BYTES,
         }
     }
 }
@@ -363,8 +364,9 @@ impl Document {
 
     /// 按最坏情况估算一次完整提交的 JSON 字节数。
     ///
-    /// 假设客户端以 UTF-8 直传文本（浏览器与 serde 的默认行为），并按每种题型合法的
-    /// 最大答案计算；估算用于发布校验，不用于限制单次提交的实际大小。
+    /// 假设客户端使用紧凑 JSON、标准 UUID 和默认字符串编码（非 ASCII 以 UTF-8
+    /// 直传，控制字符按 JSON 要求转义），并按每种题型合法的最大答案计算。
+    /// 估算用于发布校验，不用于限制单次提交的实际大小。
     pub fn estimated_submission_bytes(&self) -> usize {
         let mut total = SUBMISSION_ENVELOPE_BYTES;
         for question in &self.questions {
@@ -420,6 +422,7 @@ impl Document {
     /// 数字统一为 `f64` JSON 数字，`1` 与 `1.0`、正零与负零分别等价。
     /// 裸整数须在 `i64::MIN..=u64::MAX` 内且可精确转换到 `f64`，否则拒绝。
     /// 小数和指数形式按有限 `f64` 语义处理，避免裸整数解析时先舍入再绕过检查。
+    /// 数字与评分在规范化前受 `MAX_NUMBER_JSON_BYTES` 限制；发布预算不用于历史答案校验。
     /// `null`、空白文本、空多选视为缺失；可选题不存储缺失项，必填题拒绝缺失。
     /// 非空白文本保留原文，不修剪、不截断。
     ///
@@ -584,6 +587,14 @@ fn finite_number(value: &Value, question_id: Uuid) -> Result<f64, ValidationErro
             "答案必须是有限的 JSON 数字",
         ));
     };
+    // 在 f64 规范化之前限制传输表示，不能用舍入后的短字符串为原始请求做预算。
+    // serde_json 会为省略符号的正指数补上 '+'；前端发送前执行相同处理。
+    if raw.as_str().len() > MAX_NUMBER_JSON_BYTES {
+        return Err(ValidationError::new(
+            Some(question_id),
+            format!("数字的 JSON 表示最多允许 {MAX_NUMBER_JSON_BYTES} 字节（含指数符号）"),
+        ));
+    }
     let signed_integer = raw.as_i64();
     let unsigned_integer = raw.as_u64();
     // arbitrary_precision 保留数字原文；超出整数存储范围的裸整数不能先转成 f64。

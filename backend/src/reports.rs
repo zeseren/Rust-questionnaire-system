@@ -446,7 +446,7 @@ async fn export_csv(
             "attachment; filename=\"survey-{id}-{}.csv\"",
             version.id
         ))
-        .map_err(AppError::internal)?,
+        .map_err(|error| AppError::internal(error))?,
     );
     // no-store / nosniff 由 security::guard 统一添加，这里不重复维护。
     Ok(response)
@@ -752,11 +752,11 @@ fn encode_csv(
     for cell in &record {
         writer
             .write_field(formula_safe(cell).as_bytes())
-            .map_err(AppError::internal)?;
+            .map_err(|error| AppError::internal(error))?;
     }
     writer
         .write_record(std::iter::empty::<&[u8]>())
-        .map_err(AppError::internal)?;
+        .map_err(|error| AppError::internal(error))?;
     for (receipt_id, submitted_at, answers) in rows {
         record.clear();
         record.push(Cow::Owned(receipt_id.to_string()));
@@ -779,13 +779,15 @@ fn encode_csv(
         for cell in &record {
             writer
                 .write_field(formula_safe(cell).as_bytes())
-                .map_err(AppError::internal)?;
+                .map_err(|error| AppError::internal(error))?;
         }
         writer
             .write_record(std::iter::empty::<&[u8]>())
-            .map_err(AppError::internal)?;
+            .map_err(|error| AppError::internal(error))?;
     }
-    writer.into_inner().map_err(AppError::internal)
+    writer
+        .into_inner()
+        .map_err(|error| AppError::internal(error))
 }
 
 fn formula_safe(value: &str) -> Cow<'_, str> {

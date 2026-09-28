@@ -1,6 +1,8 @@
 //! 数字输入按原始 JSON 数字发送，最终精度与资格校验由服务器执行。
 import { LosslessNumber } from 'lossless-json'
 import type { Answer, SurveyDocument } from './types'
+// 与后端 domain::MAX_NUMBER_JSON_BYTES 一致，按传输表示限制，不能先舍入数字。
+const MAX_NUMBER_JSON_BYTES = 64
 export type InputValue = string | string[] | number | null
 export type Inputs = Record<string, InputValue>
 export function isAnswered(value: InputValue | undefined) {
@@ -52,12 +54,17 @@ export function buildAnswers(document: SurveyDocument, values: Inputs) {
         answers.push({ question_id: question.id, value: String(value) })
         break
       case 'number': {
-        const raw = String(value).trim()
+        // 与 serde_json 一致补齐正指数符号，保持数值和原始整数精度。
+        const raw = String(value)
+          .trim()
+          .replace(/([eE])(?=\d)/, '$1+')
         if (
           !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(raw) ||
           !Number.isFinite(Number(raw))
         )
           fail('请输入有限数字，例如 12、0.5 或 1e3。')
+        else if (raw.length > MAX_NUMBER_JSON_BYTES)
+          fail(`数字最多 ${MAX_NUMBER_JSON_BYTES} 个字符（含小数点和指数符号）。`)
         else if (question.integer && !Number.isInteger(Number(raw))) fail('此题只接受整数。')
         else if (
           (question.min != null && Number(raw) < question.min) ||

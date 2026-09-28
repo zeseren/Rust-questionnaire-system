@@ -365,3 +365,14 @@ NFR-07：提交失败保留当前页面输入，支持按既定幂等规则重�
 门禁：`cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked --workspace`（10/10，含 2 个新增预算测试）、`npm run build`、`npx prettier --check src/api.ts`。
 
 未执行：压测、浏览器闭环、第 3 项的浏览器实测、第 4 项的前端展示；临时数据库实例与验证脚本在收尾时清理，仓库内不保留。
+
+### 13.1 审查问题修复与复验（2026-09-28）
+
+本轮补全文本 JSON 引号及控制字符转义开销，将数字与评分的传输表示限制为 64 字节，并按该上限预算。前端保留数字精度，补齐正指数符号后执行相同长度检查。预览同步执行发布预算，历史版本的答案校验不套用发布预算。内部错误的 `map_err` 调用改为闭包内直接调用，保留业务位置。
+
+- 领域测试增至 13 个，覆盖预算恰好达到 1 MiB、控制字符与四字节字符的实际序列化、数字原文长度及指数边界、审查中的混合超限载荷，以及历史大问卷的小载荷答案校验；修正原预算测试重复选项 ID 的无效题面。
+- 临时 PostgreSQL 与真实服务复验：60 题 × 5000 的预览现为 `publishable=false`，容量错误与发布 `422` 一致，取代上节记录中的不一致行为。预算恰好为 1 MiB 的 100 道文本题填满 U+0001 后，实际请求为 1048442 字节，提交 `201`、CSV 导出 `200`。
+- 使用真实前端 `buildAnswers` 与 `lossless-json` 调用服务：64 字节小数及正指数边界均提交成功，超长数字在前端被定位；直接提交超长数字和评分均返回题目级 `422`。
+- 在临时库中将验证账号的密码哈希设为无效值，登录返回 `500`；`X-Error-Id` 与日志一致，位置指向 `auth.rs` 中的密码解析操作，日志不含原始哈希。CSV 正常导出已验证，未注入 CSV 写入失败。
+
+验证命令：`cargo fmt --all -- --check`、`cargo test --locked --workspace`（13/13）、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo build --locked -p questionnaire-api`、`npm run build`、`prettier --check src/answers.ts`。未扩展浏览器、压测或测试框架；临时验证文件与数据库在收尾时清理。

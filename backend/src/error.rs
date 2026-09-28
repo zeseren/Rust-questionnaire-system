@@ -80,6 +80,7 @@ impl AppError {
     ///
     /// 原始错误可能包含数据库中的原始值或 SQL 文本，绝不记录 `error.to_string()`；
     /// `#[track_caller]` 让位置指向真正发起操作的位置，而不是本函数。
+    /// 用于 `map_err` 时须写成 `|error| AppError::internal(error)`，避免函数适配器丢失位置。
     #[track_caller]
     pub fn internal(error: impl std::fmt::Display) -> Self {
         let error_id = Uuid::new_v4().simple().to_string();

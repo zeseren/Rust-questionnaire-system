@@ -394,21 +394,21 @@ async fn hash_password(password: String) -> AppResult<String> {
         let mut salt = [0_u8; 16];
         OsRng
             .try_fill_bytes(&mut salt)
-            .map_err(AppError::internal)?;
-        let salt = SaltString::encode_b64(&salt).map_err(AppError::internal)?;
+            .map_err(|error| AppError::internal(error))?;
+        let salt = SaltString::encode_b64(&salt).map_err(|error| AppError::internal(error))?;
         // Argon2 默认算法为 Argon2id v19，随机盐随 PHC 字符串一起保存。
         Argon2::default()
             .hash_password(password.as_bytes(), &salt)
             .map(|hash| hash.to_string())
-            .map_err(AppError::internal)
+            .map_err(|error| AppError::internal(error))
     })
     .await
-    .map_err(AppError::internal)?
+    .map_err(|error| AppError::internal(error))?
 }
 
 async fn verify_password(password: String, encoded_hash: String) -> AppResult<bool> {
     tokio::task::spawn_blocking(move || {
-        let hash = PasswordHash::new(&encoded_hash).map_err(AppError::internal)?;
+        let hash = PasswordHash::new(&encoded_hash).map_err(|error| AppError::internal(error))?;
         match Argon2::default().verify_password(password.as_bytes(), &hash) {
             Ok(()) => Ok(true),
             Err(PasswordError::Password) => Ok(false),
@@ -416,14 +416,14 @@ async fn verify_password(password: String, encoded_hash: String) -> AppResult<bo
         }
     })
     .await
-    .map_err(AppError::internal)?
+    .map_err(|error| AppError::internal(error))?
 }
 
 fn new_session_token() -> AppResult<String> {
     let mut bytes = [0_u8; 32];
     OsRng
         .try_fill_bytes(&mut bytes)
-        .map_err(AppError::internal)?;
+        .map_err(|error| AppError::internal(error))?;
     Ok(hex::encode(bytes))
 }
 
@@ -460,7 +460,7 @@ fn session_cookie(token: &str, max_age: i64, secure: bool) -> AppResult<HeaderVa
     HeaderValue::from_str(&format!(
         "session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}{secure}"
     ))
-    .map_err(AppError::internal)
+    .map_err(|error| AppError::internal(error))
 }
 
 async fn revoke_session(db: &DatabaseConnection, token: Option<&str>) -> AppResult<()> {
