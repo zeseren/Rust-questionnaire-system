@@ -15,8 +15,12 @@ use uuid::Uuid;
 pub const MAX_QUESTIONS: usize = 100;
 /// 每道选择题最多允许的选项数。
 pub const MAX_CHOICES: usize = 50;
-/// 文本答案、调查说明和收集目的最多允许的 Unicode 标量值数。
+/// 调查说明、收集目的和历史版本文本答案最多允许的 Unicode 标量值数。
 pub const MAX_TEXT_LENGTH: usize = 5000;
+/// 新草稿与新发布版本的单行文本答案最多允许的 Unicode 标量值数。
+pub const MAX_TEXT_ANSWER_LENGTH: usize = 200;
+/// 新草稿与新发布版本的多行文本答案最多允许的 Unicode 标量值数。
+pub const MAX_TEXTAREA_ANSWER_LENGTH: usize = 1000;
 /// 单次提交请求体的字节上限；HTTP body limit 与发布预算共用这一常量。
 pub const MAX_SUBMISSION_BYTES: usize = 1024 * 1024;
 /// 提交请求信封（版本、幂等键与答案数组框架）在最坏情况下的字节数。
@@ -130,12 +134,12 @@ pub enum QuestionKind {
     },
     /// 单行文本题，不允许 Unicode 换行字符。
     Text {
-        /// 最多允许的 Unicode 标量值数；发布时介于 1 和 5000 之间。
+        /// 最多允许的 Unicode 标量值数；新发布时介于 1 和 200 之间，历史版本保留原限制。
         max_length: usize,
     },
     /// 多行文本题，允许换行。
     Textarea {
-        /// 最多允许的 Unicode 标量值数；发布时介于 1 和 5000 之间。
+        /// 最多允许的 Unicode 标量值数；新发布时介于 1 和 1000 之间，历史版本保留原限制。
         max_length: usize,
     },
     /// 数字题，只接受 JSON 数字，不接受字符串、布尔值或非有限数值。
@@ -226,6 +230,15 @@ impl Document {
     /// # Errors
     /// 超过容量、文本含空字符、出现空或重复 ID、数值边界非有限时返回可定位的错误。
     pub fn validate_draft(&self) -> Result<(), ValidationError> {
+        self.validate_draft_with_text_limits(MAX_TEXT_ANSWER_LENGTH, MAX_TEXTAREA_ANSWER_LENGTH)
+    }
+
+    /// 按编辑或历史版本的文本容量检查结构，其余领域规则始终一致。
+    fn validate_draft_with_text_limits(
+        &self,
+        text_limit: usize,
+        textarea_limit: usize,
+    ) -> Result<(), ValidationError> {
         check_length(&self.title, MAX_DOCUMENT_TITLE_LENGTH, None, "问卷标题")?;
         check_length(&self.description, MAX_TEXT_LENGTH, None, "调查说明")?;
         check_length(&self.purpose, MAX_TEXT_LENGTH, None, "收集目的")?;
@@ -264,9 +277,20 @@ impl Document {
                         return Err(ValidationError::new(id, "选择数量配置不能超过 50"));
                     }
                 }
-                QuestionKind::Text { max_length } | QuestionKind::Textarea { max_length } => {
-                    if *max_length > MAX_TEXT_LENGTH {
-                        return Err(ValidationError::new(id, "文本长度配置不能超过 5000"));
+                QuestionKind::Text { max_length } => {
+                    if *max_length > text_limit {
+                        return Err(ValidationError::new(
+                            id,
+                            format!("单行文本长度配置不能超过 {text_limit}"),
+                        ));
+                    }
+                }
+                QuestionKind::Textarea { max_length } => {
+                    if *max_length > textarea_limit {
+                        return Err(ValidationError::new(
+                            id,
+                            format!("多行文本长度配置不能超过 {textarea_limit}"),
+                        ));
                     }
                 }
                 QuestionKind::Number { min, max, .. } => {
@@ -297,7 +321,16 @@ impl Document {
     /// # Errors
     /// 草稿不合法、内容未补全、范围矛盾或题型没有合法答案时返回错误。
     pub fn validate_publish(&self) -> Result<(), ValidationError> {
-        self.validate_draft()?;
+        self.validate_publish_with_text_limits(MAX_TEXT_ANSWER_LENGTH, MAX_TEXTAREA_ANSWER_LENGTH)
+    }
+
+    /// 历史版本沿用原文本容量，但仍检查题面完整性，不能跳过身份或题型约束。
+    fn validate_publish_with_text_limits(
+        &self,
+        text_limit: usize,
+        textarea_limit: usize,
+    ) -> Result<(), ValidationError> {
+        self.validate_draft_with_text_limits(text_limit, textarea_limit)?;
         if self.title.trim().is_empty() {
             return Err(ValidationError::new(None, "发布前请填写问卷标题"));
         }
@@ -377,8 +410,8 @@ impl Document {
 
     /// 发布前的总量预算：最坏情况必须放得进单次提交的请求上限。
     ///
-    /// 单题上限之和可以合法超过请求上限，因此在发布期提前拒绝，
-    /// 避免出现逐题合法、整份却永远无法提交的问卷。
+    /// 当前最多 100 题、单行 200 字、多行 1000 字的配置均能容纳。
+    /// 保留此检查防止后续扩大题数或题型容量时，允许作答的内容超过请求上限。
     ///
     /// # Errors
     /// 最坏情况估算超过 `MAX_SUBMISSION_BYTES` 时返回不带题目定位的错误。
@@ -418,7 +451,8 @@ impl Document {
 
     /// 校验答案并生成可以稳定序列化、用于存储和幂等比较的规范化结果。
     ///
-    /// 要求文档满足发布规则。题目按 UUID 排序，多选按选项 UUID 排序，
+    /// 要求文档满足发布时的结构规则；历史版本不套用新草稿的文本容量限制。
+    /// 题目按 UUID 排序，多选按选项 UUID 排序，
     /// 数字统一为 `f64` JSON 数字，`1` 与 `1.0`、正零与负零分别等价。
     /// 裸整数须在 `i64::MIN..=u64::MAX` 内且可精确转换到 `f64`，否则拒绝。
     /// 小数和指数形式按有限 `f64` 语义处理，避免裸整数解析时先舍入再绕过检查。
@@ -427,13 +461,13 @@ impl Document {
     /// 非空白文本保留原文，不修剪、不截断。
     ///
     /// # Errors
-    /// 文档不能发布，或答案存在未知/重复题目、重复/非法选项、类型和范围错误、
+    /// 文档结构不合法，或答案存在未知/重复题目、重复/非法选项、类型和范围错误、
     /// 超长文本、空字符、单行换行、缺失必填项时，返回包含相关题目 ID 的错误。
     pub fn validate_answers(
         &self,
         answers: Vec<Answer>,
     ) -> Result<BTreeMap<Uuid, Value>, ValidationError> {
-        self.validate_publish()?;
+        self.validate_publish_with_text_limits(MAX_TEXT_LENGTH, MAX_TEXT_LENGTH)?;
         let questions: HashMap<_, _> = self
             .questions
             .iter()

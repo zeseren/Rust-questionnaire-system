@@ -1,7 +1,7 @@
 //! 领域回归验证保持数字精度、历史答案兼容性与完整提交的容量保证。
 use questionnaire_api::domain::{
-    Answer, Choice, Document, MAX_NUMBER_JSON_BYTES, MAX_SUBMISSION_BYTES, MAX_TEXT_LENGTH,
-    Question, QuestionKind,
+    Answer, Choice, Document, MAX_NUMBER_JSON_BYTES, MAX_QUESTIONS, MAX_SUBMISSION_BYTES,
+    MAX_TEXT_ANSWER_LENGTH, MAX_TEXT_LENGTH, MAX_TEXTAREA_ANSWER_LENGTH, Question, QuestionKind,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -210,10 +210,10 @@ fn text_boundaries_count_unicode_scalars_and_reject_single_line_breaks() {
         1,
         true,
         QuestionKind::Text {
-            max_length: MAX_TEXT_LENGTH,
+            max_length: MAX_TEXT_ANSWER_LENGTH,
         },
     )]);
-    let boundary = "汉".repeat(MAX_TEXT_LENGTH);
+    let boundary = "汉".repeat(MAX_TEXT_ANSWER_LENGTH);
     let accepted = doc
         .validate_answers(vec![answer(1, json!(boundary))])
         .unwrap();
@@ -243,6 +243,152 @@ fn text_boundaries_count_unicode_scalars_and_reject_single_line_breaks() {
     doc.validate_draft().unwrap();
     doc.title.push('字');
     assert_eq!(doc.validate_draft().unwrap_err().question_id, None);
+}
+
+#[test]
+fn 文本题配置与答案遵守各自的字数上限() {
+    for (multiline, limit) in [
+        (false, MAX_TEXT_ANSWER_LENGTH),
+        (true, MAX_TEXTAREA_ANSWER_LENGTH),
+    ] {
+        let kind = |max_length| {
+            if multiline {
+                QuestionKind::Textarea { max_length }
+            } else {
+                QuestionKind::Text { max_length }
+            }
+        };
+        for max_length in [1, limit] {
+            let doc = document(vec![question(1, true, kind(max_length))]);
+            doc.validate_draft().unwrap();
+            doc.validate_publish().unwrap();
+            // 四字节字符仍按一个标量计数，边界原文不能被截断。
+            let boundary = "𝄞".repeat(max_length);
+            let accepted = doc
+                .validate_answers(vec![answer(1, json!(boundary))])
+                .unwrap();
+            assert_eq!(accepted[&id(1)], json!(boundary));
+            assert_eq!(
+                doc.validate_answers(vec![answer(1, json!(format!("{boundary}字")))])
+                    .unwrap_err()
+                    .question_id,
+                Some(id(1))
+            );
+        }
+        let oversized = document(vec![question(1, true, kind(limit + 1))]);
+        assert_eq!(
+            oversized.validate_draft().unwrap_err().question_id,
+            Some(id(1))
+        );
+        assert_eq!(
+            oversized.validate_publish().unwrap_err().question_id,
+            Some(id(1))
+        );
+        // 草稿仍可暂存未完成的零字数配置，但不能发布。
+        let incomplete = document(vec![question(1, true, kind(0))]);
+        incomplete.validate_draft().unwrap();
+        assert_eq!(
+            incomplete.validate_publish().unwrap_err().question_id,
+            Some(id(1))
+        );
+    }
+}
+
+#[test]
+fn 答案上限收紧不改变调查说明和收集目的的容量() {
+    let mut doc = document(vec![question(
+        1,
+        false,
+        QuestionKind::Text { max_length: 20 },
+    )]);
+    doc.description = "说".repeat(MAX_TEXT_LENGTH);
+    doc.purpose = "目".repeat(MAX_TEXT_LENGTH);
+    doc.validate_draft().unwrap();
+    doc.validate_publish().unwrap();
+    doc.description.push('字');
+    assert_eq!(doc.validate_draft().unwrap_err().question_id, None);
+    doc.description.pop();
+    doc.purpose.push('字');
+    assert_eq!(doc.validate_publish().unwrap_err().question_id, None);
+}
+
+#[test]
+fn 历史文本题沿用已发布的字数限制且仍校验题面() {
+    for kind in [
+        QuestionKind::Text {
+            max_length: MAX_TEXT_LENGTH,
+        },
+        QuestionKind::Textarea {
+            max_length: MAX_TEXT_LENGTH,
+        },
+    ] {
+        let mut doc = document(vec![question(1, true, kind)]);
+        assert_eq!(doc.validate_draft().unwrap_err().question_id, Some(id(1)));
+        assert_eq!(doc.validate_publish().unwrap_err().question_id, Some(id(1)));
+        let boundary = "汉".repeat(MAX_TEXT_LENGTH);
+        let accepted = doc
+            .validate_answers(vec![answer(1, json!(boundary))])
+            .unwrap();
+        assert_eq!(accepted[&id(1)], json!(boundary));
+        assert_eq!(
+            doc.validate_answers(vec![answer(1, json!(format!("{boundary}字")))])
+                .unwrap_err()
+                .question_id,
+            Some(id(1))
+        );
+        // 放宽历史容量不会绕过必填、身份唯一或题面完整性校验。
+        assert_eq!(
+            doc.validate_answers(Vec::new()).unwrap_err().question_id,
+            Some(id(1))
+        );
+        doc.questions.push(doc.questions[0].clone());
+        assert_eq!(
+            doc.validate_answers(Vec::new()).unwrap_err().question_id,
+            Some(id(1))
+        );
+        doc.questions.pop();
+        doc.title.clear();
+        assert_eq!(
+            doc.validate_answers(vec![answer(1, json!("回答"))])
+                .unwrap_err()
+                .question_id,
+            None
+        );
+    }
+}
+
+#[test]
+fn 一百道多行文本题全部写满仍可发布并提交() {
+    let count = u128::try_from(MAX_QUESTIONS).unwrap();
+    let doc = document(
+        (1..=count)
+            .map(|index| {
+                question(
+                    index,
+                    true,
+                    QuestionKind::Textarea {
+                        max_length: MAX_TEXTAREA_ANSWER_LENGTH,
+                    },
+                )
+            })
+            .collect(),
+    );
+    doc.validate_publish().unwrap();
+    doc.ensure_submission_budget().unwrap();
+    assert!(doc.estimated_submission_bytes() <= MAX_SUBMISSION_BYTES);
+    // 不只测常见汉字；同时覆盖六字节转义和四字节 UTF-8 的实际载荷。
+    for scalar in ["汉", "\u{0001}", "𝄞"] {
+        let answers: Vec<_> = (1..=count)
+            .map(|index| answer(index, json!(scalar.repeat(MAX_TEXTAREA_ANSWER_LENGTH))))
+            .collect();
+        doc.validate_answers(answers.clone()).unwrap();
+        let payload = json!({
+            "version_id": id(900), "idempotency_key": id(901), "answers": answers,
+        });
+        let bytes = serde_json::to_vec(&payload).unwrap().len();
+        assert!(bytes <= doc.estimated_submission_bytes());
+        assert!(bytes <= MAX_SUBMISSION_BYTES);
+    }
 }
 
 #[test]
@@ -409,7 +555,7 @@ fn submission_budget_rejects_surveys_that_cannot_fit_one_request() {
             })
             .collect(),
     );
-    // 单题合法，但整份最坏情况超过请求上限，发布必须提前拒绝而不是让填写者 413。
+    // 历史题面可含 5000 字文本题，预算保护仍能拒绝超过请求上限的配置。
     assert!(oversized.estimated_submission_bytes() > MAX_SUBMISSION_BYTES);
     assert_eq!(
         oversized
@@ -418,8 +564,11 @@ fn submission_budget_rejects_surveys_that_cannot_fit_one_request() {
             .question_id,
         None
     );
-    // 题面本身仍然合法，历史版本的小载荷答卷不能被新增的发布预算阻断。
-    assert!(oversized.validate_publish().is_ok());
+    // 新发布拒绝旧容量配置，但历史版本的小载荷答卷仍可校验。
+    assert_eq!(
+        oversized.validate_publish().unwrap_err().question_id,
+        Some(id(1))
+    );
     assert!(
         oversized
             .validate_answers((1..=60).map(|index| answer(index, json!("回答"))).collect())
@@ -450,7 +599,7 @@ fn estimated_submission_bytes_covers_a_worst_case_payload() {
             1,
             true,
             QuestionKind::Textarea {
-                max_length: MAX_TEXT_LENGTH,
+                max_length: MAX_TEXTAREA_ANSWER_LENGTH,
             },
         ),
         question(2, true, QuestionKind::Text { max_length: 100 }),
@@ -485,7 +634,7 @@ fn estimated_submission_bytes_covers_a_worst_case_payload() {
     ]);
     // 覆盖默认编码的控制字符转义、四字节 UTF-8 和较长的 f64 表示。
     let answers = vec![
-        answer(1, json!("\u{0001}".repeat(MAX_TEXT_LENGTH))),
+        answer(1, json!("\u{0001}".repeat(MAX_TEXTAREA_ANSWER_LENGTH))),
         answer(2, json!("𝄞".repeat(100))),
         answer(3, json!(id(101))),
         answer(4, json!([id(103), id(104)])),
@@ -516,7 +665,7 @@ fn text_budget_covers_json_escaping_and_quotes_at_request_boundary() {
             })
             .collect(),
     );
-    // 100 条答案使字符串两端引号的遗漏无法被信封余量掩盖。
+    // 历史题面保留请求边界回归：100 条答案使引号的遗漏无法被信封余量掩盖。
     assert_eq!(doc.estimated_submission_bytes(), MAX_SUBMISSION_BYTES);
     doc.ensure_submission_budget().unwrap();
     for scalar in ["\u{0001}", "𝄞", "\"", "\\"] {

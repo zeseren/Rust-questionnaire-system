@@ -1,6 +1,6 @@
 <!-- 题型配置按契约编辑，服务器负责草稿容量和发布规则的最终校验。 -->
 <script setup lang="ts">
-import { newQuestion } from '../documents'
+import { newQuestion, TEXT_ANSWER_LIMITS } from '../documents'
 import { questionNames } from '../format'
 import type { Question } from '../types'
 import Icon from './Icon.vue'
@@ -149,10 +149,11 @@ function bound(name: 'min' | 'max', event: Event) {
           v-model.number="question.max_length"
           type="number"
           min="1"
-          max="5000"
+          :max="TEXT_ANSWER_LIMITS[question.type]"
           step="1"
           required
         />
+        <span class="hint">最多可设置为 {{ TEXT_ANSWER_LIMITS[question.type] }} 个字符。</span>
       </label>
       <template v-if="question.type === 'number'">
         <div class="field-row">
