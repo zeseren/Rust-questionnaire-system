@@ -20,7 +20,7 @@ const page = ref(1)
 const filter = ref<Status | ''>(archived.value ? 'archived' : '')
 const keyword = ref('')
 const title = ref('')
-const view = ref<'grid' | 'list'>('grid')
+const view = ref<'grid' | 'list'>('list')
 const creating = ref(false)
 const newTitle = ref('')
 const busy = ref(false)
@@ -107,45 +107,14 @@ async function duplicate(id: string) {
     <div>
       <h1>{{ route.meta.title }}</h1>
       <p class="heading-note">
-        {{ archived ? '保留每一次发现，随时回看历史答卷。' : '从一个好问题，开始新的发现。' }}
+        {{ archived ? '查看已归档问卷与历史答卷。' : '管理问卷、查看回答，了解最新进展。' }}
       </p>
     </div>
-    <button v-if="route.name !== 'home'" class="button button-primary" @click="openCreate">
+    <button class="button button-primary" @click="openCreate">
       <Icon name="plus" />
       新建问卷
     </button>
   </div>
-  <section v-if="route.name === 'home'" class="hero">
-    <div class="hero-content">
-      <p class="hero-eyebrow">每一份回答，都有意义</p>
-      <h2>让每一个想法，都被听见。</h2>
-      <p class="hero-copy">简单提问，认真倾听。让零散的回答，成为清晰的洞察。</p>
-      <div class="hero-actions">
-        <button class="button button-primary" @click="openCreate">
-          <Icon name="plus" />
-          新建问卷
-        </button>
-        <RouterLink class="text-button" to="/surveys">
-          管理我的问卷
-          <Icon name="arrow" />
-        </RouterLink>
-      </div>
-    </div>
-    <div class="hero-art" aria-hidden="true">
-      <div class="metro-tile metro-tile-main">
-        <Icon name="forms" />
-        <span class="metro-tile-label">提问</span>
-      </div>
-      <div class="metro-tile metro-tile-listen">
-        <Icon name="people" />
-        <span class="metro-tile-label">倾听</span>
-      </div>
-      <div class="metro-tile metro-tile-insight">
-        <Icon name="chart" />
-        <span class="metro-tile-label">发现</span>
-      </div>
-    </div>
-  </section>
   <ErrorNotice :message="counts.error.value" retry @retry="counts.refresh" />
   <section v-if="route.name === 'home'" class="overview" aria-label="问卷概览">
     <div class="metric">
@@ -246,16 +215,9 @@ async function duplicate(id: string) {
         class="survey-grid"
         :class="{ 'is-list': view === 'list' }"
       >
-        <article
-          v-for="(survey, index) in list.data.value.items"
-          :key="survey.id"
-          class="survey-card"
-        >
+        <article v-for="survey in list.data.value.items" :key="survey.id" class="survey-card">
           <div class="card-top">
-            <span
-              class="survey-icon"
-              :class="['', 'tone-violet', 'tone-teal', 'tone-amber'][index % 4]"
-            >
+            <span class="survey-icon">
               <Icon name="document" />
             </span>
             <span

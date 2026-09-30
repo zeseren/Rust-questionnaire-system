@@ -1,4 +1,4 @@
-<!-- 布局沿用 Fluent × Metro；会话过期时保留当前页面与未保存输入。 -->
+<!-- Fluent 布局共用浅深主题；会话过期时保留当前页面与未保存输入。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
@@ -64,10 +64,7 @@ watch(() => route.fullPath, closeMobile)
     <aside class="sidebar desktop-sidebar" aria-label="工作区导航">
       <RouterLink class="brand" to="/">
         <span class="brand-mark"><Icon name="forms" /></span>
-        <span>
-          <span class="brand-name">问序</span>
-          <span class="brand-caption block">QUESTIONNAIRE</span>
-        </span>
+        <span class="brand-name">问序</span>
       </RouterLink>
       <div class="workspace-switch">
         <Icon name="person" />
