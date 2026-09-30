@@ -444,7 +444,8 @@ async fn delete(
 ///
 /// 首次发布前须设置填写模式且截止时间未到期。重新发布只切换当前版本；
 /// 关闭状态不会被发布操作恢复，历史版本和历史答卷始终保留。
-/// 草稿未变且内容与当前版本完全一致时按幂等重放返回现有版本，不新增版本号。
+/// 草稿未变且内容与当前版本完全一致时按幂等重放返回现有版本，不新增版本号；
+/// 重放判定先于当前内容上限与提交预算校验，历史版本未改动内容仍可重复发布。
 #[utoipa::path(
     post, path = "/api/surveys/{id}/publish", tag = "问卷管理", request_body = PublishSurvey,
     security(("cookieAuth" = [])), params(("id" = Uuid, Path, description = "本人问卷 ID")),
@@ -800,7 +801,9 @@ async fn copy_survey(
     };
     let mut document: Document = serde_json::from_value(source_document)?;
     document.renew_ids();
-    document.validate_draft()?;
+    // 来源可能是容量收紧前发布的历史版本，复制按历史容量校验；
+    // 超出当前上限的配置保留为待调整草稿，由保存或发布时提示。
+    document.validate_copy_draft()?;
     let now = Utc::now();
     let record = insert_draft(&tx, owner_id, document, now).await?;
     let result = survey_detail(record, now)?;
@@ -840,19 +843,12 @@ async fn publish_survey(
     let record = repository::expire_survey(&tx, record, now).await?;
     ensure_editable(&record)?;
     ensure_revision(&record, revision)?;
-    let document = Document::deserialize(&record.draft)?;
-    document.validate_publish()?;
-    document.ensure_submission_budget()?;
-    if record.mode.is_none() {
-        return Err(AppError::conflict("mode_required", "请先设置填写模式"));
-    }
-    let first_publish = record.current_version_id.is_none();
-    if first_publish {
-        ensure_future_deadline(record.deadline, now)?;
-    }
 
     // 内容与当前版本完全一致的重复发布（例如响应丢失后的重试）是幂等重放：
     // 不新增版本，直接返回当前版本，避免同一份题面出现两个版本号。
+    // 重放判定先于内容校验：历史版本可能带有旧版文本容量，
+    // 未改动内容的重复发布不能因新上限被拒；只有确实需要新建版本时，
+    // 才按当前规则校验完整题面与提交预算（模式由数据库约束保证已设置）。
     if let Some(current_id) = record.current_version_id {
         let current = version::Entity::find_by_id(current_id)
             .filter(version::Column::SurveyId.eq(id))
@@ -872,6 +868,17 @@ async fn publish_survey(
             tx.commit().await?;
             return Ok((StatusCode::OK, result));
         }
+    }
+
+    let document = Document::deserialize(&record.draft)?;
+    document.validate_publish()?;
+    document.ensure_submission_budget()?;
+    if record.mode.is_none() {
+        return Err(AppError::conflict("mode_required", "请先设置填写模式"));
+    }
+    let first_publish = record.current_version_id.is_none();
+    if first_publish {
+        ensure_future_deadline(record.deadline, now)?;
     }
     let previous_number = version::Entity::find()
         .filter(version::Column::SurveyId.eq(id))

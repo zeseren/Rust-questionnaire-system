@@ -233,6 +233,18 @@ impl Document {
         self.validate_draft_with_text_limits(MAX_TEXT_ANSWER_LENGTH, MAX_TEXTAREA_ANSWER_LENGTH)
     }
 
+    /// 校验复制出的新草稿：来源可能是历史发布版本，须沿用旧版文本容量。
+    ///
+    /// 复制只生成可编辑草稿，不新增发布版本，因此按历史容量检查结构；
+    /// 保存与发布仍按当前上限校验，超限题目由发布者手动调整，
+    /// 不截断内容，也不改动来源版本。
+    ///
+    /// # Errors
+    /// 结构、稳定 ID、数值边界或历史文本容量不合法时返回可定位的错误。
+    pub fn validate_copy_draft(&self) -> Result<(), ValidationError> {
+        self.validate_draft_with_text_limits(MAX_TEXT_LENGTH, MAX_TEXT_LENGTH)
+    }
+
     /// 按编辑或历史版本的文本容量检查结构，其余领域规则始终一致。
     fn validate_draft_with_text_limits(
         &self,

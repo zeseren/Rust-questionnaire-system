@@ -295,6 +295,39 @@ fn 文本题配置与答案遵守各自的字数上限() {
 }
 
 #[test]
+fn 复制草稿沿用历史文本容量而保存发布仍按当前上限() {
+    // 容量收紧前发布的历史问卷允许 5000 字文本题；复制必须仍能生成可编辑草稿，
+    // 但草稿自身、保存和发布继续按当前上限定位超限题目。
+    for multiline in [false, true] {
+        let legacy_kind = |max_length| {
+            if multiline {
+                QuestionKind::Textarea { max_length }
+            } else {
+                QuestionKind::Text { max_length }
+            }
+        };
+        let historical = document(vec![question(1, true, legacy_kind(MAX_TEXT_LENGTH))]);
+        assert_eq!(
+            historical.validate_draft().unwrap_err().question_id,
+            Some(id(1))
+        );
+        assert_eq!(
+            historical.validate_publish().unwrap_err().question_id,
+            Some(id(1))
+        );
+        historical.validate_copy_draft().unwrap();
+
+        // 复制不是绕过结构校验的入口：超过历史容量的配置仍然拒绝。
+        let mut oversized = historical.clone();
+        oversized.questions[0].kind = legacy_kind(MAX_TEXT_LENGTH + 1);
+        assert_eq!(
+            oversized.validate_copy_draft().unwrap_err().question_id,
+            Some(id(1))
+        );
+    }
+}
+
+#[test]
 fn 答案上限收紧不改变调查说明和收集目的的容量() {
     let mut doc = document(vec![question(
         1,
