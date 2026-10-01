@@ -1,6 +1,6 @@
 # 前端 MVP 使用与代码阅读指南
 
-`frontend/` 是连接现有 Rust API 的 Vue 3 应用。完整安装步骤见 [README](../README.md#31-启动前端-mvp)。前端依赖 PostgreSQL 和后端服务；`prototype.html` 仅保留为风格原型。
+`frontend/` 是连接现有 Rust API 的 Vue 3 应用。完整安装步骤见 [README](../README.md#31-启动前端-mvp)。前端依赖 PostgreSQL 和后端服务；`prototype.html` 与 `fluent-prototype.html` 仅保留为风格原型（后者对应当前 Fluent 2 视觉），不被应用引用。
 
 ## 1. 从创建到回收
 
@@ -41,7 +41,7 @@
 | `components/QuestionEditor.vue` | 六种题型的编辑与配置 |
 | `components/SurveyFields.vue` | 预览和真实填写共享的题目控件 |
 | `components/QuestionStats.vue` | 选项占比、评分分布、数字摘要和文本回答 |
-| `styles.css`、`application.css` | Fluent × Metro 基础令牌与业务布局 |
+| `styles.css`、`application.css` | Fluent 2 设计令牌（圆角、阴影、Mica 基底、语义色）与业务布局 |
 
 | 路径 | 页面 |
 | --- | --- |
@@ -68,8 +68,8 @@
 
 ## 5. 视觉与当前边界
 
-沿用确认的 Fluent × Metro 设计，使用直角控件、纯色磁贴、细分隔线和清晰的键盘焦点；不使用毛玻璃、背景模糊、渐变或投影。三种主题共享 CSS 变量，窄屏下编辑器、工作台与填写页调整布局，导航和业务弹窗使用原生 `dialog`。
+沿用已确认的 Fluent 2 视觉：控件 4px、卡片 8px、弹窗 12px 圆角，分级阴影，带轻微色调的 Mica 基底与纯色磁贴，细分隔线和清晰的键盘焦点；移动导航在浏览器支持 `backdrop-filter` 时叠加亚克力。三种主题共享 CSS 变量，窄屏下编辑器、工作台与填写页调整布局（断点 1600/1190/900/760/540），并适配 `prefers-reduced-motion` 与 `forced-colors`；导航和业务弹窗使用原生 `dialog`。
 
-本期使用自定义 CSS、浏览器原生控件和轻量 CSS 图表，没有引入 Element Plus、ECharts、富文本或拖拽框架。题目排序通过上移/下移完成，统计文本逐批展开。API 类型为手写 DTO，后端契约变更时需同步维护。
+本期使用自定义 CSS、浏览器原生控件和轻量 CSS 图表，没有引入 Element Plus、ECharts、富文本或拖拽框架。题目排序通过上移/下移完成，统计文本逐批展开。API 类型为手写 DTO，后端契约变更时需同步维护。视觉约束以当前样式代码和 [Element Plus 可行性评估](element-plus-feasibility.md) 为准；早期「直角控件、纯色、不使用渐变或投影」的说明已被 2026-09-30 的视觉更新取代。
 
 源码格式化为 `npm run format`，格式检查为 `npm run format:check`，类型和生产构建为 `npm run build`。没有新增前端自动化测试框架；实际联调证据与未覆盖范围见 [实施记录](requirements-analysis.md#12-前端-mvp-实施与验证记录)。

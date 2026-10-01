@@ -17,7 +17,7 @@
 | 状态 | 内容 |
 | --- | --- |
 | 用户已确认 | 前后端分离；Rust + Axum；Vue + TypeScript；采用分层结构；常规 CRUD 使用 SeaORM，复杂查询允许直接使用底层 SQLx |
-| 前端风格已确认 | 极简 Fluent × Metro，去除毛玻璃，支持深色模式；原型保留为独立 HTML，MVP 连接真实接口 |
+| 前端风格已确认 | Fluent 2 视觉（圆角控件、分级阴影、Mica 基底），支持浅色、深色与跟随系统；原型保留为独立 HTML，MVP 连接真实接口 |
 | 本稿建议默认 | PostgreSQL；Vue 3 + Vite；模块化单体；浏览器 Session 认证；普通注册用户可以创建问卷 |
 | 本稿建议范围 | 以第 4 节全部核心需求作为实施基线；条件显示等增强功能不计入核心验收 |
 | 尚未固定 | 项目正式名称、学校论文格式；依赖版本现由 Cargo.lock 与 frontend/package-lock.json 锁定 |
@@ -36,7 +36,7 @@
 | 数据迁移 | sea-orm-migration | 唯一的数据库结构迁移入口，必要时在迁移中执行原生 SQL |
 | 前端 | Vue 3、TypeScript、Vite | 页面、交互与构建 |
 | 路由与共享状态 | Vue Router、Pinia | 页面路由、登录与外观偏好；编辑器状态在页面内维护 |
-| UI 与图表 | 自定义 Fluent × Metro CSS、原生控件、轻量 CSS 图表 | 按已确认风格替代原建议的 Element Plus/ECharts，提供响应式布局与三种主题 |
+| UI 与图表 | 自定义 Fluent 2 CSS、原生控件、轻量 CSS 图表 | 按已确认风格替代原建议的 Element Plus/ECharts，提供响应式布局与三种主题；当前令牌见 `frontend/src/styles.css` |
 | 接口契约 | REST、OpenAPI、utoipa | 记录接口与错误响应；当前前端 DTO 手写维护，尚未自动生成 |
 | 身份与密码 | 服务端 Session、Argon2id | 登录态管理与密码哈希；Session 初期存 PostgreSQL |
 | 日志 | tracing | 请求诊断与结构化错误日志 |
@@ -306,7 +306,7 @@ NFR-07：提交失败保留当前页面输入，支持按既定幂等规则重�
 
 环境为 Windows、Rust 1.98.1、PostgreSQL 18.1。数据库验证使用单独创建的临时 PostgreSQL 实例和合成数据，不使用 ORM Mock，也未修改原有数据库服务。
 
-- `cargo fmt --all`、`cargo test --locked --workspace`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 和 `cargo build --locked -p questionnaire-api` 均通过。保留 7 个独立领域测试，位于 `backend/tests/domain.rs`，集中覆盖规范化、身份重复、缺失与零、Unicode、数字精度、NUL 和 JSONB 数值回读边界。
+- `cargo fmt --all`、`cargo test --locked --workspace`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 和 `cargo build --locked -p questionnaire-api` 均通过。保留 7 个独立领域测试，位于 `backend/tests/domain.rs`，集中覆盖规范化、身份重复、缺失与零、Unicode、数字精度、NUL 和 JSONB 数值回读边界（本阶段计数属于历史记录，后续增至 18 个，见第 13—15 节）。
 - 真实 HTTP 完成注册、登录、修改密码撤销两个设备的旧 Session、退出和原 Cookie 失效；验证普通注册不能提权、他人问卷不可访问、管理员不能读取他人答卷。
 - 完成六题型保存与发布、旧 revision 冲突、独立草稿不影响线上版本、V1/V2 隔离、旧版本新提交拒绝、首次发布后模式冻结、关闭状态重新发布仍关闭、到期后清空截止时间仍需显式恢复、归档与复制/删除。
 - 同一匿名载荷并发提交 10 次：1 次 `201`、9 次 `200`，回执相同。变更题目/多选顺序不新增答卷，变更内容冲突；登录状态变化不改变匿名作用域。关闭、切版、下架、禁用发布者之后的原成功请求仍可重试。
@@ -329,7 +329,7 @@ NFR-07：提交失败保留当前页面输入，支持按既定幂等规则重�
 
 ### 12.1 已实施范围
 
-`frontend/` 使用 Vue 3、TypeScript、Vite、Vue Router、Pinia 和 lossless-json，依赖锁定在 `package-lock.json`。采用已确认的 Fluent × Metro 视觉风格，支持浅色、深色、跟随系统和窄屏布局；原 `prototype.html` 保持为独立风格稿。
+`frontend/` 使用 Vue 3、TypeScript、Vite、Vue Router、Pinia 和 lossless-json，依赖锁定在 `package-lock.json`。采用当时确认的 Fluent × Metro 视觉风格，支持浅色、深色、跟随系统和窄屏布局；原 `prototype.html` 保持为独立风格稿（视觉基线在 2026-09-30 的 `bfde429` 后更新为 Fluent 2，见 [前端指南](frontend-guide.md) 第 5 节）。
 
 - 注册登录、退出、修改密码、路由权限控制、会话失效后原页面重新登录。
 - 实际问卷列表与状态总数、筛选、分页、新建、复制；六题型编辑、题目排序、选项配置、保存和发布前预览。

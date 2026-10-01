@@ -8,7 +8,7 @@
 
 Domain: publishers create surveys with 6 question types (single/multiple choice, text, textarea, number, rating), publish immutable versions, collect answers anonymously or one-per-account, then view per-version statistics and export CSV. Admins govern users/surveys with an audit trail.
 
-项目保留单成员 Cargo workspace（`backend/`，包名 `questionnaire-api`），前端位于独立的 `frontend/`。使用与阅读说明见 `README.md`、`docs/backend-guide.md`、`docs/frontend-guide.md`；需求及分阶段验证记录见 `docs/requirements-analysis.md` 第 11、12 节。
+项目保留单成员 Cargo workspace（`backend/`，包名 `questionnaire-api`），前端位于独立的 `frontend/`。使用与阅读说明见 `README.md`、`docs/backend-guide.md`、`docs/frontend-guide.md`；需求及分阶段验证记录见 `docs/requirements-analysis.md` 第 11—15 节。
 
 ## Architecture & Data Flow
 
@@ -30,7 +30,7 @@ Request trace example — `POST /api/surveys/{id}/publish`: `surveys::publish` �
 
 - `backend/src/` — all source, flat (one file per feature area, no subdirectories).
 - `backend/tests/` — integration tests (`domain.rs` is currently the entire suite).
-- `frontend/` — Vue 3、TypeScript、Vite、Vue Router、Pinia；`prototype.html` 保留为独立风格原型，`src/` 为真实应用。
+- `frontend/` — Vue 3、TypeScript、Vite、Vue Router、Pinia；`prototype.html` 与 `fluent-prototype.html` 保留为独立风格原型（后者对应当前 Fluent 2 视觉），`src/` 为真实应用。
 - `docs/` — Chinese design docs (`backend-guide.md`, `requirements-analysis.md`).
 - repo root — `Cargo.toml` / `Cargo.lock` (workspace + lockfile), `compose.yaml` (optional Postgres 18 only), `.env.example`.
 
@@ -102,7 +102,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 
 ## 前端 MVP 约定
 
-- 延续极简 Fluent × Metro 风格，使用纯色表面与直角控件，支持浅色、深色和系统主题，不添加毛玻璃、背景模糊、渐变或投影。
+- 视觉基线是 2026-09-30 起的 Fluent 2 方向：控件 4px、卡片 8px、弹窗 12px 圆角，分级阴影，带轻微色调的 Mica 基底与磁贴渐变，移动导航在浏览器支持时使用 `backdrop-filter` 亚克力；主题仍是浅色、深色与跟随系统。以 `frontend/src/styles.css` 令牌和 `frontend/fluent-prototype.html` 为准，早期「直角、纯色、不用渐变/投影/毛玻璃」的说法已作废，不要再据此改样式。
 - 在 `frontend/` 运行 `npm ci`、`npm run dev`；必要构建使用 `npm run build`。开发和预览固定使用 `http://localhost:5173`，后端 `PUBLIC_ORIGIN` 必须匹配。
 - `/api` 经 Vite 同源代理访问后端，目标由服务器变量 `API_PROXY_TARGET` 配置；保留 Cookie 和 Origin 校验，不将秘密放入浏览器变量。
 - 用户要求按 MVP 范围推进，只做必要验证，不主动扩展测试工程或异常场景联调；静态原型无需测试。
@@ -133,7 +133,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 
 ## Testing & QA
 
-- Framework: built-in `cargo test`; one integration target `backend/tests/domain.rs` (10 synchronous tests) covering pure domain rules only: normalization/idempotence (answer order, `-0.0` → `0`), duplicate/foreign answer identities, required vs optional answers, Unicode scalar limits + NUL rejection, number precision/overflow, JSONB round-trip, and the publish-time submission budget (rejection boundary + worst-case payload coverage).
+- Framework: built-in `cargo test`; one integration target `backend/tests/domain.rs` (18 synchronous tests, all passing as of 2026-10-01) covering pure domain rules only: normalization/idempotence (answer order, `-0.0` → `0`), duplicate/foreign answer identities, required vs optional answers, Unicode scalar limits + NUL rejection, per-type text capacity and historical-version capacity compatibility (`validate_copy_draft`), number precision/overflow and JSON-length limits checked before normalization, JSONB round-trip, and the publish-time submission budget (rejection boundary + worst-case payload coverage + JSON escaping at the request boundary).
 - `cargo test --locked --workspace` needs **no database and no env vars**. Useful filters: `cargo test -p questionnaire-api --test domain <name_substring>`.
 - Style: build input via the existing helpers (`id`, `question`, `choices`, `document`, `answer`); assert on `Result` and `question_id`, never on message wording; parse raw JSON strings with `serde_json::from_str` when digit precision matters.
 - Scope expectation: the suite is deliberately limited to pure domain logic. Do not add DB-less tests for HTTP/ORM plumbing — those paths are verified manually against a real Postgres (`docs/requirements-analysis.md` §11.2 records what was run, §11.3 lists what was not). If you change `domain.rs`, extend `tests/domain.rs`; if you change HTTP/auth/SQL behavior, verify by running the service.

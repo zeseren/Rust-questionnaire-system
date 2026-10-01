@@ -1,6 +1,6 @@
 # 问卷调查系统（Rust + Vue）
 
-这是一个包含 Rust HTTP API 和 Vue 3 前端 MVP 的问卷调查系统，适合从真实业务流程学习前后端开发。前端位于 `frontend/`，采用 **Fluent × Metro** 风格：纯色表面、直角磁贴、轻量排版，支持浅色、深色和跟随系统。启动后从 `http://localhost:5173` 进入工作台。
+这是一个包含 Rust HTTP API 和 Vue 3 前端 MVP 的问卷调查系统，适合从真实业务流程学习前后端开发。前端位于 `frontend/`，采用 **Fluent 2** 风格：圆角控件、分级阴影、带轻微色调的 Mica 基底与纯色磁贴，支持浅色、深色和跟随系统。启动后从 `http://localhost:5173` 进入工作台。
 
 ## 已实现的范围
 
@@ -12,7 +12,7 @@
 - PostgreSQL 迁移、健康检查和 OpenAPI JSON。
 - 真实接口驱动的工作台、六题型编辑器、电脑/手机草稿预览、公开填写页、答卷统计及平台管理；无演示数据替代业务结果。
 
-范围和验收状态见 [需求分析](docs/requirements-analysis.md)，使用与代码阅读见 [前端指南](docs/frontend-guide.md) 和 [后端指南](docs/backend-guide.md)。原有 [`frontend/prototype.html`](frontend/prototype.html) 保留为独立风格原型；实际应用入口为 `frontend/index.html`。性能压测和面向公众长期运营的隐私合规交付不在当前范围内。
+范围和验收状态见 [需求分析](docs/requirements-analysis.md)，使用与代码阅读见 [前端指南](docs/frontend-guide.md) 和 [后端指南](docs/backend-guide.md)。原有 [`frontend/prototype.html`](frontend/prototype.html) 与 [`frontend/fluent-prototype.html`](frontend/fluent-prototype.html) 保留为独立风格原型（后者对应当前 Fluent 2 视觉）；实际应用入口为 `frontend/index.html`。性能压测和面向公众长期运营的隐私合规交付不在当前范围内。
 
 ## 1. 准备环境
 
@@ -189,6 +189,6 @@ cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
-保留的 7 个关键测试集中在 [`backend/tests/domain.rs`](backend/tests/domain.rs)，不启动数据库；它们不能替代事务、权限和并发提交的真实服务验证。本轮运行过的 HTTP、数据库及备份恢复场景见 [实施与验证记录](docs/requirements-analysis.md#11-后端实施与验证记录)。
+保留的 18 个关键测试集中在 [`backend/tests/domain.rs`](backend/tests/domain.rs)，不启动数据库；它们不能替代事务、权限和并发提交的真实服务验证。本轮运行过的 HTTP、数据库及备份恢复场景见 [实施与验证记录](docs/requirements-analysis.md#11-后端实施与验证记录)。
 
 前端在 `frontend/` 执行 `npm run build` 检查类型并构建，`npm run format` 整理源码，`npm run format:check` 检查格式。没有引入前端自动化测试框架；实际浏览器联调范围单独记录在 [前端实施与验证记录](docs/requirements-analysis.md#12-前端-mvp-实施与验证记录)，不将静态原型视为业务验收。
