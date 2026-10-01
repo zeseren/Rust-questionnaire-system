@@ -41,6 +41,9 @@ export const useAuth = defineStore('auth', () => {
   return { user, initialized, expired, restoreError, restore, login, logout }
 })
 
+// 与 styles.css 的 --canvas 一一对应；改动主题底色时同步 index.html 的首绘脚本。
+const CANVAS_COLORS = { light: '#edf0f5', dark: '#1c2027' } as const
+
 export type Theme = 'light' | 'dark' | 'system'
 export const useAppearance = defineStore('appearance', () => {
   const preference = ref<Theme>('system')
@@ -56,7 +59,7 @@ export const useAppearance = defineStore('appearance', () => {
     document.documentElement.dataset.theme = dark.value ? 'dark' : 'light'
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute('content', dark.value ? '#171717' : '#f7f7f7')
+      ?.setAttribute('content', dark.value ? CANVAS_COLORS.dark : CANVAS_COLORS.light)
   }
   function setTheme(theme: Theme) {
     preference.value = theme

@@ -5,17 +5,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#f7f7f7" />
+    <!-- 与 styles.css 的 --canvas 一致；首绘脚本会在深色偏好下改写为深色值。 -->
+    <meta name="theme-color" content="#edf0f5" />
     <meta name="description" content="问序，让每一个想法都被听见。创建问卷、收集回答、发现洞察。" />
     <title>问序</title>
     <script>
       try {
         const preference = localStorage.getItem('wenxu-theme') || 'system'
-        document.documentElement.dataset.theme =
+        const dark =
           preference === 'dark' ||
           (preference === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
-            ? 'dark'
-            : 'light'
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+        // 浏览器界面颜色也必须在首绘前确定，否则深色主题会先闪一次浅色状态栏。
+        document
+          .querySelector('meta[name="theme-color"]')
+          ?.setAttribute('content', dark ? '#1c2027' : '#edf0f5')
       } catch {}
     </script>
   </head>
