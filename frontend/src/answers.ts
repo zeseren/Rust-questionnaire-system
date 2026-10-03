@@ -3,6 +3,9 @@ import { LosslessNumber } from 'lossless-json'
 import type { Answer, SurveyDocument } from './types'
 // 与后端 domain::MAX_NUMBER_JSON_BYTES 一致，按传输表示限制，不能先舍入数字。
 const MAX_NUMBER_JSON_BYTES = 64
+// 与后端 finite_number 的裸整数范围一致：i64 最小值至 u64 最大值。
+const MIN_JSON_INTEGER = -(1n << 63n)
+const MAX_JSON_INTEGER = (1n << 64n) - 1n
 export type InputValue = string | string[] | number | null
 export type Inputs = Record<string, InputValue>
 export function isAnswered(value: InputValue | undefined) {
@@ -58,17 +61,34 @@ export function buildAnswers(document: SurveyDocument, values: Inputs) {
         const raw = String(value)
           .trim()
           .replace(/([eE])(?=\d)/, '$1+')
+        const numeric = Number(raw)
         if (
           !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(raw) ||
-          !Number.isFinite(Number(raw))
-        )
+          !Number.isFinite(numeric)
+        ) {
           fail('请输入有限数字，例如 12、0.5 或 1e3。')
-        else if (raw.length > MAX_NUMBER_JSON_BYTES)
+          break
+        }
+        if (raw.length > MAX_NUMBER_JSON_BYTES) {
           fail(`数字最多 ${MAX_NUMBER_JSON_BYTES} 个字符（含小数点和指数符号）。`)
-        else if (question.integer && !Number.isInteger(Number(raw))) fail('此题只接受整数。')
+          break
+        }
+        // 只对裸整数核对原值；部分超过 Number 安全整数范围的值仍能被精确表示。
+        if (!/[.eE]/.test(raw)) {
+          const integer = BigInt(raw)
+          if (integer < MIN_JSON_INTEGER || integer > MAX_JSON_INTEGER) {
+            fail('整数超出支持的数值范围。')
+            break
+          }
+          if (integer !== BigInt(numeric)) {
+            fail('整数无法精确表示，请调整数值。')
+            break
+          }
+        }
+        if (question.integer && !Number.isInteger(numeric)) fail('此题只接受整数。')
         else if (
-          (question.min != null && Number(raw) < question.min) ||
-          (question.max != null && Number(raw) > question.max)
+          (question.min != null && numeric < question.min) ||
+          (question.max != null && numeric > question.max)
         )
           fail('数值不在允许范围内。')
         else answers.push({ question_id: question.id, value: new LosslessNumber(raw) })

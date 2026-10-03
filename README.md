@@ -191,7 +191,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 
 保留的 18 个关键测试集中在 [`backend/tests/domain.rs`](backend/tests/domain.rs)，不启动数据库；它们不能替代事务、权限和并发提交的真实服务验证。本轮运行过的 HTTP、数据库及备份恢复场景见 [实施与验证记录](docs/requirements-analysis.md#11-后端实施与验证记录)。
 
-前端在 `frontend/` 执行 `npm run build` 检查类型并构建，`npm run format` 整理源码，`npm run format:check` 检查格式。没有引入前端自动化测试框架；实际浏览器联调范围单独记录在 [前端实施与验证记录](docs/requirements-analysis.md#12-前端-mvp-实施与验证记录)，不将静态原型视为业务验收。
+前端在 `frontend/` 执行 `npm run build` 检查类型并构建，`npm run format` 整理源码，`npm run format:check` 检查格式。`npm run test:regression` 使用 Node 内置测试运行器执行独立的 `frontend/tests/answers.test.mjs`，仅覆盖数字精度修复的回归，不添加测试依赖。没有引入前端自动化测试框架；实际浏览器联调范围单独记录在 [前端实施与验证记录](docs/requirements-analysis.md#12-前端-mvp-实施与验证记录)，不将静态原型视为业务验收。
 
 ### 7.1 编译速度配置
 

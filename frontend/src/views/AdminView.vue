@@ -124,7 +124,7 @@ const actionNames: Record<string, string> = {
       <table v-if="tab === 'users'">
         <thead>
           <tr>
-            <th>用户名</th>
+            <th>用户 / 账号 ID</th>
             <th>角色</th>
             <th>状态</th>
             <th>创建时间</th>
@@ -133,7 +133,10 @@ const actionNames: Record<string, string> = {
         </thead>
         <tbody>
           <tr v-for="user in users" :key="user.id">
-            <td>{{ user.username }}</td>
+            <td>
+              <div>{{ user.username }}</div>
+              <code class="hint">{{ user.id }}</code>
+            </td>
             <td>{{ user.role === 'admin' ? '管理员' : '普通用户' }}</td>
             <td>{{ user.disabled ? '已禁用' : '正常' }}</td>
             <td>{{ dateTime(user.created_at) }}</td>
@@ -154,6 +157,7 @@ const actionNames: Record<string, string> = {
         <thead>
           <tr>
             <th>问卷</th>
+            <th>发布者账号 ID</th>
             <th>回收状态</th>
             <th>治理状态</th>
             <th>操作</th>
@@ -162,6 +166,9 @@ const actionNames: Record<string, string> = {
         <tbody>
           <tr v-for="survey in surveys" :key="survey.id">
             <td>{{ survey.title || '无标题问卷' }}</td>
+            <td>
+              <code>{{ survey.owner_id }}</code>
+            </td>
             <td>{{ statusNames[survey.status] }}</td>
             <td>{{ survey.taken_down ? '已下架' : '正常' }}</td>
             <td>
@@ -253,6 +260,10 @@ const actionNames: Record<string, string> = {
     <ErrorNotice :message="inspectError" />
     <template v-if="document">
       <h2>{{ document.survey.title || '无标题问卷' }}</h2>
+      <p class="hint mt">
+        发布者账号 ID：
+        <code>{{ document.survey.owner_id }}</code>
+      </p>
       <p class="hint mt">
         {{ statusNames[document.survey.status] }} ·
         {{ document.survey.taken_down ? '已下架' : '未下架' }}
