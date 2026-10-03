@@ -68,10 +68,28 @@ Invoke-RestMethod http://localhost:3000/health              # {"status":"ready"}
 cargo fmt --all -- --check
 cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo build --release --locked -p questionnaire-api          # single codegen unit + fat LTO + strip
 ```
 
 - `--locked` is the documented norm; the root `Cargo.lock` is authoritative.
 - The server needs a reachable PostgreSQL; config/DB errors abort startup (no in-memory fallback, no DB auto-create). Migrations always run at startup, including before subcommand dispatch.
+- Compile-speed profiles live in the root `Cargo.toml`; the numbers behind the choices are in README §7.1 and `docs/requirements-analysis.md` §16.
+
+### Toolchain and profile: pick per need
+
+Two paths over the same profiles. Stable + LLVM is always the default; Cranelift is opt-in for iteration speed only, never for gates or releases.
+
+| Need | Command | Cost / benefit |
+|---|---|---|
+| Default dev build & run | `cargo build\|run --locked -p questionnaire-api` | stable + LLVM; own code `opt-level = 0`, deps `opt-level = 3`, debuginfo kept. Use it when you need breakpoints or want to judge dependency runtime speed. |
+| Fast logic iteration | `cargo +nightly cranelift -p questionnaire-api` | alias defined in `.cargo/config.toml`; needs nightly + `rustc-codegen-cranelift-preview` (installed on this machine). Measured: one-crate incremental 8—12 s vs 17—28 s with LLVM (~2—3×); a full cold build gains nothing (dependency compilation dominates). Generated machine code is slower than LLVM — never ship it. |
+| Run / test under Cranelift | `cargo +nightly run --locked -Zcodegen-backend --config .cargo/cranelift.toml -p questionnaire-api`<br>`cargo +nightly test -Zcodegen-backend --config .cargo/cranelift.toml --locked -p questionnaire-api --test domain` | the alias only wraps `build`; `.cargo/cranelift.toml` sets `codegen-backend` for the dev and test profiles only. |
+| Gates before commit | `cargo fmt --all -- --check`, `cargo test --locked --workspace`, `cargo clippy --locked --workspace --all-targets -- -D warnings` | always stable + LLVM, the same path as release. Do not run the gates under Cranelift. |
+| Release artifact | `cargo build --release --locked -p questionnaire-api` | `opt-level = 3` + `codegen-units = 1` + `lto = "fat"` + `strip = "symbols"` + `panic = "abort"`; ≈5 min cold, 6.87 MB here. Never build release with Cranelift. |
+
+- Never add a `rust-toolchain.toml`: stable must remain the default so the gates and release keep the LLVM path and the documented MSRV.
+- The first Cranelift build in a given `target/` rebuilds the whole dependency tree (measured 222 crates, 6m07s); afterwards cargo keeps both artifact sets and switching back is instant (measured 0 crates, ~2 s). `cargo clean`, a fresh clone or a different `--target-dir` pays that cost again.
+- `TMP`/`TEMP` are pinned to the workspace-relative `target/` in `.cargo/config.toml`: with an unwritable or non-existent temp dir MSVC `cl.exe` fails with `error D8050` while compiling the C dependency `ring`.
 - No Makefile / justfile / scripts / CI — call cargo directly.
 
 ## Code Conventions & Common Patterns
@@ -96,6 +114,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 - `backend/src/domain.rs` — all validation rules; the only module with automated tests.
 - `backend/src/http.rs`, `backend/src/config.rs`, `backend/src/security.rs` — boundary concerns (extractors, env contract, request gating).
 - `backend/Cargo.toml` — MSRV/edition/features; `Cargo.lock` — exact pins.
+- `Cargo.toml` (root) `[profile.*]` + `.cargo/config.toml` / `.cargo/cranelift.toml` — compile-speed tuning (dev/release), the opt-in Cranelift alias, and the child-process `TMP`/`TEMP` pin.
 - `backend/tests/domain.rs` — the whole test suite.
 - `compose.yaml`, `.env.example` — optional DB and the env contract.
 - `README.md`、`docs/backend-guide.md`、`docs/frontend-guide.md`、`docs/requirements-analysis.md` — 运行说明、前后端代码指南与分阶段验证记录。前端 MVP 已实现，性能目标仍未经过压测；以当前代码和验证记录为准。
@@ -109,8 +128,8 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 
 ## Runtime/Tooling Preferences
 
-- Rust stable **≥ 1.94**, edition 2024 (verified locally on 1.98.1). No `rust-toolchain.toml`; the installed toolchain is used.
-- Cargo workspace, single member `backend`; dependencies live in `backend/Cargo.toml` (no workspace dependency inheritance, no `[features]`, `[dev-dependencies]`, `[profile]` or `[lints]` sections). `publish = false`.
+- Rust stable **≥ 1.94**, edition 2024 (verified locally on 1.98.1). No `rust-toolchain.toml`; stable stays the default active toolchain. Nightly is installed only for the opt-in Cranelift path — see "Toolchain and profile: pick per need".
+- Cargo workspace, single member `backend`; dependencies live in `backend/Cargo.toml` (no workspace dependency inheritance, no `[features]`, `[dev-dependencies]` or `[lints]` sections). `publish = false`. Build-tuning `[profile.*]` sections are the only exception and live in the **root** `Cargo.toml`, never in `backend/Cargo.toml`.
 - Key pinned versions: axum 0.8.9, sea-orm / sea-orm-migration 2.0.2, sqlx 0.9.0, tokio 1.53.1, utoipa 5.5.0.
 - PostgreSQL 18 is the runtime baseline; there is no SQLite/in-memory mode and no Redis/queue. Compose only supplies the DB — the API always runs via `cargo run`. TLS termination, reverse proxy and container images are explicitly out of scope.
 - Configuration is env-only: `.env` is loaded by `dotenvy` from the repo root (process env wins; a missing `.env` is fine).

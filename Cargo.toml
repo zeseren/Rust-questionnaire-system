@@ -1,3 +1,25 @@
 [workspace]
 members = ["backend"]
 resolver = "3"
+
+# 编译速度调优：dev 只求反馈快，release 用单 codegen 单元 + LTO 换运行时性能。
+# 配置口径与取舍见 README「开发检查」；Cranelift 可选后端见 .cargo/config.toml。
+[profile.dev]
+# 自己的代码完全不优化，增量编译最快；debuginfo 保留，便于 gdb/lldb 与 backtrace
+opt-level = 0
+debug = true
+
+# 第三方依赖改动很少：首次冷编译慢一些，之后的日常增量不受影响，dev 下依赖运行更快
+[profile.dev.package."*"]
+opt-level = 3
+
+# 文章口径是「优化体积」，这里按项目需要改成「优化性能」：opt-level 用 3 而不是 "z"
+[profile.release]
+opt-level = 3
+# 单个 codegen 单元 + fat LTO 增加跨 crate 优化机会，代价是可能延长发布构建耗时
+codegen-units = 1
+lto = "fat"
+# 去掉符号表，减小分发体积
+strip = "symbols"
+# 禁用 panic 栈展开；发生 panic 时直接终止进程，不再只终止单个 tokio 任务
+panic = "abort"

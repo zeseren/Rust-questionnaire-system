@@ -411,3 +411,53 @@ NFR-07：提交失败保留当前页面输入，支持按既定幂等规则重�
 - `cargo fmt --all -- --check`、`cargo test --locked --workspace`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 通过。
 
 本轮未做并发压力、浏览器闭环或性能压测；第 14 节记录的容量规则仍然成立，复制与重放路径恢复到既有契约。
+
+## 16. 编译速度调优（2026-10-02）
+
+按《不许 Cargo 再摸鱼了》的做法给 workspace 补了编译配置，调整编译耗时与产物，并将 release 的 panic 策略改为直接终止进程：
+
+- 根 `Cargo.toml`：`[profile.dev]` 保持 `opt-level = 0` 并保留 debuginfo，新增 `[profile.dev.package."*"] opt-level = 3`；`[profile.release]` 改为 `opt-level = 3`、`codegen-units = 1`、`lto = "fat"`、`strip = "symbols"`、`panic = "abort"`。文章对 release 建议的是 `opt-level = "z"`，本项目按「优化性能而不是优化体积」的要求改用 `3`。`[profile.*]` 只写在根 `Cargo.toml`，不动 `backend/Cargo.toml`。
+- `.cargo/config.toml` 新增 `cranelift` 别名，内置 `--locked`，后端选择写在 `.cargo/cranelift.toml` 并由别名带 `--config` 引入；没有加 `rust-toolchain.toml`，stable 仍是默认工具链，release 构建与日常检查继续走 LLVM。
+- 取舍写进了 `README.md` 第 7.1 节与 `AGENTS.md`：release 全量冷构建约 5 分钟、产物 6.87 MB（对照无 LTO/strip 的旧配置分别是 5 分 09 秒与 13.7 MB，没有测出 LTO 的额外代价）；`panic = "abort"` 之后发生 panic 会终止整个进程，Tokio 任务边界与 `catch_unwind` 均无法恢复，这是本次的运行语义变化。普通测试使用 unwind 策略，不验证 release 的 panic 行为。
+
+环境为 Windows、Rust 1.98.1（Cranelift 对照使用 1.101.0-nightly）。所有耗时都在笔记本插电、高性能电源方案下测得（`powercfg` 显示当前方案为「高性能」，`PROCTHROTTLEMAX` 交流/直流均为 100%）；更早一轮在节流状态下测得的数字波动过大，已作废。另有一个与本次改动无关的本机现象：cargo 的子进程用 MSVC `cl.exe` 编译 C 依赖（`ring`）时，若 `TMP`/`TEMP` 指向子进程写不了的位置——实测工作区外的 `F:\tmp`、`F:\omp-tmp`，或工作区内但**不存在**的 `target\nope`——会报 `error D8050: 无法执行 c1.dll`；指向工作区内已存在的目录（`target`、`target\tmp`）则正常。同一份编译参数分别探测这五个值，结果稳定可复现。因此 `.cargo/config.toml` 把 `TMP`/`TEMP` 固定到工作区内的 `target/`（`relative = true` + `force = true`）；仓库的构建脚本、依赖与 `Cargo.lock` 均未改动，下表所有结果都是普通 `cargo` 调用下测得的。
+
+| 检查 | 实测结果 |
+| --- | --- |
+| `cargo fmt --all -- --check` | 通过 |
+| `cargo test --locked --workspace` | 18/18 通过 |
+| `cargo clippy --locked --workspace --all-targets -- -D warnings` | 通过 |
+| `cargo build --locked -p questionnaire-api` | 通过；切到新 dev profile 的整树重建约 5 分钟 |
+| `cargo build --release --locked -p questionnaire-api` | 通过；整树重建加 fat LTO 约 5 分钟，产物 6.87 MB（dev 二进制 17.0 MB） |
+| release 可执行文件启动 | 进入配置与数据库连接阶段，连接失败时以退出码 1 报错并给出可读错误，二进制可运行 |
+| `cargo +nightly cranelift -p questionnaire-api` | 通过；整树用 Cranelift 后端重建约 5 分钟 |
+| `cargo +nightly test -Zcodegen-backend --config .cargo/cranelift.toml --locked -p questionnaire-api --test domain` | 18/18 通过，Cranelift 产物行为与 LLVM 一致 |
+
+对照实验（同一台笔记本、高性能电源方案、全新 `target` 目录、同一个 `questionnaire-api` 包；每项重复 2—3 次并交错顺序，取区间）：
+
+| 对比 | 默认路径（stable + LLVM） | Cranelift 路径（`cargo +nightly cranelift`） | 变化 |
+| --- | --- | --- | --- |
+| dev 增量（改一行 `lib.rs` 后重建 lib 与 bin） | 28 秒、28 秒（同一会话另测得 17—18 秒） | 8—12 秒 | −66% |
+| dev 全量冷构建 | 295 / 347 / 385 秒 | 314 / 318 / 318 秒 | 中位数约 −7%，落在 LLVM 自身波动范围内 |
+
+release 对照均使用 stable + LLVM，仅切换 profile 配置：
+
+| 对比 | 旧 release 配置 | 新 release 配置 | 变化 |
+| --- | --- | --- | --- |
+| release 产物体积 | 13.7 MB（`codegen-units = 16`、无 LTO/strip、unwind） | 6.87 MB（`codegen-units = 1`、fat LTO、strip、abort） | −50% |
+| release 全量冷构建 | 5 分 09 秒（无 LTO） | 4 分 54 秒（fat LTO + `codegen-units = 1`） | 持平，没有观察到 LTO 的构建代价 |
+
+- 这台笔记本上 LLVM 路径的墙钟时间波动明显（dev 增量 17—28 秒、dev 冷构建 295—385 秒，±15% 以上），Cranelift 路径基本不动（增量 8—12 秒、冷构建 314—318 秒）。因此只有 **dev 增量** 一项差异稳定且显著，其余按区间判读，不给单点结论。
+- 增量对比里同时换了工具链（stable → nightly）。用 nightly 在同一条工具链上再对照：nightly + LLVM 16—19 秒、nightly + Cranelift 9—10 秒，说明主要收益来自后端本身，stable 与 nightly 之间也各有一截差异。
+- 冷构建拿不到可靠收益：依赖约 250 个 crate，编译前端与链接占大头，Cranelift 只影响代码生成那一段；它真正省下的是「改一行代码后的重建」。
+- 后端切换的代价也实测了：在已有 stable+LLVM 产物的 `target/` 里第一次切到 Cranelift 会重编 222 个 crate（6 分 07 秒），切回 stable 时重编 0 个 crate（约 2 秒，两套产物并存）；`cargo clean`、换 `--target-dir` 或新克隆会重新付这 6 分钟。所以适合「一段时间集中改逻辑」时切过去，而不是一条命令一换。
+- `[profile.dev.package."*"] opt-level = 3` 在编译耗时上仍测不出方向性结论：同一批次里依赖 `opt-level = 0` 的对照树冷构建 348 秒，反而比 O3 的 295 秒慢，明显被顺序与热状态噪声主导。它换来的是 dev 下依赖运行更快，这一点没有基准测试，不给数字。
+- release 的 `codegen-units = 1` + fat LTO + `strip` 让产物减半而冷构建没有变慢；运行时性能同样没有做基准测试（沿用第 11.3 节口径）。若只追求最短 dev 循环，删掉 `[profile.dev.package."*"]` 一节即可，取消它对 dev 依赖运行速度的收益。
+
+本轮未做：性能压测（NFR-08/NFR-09、AC-14 仍未执行，不报告吞吐量或 P95）、release/Cranelift 产物的运行时基准对比，以及 HTTP 与数据库联调（本机无可用数据库凭据，沿用第 11.3 节口径）。
+
+### 16.1 纳入 main 前的复核（2026-10-03）
+
+为 Cranelift 别名补上 `--locked`；修正文档中“不改变运行语义”的表述，明确 release 的 panic 终止行为与普通测试的覆盖边界；将 release 的 LLVM 配置对照从 Cranelift 对照表中分开。
+
+本次重新执行并通过：stable + LLVM 下的 `cargo fmt --all -- --check`、`cargo test --locked --workspace`（18/18）、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo build --release --locked -p questionnaire-api`，以及可选别名 `cargo +nightly cranelift -p questionnaire-api`。前端 `npm run build` 与 `npm run format:check` 通过；格式检查最初仅因 Windows 检出的 CRLF 换行告警，恢复为仓库保存的 LF 后通过，未产生前端内容差异。本次未重做冷构建计时、性能压测或 HTTP/数据库联调，上面的性能数字仍属于 2026-10-02 的历史记录。

@@ -1,0 +1,22 @@
+# 开发期可选加速：Cranelift 后端替换 Rust 的代码生成阶段，语义不变，省掉 LLVM 的优化管线；
+# 代价是生成的机器码比 LLVM 慢，只适合「只看逻辑出没出来」的开发循环。
+#
+# 需要 nightly 工具链与 Cranelift 组件（当前 nightly 上组件名带 -preview 也可以）：
+#   rustup toolchain install nightly --component rustc-codegen-cranelift-preview
+#
+# 用法（等价于 cargo +nightly build --locked -Zcodegen-backend --config .cargo/cranelift.toml）：
+#   cargo +nightly cranelift
+#   cargo +nightly cranelift -p questionnaire-api
+#
+# 后端选择写在 .cargo/cranelift.toml 里，只有带 --config 时才被读取；默认 stable 工具链、
+# release 构建与日常检查仍走 LLVM，不受此别名影响。
+[alias]
+cranelift = "build --locked -Zcodegen-backend --config .cargo/cranelift.toml"
+
+# 把 cargo 子进程（build script、cc-rs、cl.exe）的临时目录固定到工作区内的 `target/`：
+# TMP/TEMP 指向 cargo 子进程写不了的位置（本机实测：工作区外如 F:\tmp，或根本不存在的目录）时，
+# 编译 C 依赖（ring）会报 `error D8050: 无法执行 c1.dll`；指向工作区内已存在的目录则正常。
+# relative = true 让值相对本文件所在的仓库根，不写死盘符；force = true 表示外部已设过 TMP/TEMP 也覆盖。
+[env]
+TMP = { value = "target", relative = true, force = true }
+TEMP = { value = "target", relative = true, force = true }

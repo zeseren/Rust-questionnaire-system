@@ -1,0 +1,12 @@
+# 开发期可选加速：Cranelift 只替换 Rust 的代码生成阶段，语义不变，省掉 LLVM 的优化管线；
+# 代价是生成的机器码比 LLVM 慢，只适合「只看逻辑出没出来」的开发循环。
+#
+# 这个文件不会自动生效，只在显式带 --config 时被读取，因此 stable 默认构建、release 构建
+# 与日常检查仍走 LLVM。用法见 README「开发检查 → 编译速度配置」。
+[profile.dev]
+codegen-backend = "cranelift"
+
+# 便于 `cargo +nightly test -Zcodegen-backend --config .cargo/cranelift.toml` 在
+# Cranelift 产物上跑测试，确认后端替换没有改变行为。
+[profile.test]
+codegen-backend = "cranelift"

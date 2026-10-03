@@ -192,3 +192,25 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 保留的 18 个关键测试集中在 [`backend/tests/domain.rs`](backend/tests/domain.rs)，不启动数据库；它们不能替代事务、权限和并发提交的真实服务验证。本轮运行过的 HTTP、数据库及备份恢复场景见 [实施与验证记录](docs/requirements-analysis.md#11-后端实施与验证记录)。
 
 前端在 `frontend/` 执行 `npm run build` 检查类型并构建，`npm run format` 整理源码，`npm run format:check` 检查格式。没有引入前端自动化测试框架；实际浏览器联调范围单独记录在 [前端实施与验证记录](docs/requirements-analysis.md#12-前端-mvp-实施与验证记录)，不将静态原型视为业务验收。
+
+### 7.1 编译速度配置
+
+根 `Cargo.toml` 的 profile 与 `.cargo/config.toml` 的别名用于调整编译耗时和产物；release 还将 panic 策略改为直接终止进程。默认工具链仍是 stable：
+
+```powershell
+cargo build --locked -p questionnaire-api            # 开发构建：自己的代码 O0，依赖 O3
+cargo build --release --locked -p questionnaire-api   # 发布构建：单 codegen 单元 + fat LTO + strip
+```
+
+- `dev`：自己的代码 `opt-level = 0`，第三方依赖 `opt-level = 3`。依赖几乎不改动，只有首次冷编译更慢；之后改业务代码的增量编译不受影响，同时 dev 下依赖（JSON、数据库、模板）的运行速度接近发布版。dev 保留 debuginfo，`gdb`/`lldb` 与 backtrace 照常可用。
+- `release`：`opt-level = 3`、`codegen-units = 1`、`lto = "fat"` 换跨 crate 内联与死代码消除，`strip = "symbols"` 减体积，`panic = "abort"` 禁用 panic 栈展开。本机全量冷构建实测约 5 分钟，与不开 LTO 的旧配置持平，产物从 13.7 MB 降到 6.87 MB。发生 panic 时会直接终止进程，Tokio 任务边界与 `catch_unwind` 均无法恢复；第 7 节的普通测试使用 unwind 策略，通过测试不能验证 release 的 panic 行为。
+- 需要更快的开发期反馈时，可临时切到 nightly 的 Cranelift 后端（省掉 LLVM 优化管线，机器码更慢但语义等价）：
+
+```powershell
+rustup toolchain install nightly --component rustc-codegen-cranelift-preview
+cargo +nightly cranelift -p questionnaire-api
+```
+
+Cranelift 别名内置 `--locked`，只作开发期可选路径，不写进 `rust-toolchain.toml`：默认 `cargo build`、`cargo test`、`cargo clippy` 与发布构建仍使用 stable + LLVM。第一次在某个 `target/` 目录里用它要重建依赖（本机实测 222 个 crate、6 分 07 秒），之后两套产物并存，来回切换几乎不花时间（实测切回 stable 重编 0 个 crate、约 2 秒），`cargo clean` 后会重新付这 6 分钟。依赖里含 C 代码（`ring`，由 `sqlx` 的 rustls 特性引入）时，Cranelift 只作用于 Rust 代码，C 部分仍由系统编译器构建。
+
+`.cargo/config.toml` 还把 cargo 子进程（build script、cc-rs、`cl.exe`）的 `TMP`/`TEMP` 固定到工作区内的 `target/`（用 `relative = true`，不写死盘符）：TMP/TEMP 指向 cargo 子进程写不了的位置（例如工作区外的目录或根本不存在的目录）时，编译 C 依赖会报 `error D8050: 无法执行 c1.dll`。临时目录需要放在别处时改这一处即可。
