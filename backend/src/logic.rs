@@ -1,0 +1,708 @@
+//! 表达式必须先通过类型与引用检查；求值不访问外部状态，也不把错误当作缺失值。
+
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Number, Value};
+use uuid::Uuid;
+
+use crate::domain::{
+    MAX_CHOICES, MAX_NUMBER_JSON_BYTES, MAX_QUESTIONS, MAX_TEXT_LENGTH, Question, QuestionKind,
+    finite_number,
+};
+
+const MAX_NODES: usize = 256;
+const MAX_DEPTH: usize = 16;
+
+/// 两端共享的稳定错误分类；文案不参与分支判断。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogicErrorCode {
+    /// JSON 结构或字段不符合契约。
+    InvalidSyntax,
+    /// 不支持该 DSL 或执行语义版本。
+    UnsupportedVersion,
+    /// 表达式超出资源预算。
+    LimitExceeded,
+    /// 题目或选项引用不存在或不唯一。
+    InvalidReference,
+    /// 运算符与操作数类型不匹配。
+    TypeMismatch,
+    /// 数字常量无效或失真。
+    InvalidNumber,
+    /// 上下文不符合已经绑定的题型。
+    InvalidAnswer,
+    /// 算术结果不是有限数字或发生除零。
+    ArithmeticError,
+}
+
+/// 规则错误保留 AST 路径与相关题目，但不回显答案。
+#[derive(Debug, thiserror::Error, Serialize)]
+#[error("{message}（{path}）")]
+pub struct LogicError {
+    /// 稳定错误代码。
+    pub code: LogicErrorCode,
+    /// 从表达式包根节点开始的字段路径。
+    pub path: String,
+    /// 涉及的题目；纯表达式错误没有题目。
+    pub question_id: Option<Uuid>,
+    /// 中文诊断信息。
+    pub message: &'static str,
+}
+
+fn error(code: LogicErrorCode, path: &str, question_id: Option<Uuid>) -> LogicError {
+    let message = match code {
+        LogicErrorCode::InvalidSyntax => "规则结构或字段无效",
+        LogicErrorCode::UnsupportedVersion => "不支持此规则版本",
+        LogicErrorCode::LimitExceeded => "规则超出容量限制",
+        LogicErrorCode::InvalidReference => "规则引用的题目或选项无效",
+        LogicErrorCode::TypeMismatch => "规则的操作数类型不匹配",
+        LogicErrorCode::InvalidNumber => "规则数字无效或无法精确表示",
+        LogicErrorCode::InvalidAnswer => "规则上下文包含无效答案",
+        LogicErrorCode::ArithmeticError => "规则计算发生除零或数值溢出",
+    };
+    LogicError {
+        code,
+        path: path.into(),
+        question_id,
+        message,
+    }
+}
+
+/// 编译阶段确定的类型；缺失值保留原表达式的静态类型。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogicValueType {
+    /// 布尔条件。
+    Boolean,
+    /// 有限 binary64 数字。
+    Number,
+    /// Unicode 文本。
+    Text,
+    /// 单选身份。
+    Choice,
+    /// 多选集合。
+    Choices,
+}
+
+/// 求值结果；布尔位置的 Missing 对应三值逻辑中的 unknown。
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum LogicValue {
+    /// 无适用答案。
+    Missing,
+    /// 布尔结果。
+    Boolean(bool),
+    /// 有限数字；零统一为正零。
+    Number(f64),
+    /// 不做隐式裁剪或归一化的文本。
+    Text(String),
+    /// 单选选项 ID。
+    Choice(Uuid),
+    /// 排序后的无重复选项集合。
+    Choices(Vec<Uuid>),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Program {
+    dsl_version: Number,
+    semantics_version: Number,
+    expression: Expression,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+enum Expression {
+    Boolean {
+        value: bool,
+    },
+    Number {
+        value: String,
+    },
+    Text {
+        value: String,
+    },
+    Answer {
+        question_id: String,
+    },
+    Answered {
+        question_id: String,
+    },
+    Selected {
+        question_id: String,
+        option_id: String,
+    },
+    ContainsAny {
+        question_id: String,
+        option_ids: Vec<String>,
+    },
+    ContainsAll {
+        question_id: String,
+        option_ids: Vec<String>,
+    },
+    Not {
+        expression: Box<Expression>,
+    },
+    All {
+        expressions: Vec<Expression>,
+    },
+    Any {
+        expressions: Vec<Expression>,
+    },
+    Compare {
+        comparison: Comparison,
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
+    Coalesce {
+        value: Box<Expression>,
+        fallback: Box<Expression>,
+    },
+    Length {
+        value: Box<Expression>,
+    },
+    Arithmetic {
+        operator: Arithmetic,
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
+}
+
+#[derive(Clone, Copy, Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+enum Comparison {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+#[derive(Clone, Copy, Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+enum Arithmetic {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+
+#[derive(Debug)]
+struct Binding {
+    value_type: LogicValueType,
+    options: BTreeSet<Uuid>,
+}
+
+#[derive(Debug)]
+struct Node {
+    kind: NodeKind,
+    value_type: LogicValueType,
+    path: String,
+}
+
+#[derive(Debug)]
+enum NodeKind {
+    Literal(LogicValue),
+    Answer(Uuid),
+    Answered(Uuid),
+    Selected(Uuid, Vec<Uuid>, bool),
+    Not(Box<Node>),
+    Logical(Vec<Node>, bool),
+    Compare(Comparison, Box<Node>, Box<Node>),
+    Coalesce(Box<Node>, Box<Node>),
+    Length(Box<Node>),
+    Arithmetic(Arithmetic, Box<Node>, Box<Node>),
+}
+
+/// 只有编译入口能构造的规则；绑定与常量不会在执行期间被外部修改。
+#[derive(Debug)]
+pub struct CompiledExpression {
+    root: Node,
+    bindings: BTreeMap<Uuid, Binding>,
+    dependencies: BTreeSet<Uuid>,
+}
+
+impl CompiledExpression {
+    /// 返回结果的静态类型，供显示规则或计算字段检查。
+    #[must_use]
+    pub fn value_type(&self) -> LogicValueType {
+        self.root.value_type
+    }
+
+    /// 返回按 UUID 排序的直接依赖，供后续文档编译器构建依赖图。
+    pub fn dependencies(&self) -> impl Iterator<Item = Uuid> + '_ {
+        self.dependencies.iter().copied()
+    }
+
+    /// 对已按问卷规则规范化、且已排除不适用答案的上下文求值。
+    ///
+    /// 本入口防御性检查引用答案的类型、数字和选项身份，不代替问卷的必填、
+    /// 长度、范围或路径校验。未引用的答案不会参与求值。
+    ///
+    /// # 错误
+    /// 引用答案类型错误、除零或非有限结果时返回结构化错误。
+    pub fn evaluate(&self, answers: &BTreeMap<Uuid, Value>) -> Result<LogicValue, LogicError> {
+        let mut context = BTreeMap::new();
+        for id in &self.dependencies {
+            let binding = &self.bindings[id];
+            let value = read_answer(answers.get(id), binding, *id)?;
+            context.insert(*id, value);
+        }
+        self.root.evaluate(&context)
+    }
+}
+
+/// 将 JSON 规则绑定到问卷题目，检查结构、版本、类型、引用和资源限制。
+///
+/// # 错误
+/// 未知字段/版本、非法常量、无效引用、类型不匹配及超限均拒绝编译。
+pub fn compile_expression(
+    raw: &Value,
+    questions: &[Question],
+) -> Result<CompiledExpression, LogicError> {
+    // 在递归反序列化前限制 AST 深度，避免无效规则构造深层递归类型。
+    check_raw_budget(raw.get("expression"), 1, &mut 0)?;
+    let program =
+        Program::deserialize(raw).map_err(|_| error(LogicErrorCode::InvalidSyntax, "$", None))?;
+    for version in [&program.dsl_version, &program.semantics_version] {
+        // 浏览器将 JSON 的 1 与 1.0 解析成同一值；版本按非负整数值检查。
+        let value = version
+            .as_f64()
+            .filter(|value| {
+                value.is_finite()
+                    && *value >= 0.0
+                    && *value <= f64::from(u32::MAX)
+                    && positive_zero(value.fract()).total_cmp(&0.0).is_eq()
+            })
+            .ok_or_else(|| error(LogicErrorCode::InvalidSyntax, "$", None))?;
+        if !value.total_cmp(&1.0).is_eq() {
+            return Err(error(LogicErrorCode::UnsupportedVersion, "$", None));
+        }
+    }
+    if questions.len() > MAX_QUESTIONS {
+        return Err(error(LogicErrorCode::LimitExceeded, "$.questions", None));
+    }
+    let mut bindings = BTreeMap::new();
+    for question in questions {
+        let (value_type, options) = match &question.kind {
+            QuestionKind::SingleChoice { options } => (LogicValueType::Choice, options.as_slice()),
+            QuestionKind::MultipleChoice { options, .. } => {
+                (LogicValueType::Choices, options.as_slice())
+            }
+            QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => {
+                (LogicValueType::Text, &[][..])
+            }
+            QuestionKind::Number { .. } | QuestionKind::Rating { .. } => {
+                (LogicValueType::Number, &[][..])
+            }
+        };
+        let ids: BTreeSet<_> = options.iter().map(|option| option.id).collect();
+        if question.id.is_nil()
+            || bindings.contains_key(&question.id)
+            || ids.len() != options.len()
+            || ids.contains(&Uuid::nil())
+        {
+            return Err(error(
+                LogicErrorCode::InvalidReference,
+                "$.questions",
+                Some(question.id),
+            ));
+        }
+        if options.len() > MAX_CHOICES {
+            return Err(error(
+                LogicErrorCode::LimitExceeded,
+                "$.questions",
+                Some(question.id),
+            ));
+        }
+        bindings.insert(
+            question.id,
+            Binding {
+                value_type,
+                options: ids,
+            },
+        );
+    }
+    let mut dependencies = BTreeSet::new();
+    let root = compile_node(
+        program.expression,
+        "$.expression".into(),
+        &bindings,
+        &mut dependencies,
+    )?;
+    Ok(CompiledExpression {
+        root,
+        bindings,
+        dependencies,
+    })
+}
+
+fn check_raw_budget(
+    raw: Option<&Value>,
+    depth: usize,
+    count: &mut usize,
+) -> Result<(), LogicError> {
+    *count += 1;
+    if depth > MAX_DEPTH || *count > MAX_NODES {
+        return Err(error(LogicErrorCode::LimitExceeded, "$.expression", None));
+    }
+    if let Some(Value::Object(fields)) = raw {
+        for key in ["expression", "left", "right", "fallback", "value"] {
+            if let Some(child @ Value::Object(_)) = fields.get(key) {
+                check_raw_budget(Some(child), depth + 1, count)?;
+            }
+        }
+        if let Some(Value::Array(children)) = fields.get("expressions") {
+            for child in children {
+                check_raw_budget(Some(child), depth + 1, count)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reference(raw: &str, path: &str) -> Result<Uuid, LogicError> {
+    Uuid::parse_str(raw)
+        .ok()
+        .filter(|id| !id.is_nil() && id.to_string() == raw)
+        .ok_or_else(|| error(LogicErrorCode::InvalidReference, path, None))
+}
+
+fn numeric(raw: &str) -> Option<f64> {
+    // 数字常量只能是无空白的 JSON 数字；借用既有精度规则，不改变答案契约。
+    if raw.trim() != raw || raw.len() > MAX_NUMBER_JSON_BYTES {
+        return None;
+    }
+    let value: Value = serde_json::from_str(raw).ok()?;
+    finite_number(&value, Uuid::nil()).ok().map(positive_zero)
+}
+
+fn positive_zero(value: f64) -> f64 {
+    // 位级判断消除负零；普通数字比较不使用模糊容差。
+    if value.to_bits() & 0x7fff_ffff_ffff_ffff == 0 {
+        0.0
+    } else {
+        value
+    }
+}
+
+fn compile_node(
+    expr: Expression,
+    path: String,
+    bindings: &BTreeMap<Uuid, Binding>,
+    dependencies: &mut BTreeSet<Uuid>,
+) -> Result<Node, LogicError> {
+    use LogicValueType::{Boolean, Number, Text};
+    let answered = matches!(&expr, Expression::Answered { .. });
+    let all = matches!(
+        &expr,
+        Expression::All { .. } | Expression::ContainsAll { .. }
+    );
+    let multiple = matches!(
+        &expr,
+        Expression::ContainsAny { .. } | Expression::ContainsAll { .. }
+    );
+    let mismatch = || error(LogicErrorCode::TypeMismatch, &path, None);
+    let mut child = |expr, field| {
+        compile_node(expr, format!("{path}.{field}"), bindings, dependencies).map(Box::new)
+    };
+    let (kind, value_type) = match expr {
+        Expression::Boolean { value } => (NodeKind::Literal(LogicValue::Boolean(value)), Boolean),
+        Expression::Number { value } => {
+            let value =
+                numeric(&value).ok_or_else(|| error(LogicErrorCode::InvalidNumber, &path, None))?;
+            (NodeKind::Literal(LogicValue::Number(value)), Number)
+        }
+        Expression::Text { value } => {
+            if value.contains('\0') {
+                return Err(error(LogicErrorCode::InvalidSyntax, &path, None));
+            }
+            if value.chars().count() > MAX_TEXT_LENGTH {
+                return Err(error(LogicErrorCode::LimitExceeded, &path, None));
+            }
+            (NodeKind::Literal(LogicValue::Text(value)), Text)
+        }
+        Expression::Answer { question_id } | Expression::Answered { question_id } => {
+            let id = reference(&question_id, &path)?;
+            let binding = bindings
+                .get(&id)
+                .ok_or_else(|| error(LogicErrorCode::InvalidReference, &path, Some(id)))?;
+            dependencies.insert(id);
+            if answered {
+                (NodeKind::Answered(id), Boolean)
+            } else {
+                (NodeKind::Answer(id), binding.value_type)
+            }
+        }
+        Expression::Selected {
+            question_id,
+            option_id,
+        } => {
+            let (id, options) = selection(&question_id, vec![option_id], false, &path, bindings)?;
+            dependencies.insert(id);
+            (NodeKind::Selected(id, options, false), Boolean)
+        }
+        Expression::ContainsAny {
+            question_id,
+            option_ids,
+        }
+        | Expression::ContainsAll {
+            question_id,
+            option_ids,
+        } => {
+            let (id, options) = selection(&question_id, option_ids, multiple, &path, bindings)?;
+            dependencies.insert(id);
+            (NodeKind::Selected(id, options, all), Boolean)
+        }
+        Expression::Not { expression } => {
+            let expression = child(*expression, "expression")?;
+            if expression.value_type != Boolean {
+                return Err(mismatch());
+            }
+            (NodeKind::Not(expression), Boolean)
+        }
+        Expression::All { expressions } | Expression::Any { expressions } => {
+            if expressions.is_empty() {
+                return Err(error(LogicErrorCode::InvalidSyntax, &path, None));
+            }
+            let mut nodes = Vec::with_capacity(expressions.len());
+            for (index, expr) in expressions.into_iter().enumerate() {
+                let node = compile_node(
+                    expr,
+                    format!("{path}.expressions[{index}]"),
+                    bindings,
+                    dependencies,
+                )?;
+                if node.value_type != Boolean {
+                    return Err(mismatch());
+                }
+                nodes.push(node);
+            }
+            (NodeKind::Logical(nodes, all), Boolean)
+        }
+        Expression::Compare {
+            comparison,
+            left,
+            right,
+        } => {
+            let left = child(*left, "left")?;
+            let right = child(*right, "right")?;
+            if left.value_type != right.value_type
+                || !matches!(left.value_type, Boolean | Number | Text)
+                || (!matches!(comparison, Comparison::Eq | Comparison::Ne)
+                    && left.value_type != Number)
+            {
+                return Err(mismatch());
+            }
+            (NodeKind::Compare(comparison, left, right), Boolean)
+        }
+        Expression::Coalesce { value, fallback } => {
+            let value = child(*value, "value")?;
+            let fallback = child(*fallback, "fallback")?;
+            if value.value_type != fallback.value_type {
+                return Err(mismatch());
+            }
+            let value_type = value.value_type;
+            (NodeKind::Coalesce(value, fallback), value_type)
+        }
+        Expression::Length { value } => {
+            let value = child(*value, "value")?;
+            if !matches!(value.value_type, Text | LogicValueType::Choices) {
+                return Err(mismatch());
+            }
+            (NodeKind::Length(value), Number)
+        }
+        Expression::Arithmetic {
+            operator,
+            left,
+            right,
+        } => {
+            let left = child(*left, "left")?;
+            let right = child(*right, "right")?;
+            if left.value_type != Number || right.value_type != Number {
+                return Err(mismatch());
+            }
+            (NodeKind::Arithmetic(operator, left, right), Number)
+        }
+    };
+    Ok(Node {
+        kind,
+        value_type,
+        path,
+    })
+}
+
+fn selection(
+    question_id: &str,
+    options: Vec<String>,
+    multiple: bool,
+    path: &str,
+    bindings: &BTreeMap<Uuid, Binding>,
+) -> Result<(Uuid, Vec<Uuid>), LogicError> {
+    let id = reference(question_id, path)?;
+    let invalid = || error(LogicErrorCode::InvalidReference, path, Some(id));
+    let binding = bindings.get(&id).ok_or_else(invalid)?;
+    if binding.value_type != LogicValueType::Choices
+        && (multiple || binding.value_type != LogicValueType::Choice)
+    {
+        return Err(error(LogicErrorCode::TypeMismatch, path, Some(id)));
+    }
+    if options.is_empty() || options.len() > MAX_CHOICES {
+        return Err(error(LogicErrorCode::InvalidSyntax, path, Some(id)));
+    }
+    let mut ids = BTreeSet::new();
+    for raw in options {
+        let option = reference(&raw, path).map_err(|_| invalid())?;
+        if !binding.options.contains(&option) || !ids.insert(option) {
+            return Err(invalid());
+        }
+    }
+    Ok((id, ids.into_iter().collect()))
+}
+
+fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<LogicValue, LogicError> {
+    let path = format!("$.answers.{id}");
+    let invalid = || error(LogicErrorCode::InvalidAnswer, &path, Some(id));
+    let Some(raw) = raw.filter(|value| !value.is_null()) else {
+        return Ok(LogicValue::Missing);
+    };
+    match binding.value_type {
+        LogicValueType::Boolean => Err(invalid()),
+        LogicValueType::Number => finite_number(raw, id)
+            .map(positive_zero)
+            .map(LogicValue::Number)
+            .map_err(|_| invalid()),
+        LogicValueType::Text => {
+            let text = raw
+                .as_str()
+                .filter(|text| !text.contains('\0') && text.chars().count() <= MAX_TEXT_LENGTH)
+                .ok_or_else(invalid)?;
+            Ok(LogicValue::Text(text.into()))
+        }
+        LogicValueType::Choice => {
+            let option = raw
+                .as_str()
+                .and_then(|text| reference(text, &path).ok())
+                .filter(|option| binding.options.contains(option))
+                .ok_or_else(invalid)?;
+            Ok(LogicValue::Choice(option))
+        }
+        LogicValueType::Choices => {
+            let values = raw
+                .as_array()
+                .filter(|values| values.len() <= MAX_CHOICES)
+                .ok_or_else(invalid)?;
+            let mut options = BTreeSet::new();
+            for value in values {
+                let option = value
+                    .as_str()
+                    .and_then(|text| reference(text, &path).ok())
+                    .filter(|option| binding.options.contains(option))
+                    .ok_or_else(invalid)?;
+                if !options.insert(option) {
+                    return Err(invalid());
+                }
+            }
+            Ok(LogicValue::Choices(options.into_iter().collect()))
+        }
+    }
+}
+
+impl Node {
+    fn evaluate(&self, context: &BTreeMap<Uuid, LogicValue>) -> Result<LogicValue, LogicError> {
+        use LogicValue::{Boolean, Missing, Number};
+        let mismatch = || error(LogicErrorCode::TypeMismatch, &self.path, None);
+        match &self.kind {
+            NodeKind::Literal(value) => Ok(value.clone()),
+            NodeKind::Answer(id) => Ok(context.get(id).cloned().unwrap_or(Missing)),
+            NodeKind::Answered(id) => Ok(Boolean(
+                context
+                    .get(id)
+                    .is_some_and(|value| !matches!(value, Missing)),
+            )),
+            NodeKind::Selected(id, expected, all) => match context.get(id) {
+                None | Some(Missing) => Ok(Missing),
+                Some(LogicValue::Choice(option)) => Ok(Boolean(expected.contains(option))),
+                Some(LogicValue::Choices(options)) => Ok(Boolean(if *all {
+                    expected.iter().all(|id| options.contains(id))
+                } else {
+                    expected.iter().any(|id| options.contains(id))
+                })),
+                _ => Err(mismatch()),
+            },
+            NodeKind::Not(expr) => match expr.evaluate(context)? {
+                Boolean(value) => Ok(Boolean(!value)),
+                Missing => Ok(Missing),
+                _ => Err(mismatch()),
+            },
+            NodeKind::Logical(expressions, all) => {
+                let mut missing = false;
+                for expr in expressions {
+                    match expr.evaluate(context)? {
+                        Boolean(value) if value != *all => return Ok(Boolean(value)),
+                        Boolean(_) => {}
+                        Missing => missing = true,
+                        _ => return Err(mismatch()),
+                    }
+                }
+                Ok(if missing { Missing } else { Boolean(*all) })
+            }
+            NodeKind::Compare(comparison, left, right) => {
+                let left = left.evaluate(context)?;
+                let right = right.evaluate(context)?;
+                let order = match (&left, &right) {
+                    (Missing, _) | (_, Missing) => return Ok(Missing),
+                    (Number(a), Number(b)) => a.total_cmp(b),
+                    (Boolean(a), Boolean(b)) => a.cmp(b),
+                    (LogicValue::Text(a), LogicValue::Text(b)) => a.cmp(b),
+                    _ => return Err(mismatch()),
+                };
+                Ok(Boolean(match comparison {
+                    Comparison::Eq => order.is_eq(),
+                    Comparison::Ne => !order.is_eq(),
+                    Comparison::Lt => order.is_lt(),
+                    Comparison::Le => order != Ordering::Greater,
+                    Comparison::Gt => order.is_gt(),
+                    Comparison::Ge => order != Ordering::Less,
+                }))
+            }
+            NodeKind::Coalesce(value, fallback) => match value.evaluate(context)? {
+                Missing => fallback.evaluate(context),
+                value => Ok(value),
+            },
+            NodeKind::Length(value) => {
+                let count = match value.evaluate(context)? {
+                    Missing => return Ok(Missing),
+                    LogicValue::Text(text) => text.chars().count(),
+                    LogicValue::Choices(options) => options.len(),
+                    _ => return Err(mismatch()),
+                };
+                let count = u32::try_from(count)
+                    .map_err(|_| error(LogicErrorCode::LimitExceeded, &self.path, None))?;
+                Ok(Number(f64::from(count)))
+            }
+            NodeKind::Arithmetic(operator, left, right) => {
+                let left = left.evaluate(context)?;
+                let right = right.evaluate(context)?;
+                let (a, b) = match (left, right) {
+                    (Missing, _) | (_, Missing) => return Ok(Missing),
+                    (Number(a), Number(b)) => (a, b),
+                    _ => return Err(mismatch()),
+                };
+                let value = match operator {
+                    Arithmetic::Add => a + b,
+                    Arithmetic::Subtract => a - b,
+                    Arithmetic::Multiply => a * b,
+                    Arithmetic::Divide => a / b,
+                };
+                if !value.is_finite() {
+                    return Err(error(LogicErrorCode::ArithmeticError, &self.path, None));
+                }
+                Ok(Number(positive_zero(value)))
+            }
+        }
+    }
+}

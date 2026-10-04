@@ -7,6 +7,7 @@ pub mod domain;
 mod entities;
 mod error;
 mod http;
+mod logic;
 mod migration;
 mod reports;
 mod repository;

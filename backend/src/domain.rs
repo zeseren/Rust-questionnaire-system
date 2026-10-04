@@ -11,6 +11,10 @@ use serde_json::{Number, Value};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+pub use crate::logic::{
+    CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType, compile_expression,
+};
+
 /// 每份问卷最多允许的题目数。
 pub const MAX_QUESTIONS: usize = 100;
 /// 每道选择题最多允许的选项数。
@@ -626,7 +630,7 @@ fn parse_option_id(value: &Value, question_id: Uuid) -> Result<Uuid, ValidationE
         .ok_or_else(|| ValidationError::new(Some(question_id), "选项 ID 必须是合法的 UUID 字符串"))
 }
 
-fn finite_number(value: &Value, question_id: Uuid) -> Result<f64, ValidationError> {
+pub(crate) fn finite_number(value: &Value, question_id: Uuid) -> Result<f64, ValidationError> {
     let Value::Number(raw) = value else {
         return Err(ValidationError::new(
             Some(question_id),

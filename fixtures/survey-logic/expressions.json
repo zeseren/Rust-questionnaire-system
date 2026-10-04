@@ -1,0 +1,878 @@
+{
+  "description": "两端读取同一输入与人工指定的期望结果；answers_json 保留数字原文。",
+  "questions": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "title": "单选",
+      "required": false,
+      "type": "single_choice",
+      "options": [
+        {
+          "id": "00000000-0000-4000-8000-000000000101",
+          "label": "甲"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000102",
+          "label": "乙"
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "title": "多选",
+      "required": false,
+      "type": "multiple_choice",
+      "options": [
+        {
+          "id": "00000000-0000-4000-8000-000000000103",
+          "label": "丙"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000104",
+          "label": "丁"
+        }
+      ],
+      "min_choices": 1,
+      "max_choices": 2
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "title": "文字",
+      "required": false,
+      "type": "text",
+      "max_length": 200
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "title": "数字",
+      "required": false,
+      "type": "number",
+      "integer": false,
+      "min": null,
+      "max": null
+    }
+  ],
+  "cases": [
+    {
+      "name": "未回答的选择题取反仍是未知",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "not",
+          "expression": {
+            "op": "selected",
+            "question_id": "00000000-0000-4000-8000-000000000001",
+            "option_id": "00000000-0000-4000-8000-000000000101"
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "value": {
+          "type": "missing"
+        }
+      }
+    },
+    {
+      "name": "未知与明确假合取为假",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "all",
+          "expressions": [
+            {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            {
+              "op": "boolean",
+              "value": false
+            }
+          ]
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": false
+        }
+      }
+    },
+    {
+      "name": "未知与明确真析取为真",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "any",
+          "expressions": [
+            {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            {
+              "op": "boolean",
+              "value": true
+            }
+          ]
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "选择缺失可以显式设置默认值",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "coalesce",
+          "value": {
+            "op": "not",
+            "expression": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            }
+          },
+          "fallback": {
+            "op": "boolean",
+            "value": false
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": false
+        }
+      }
+    },
+    {
+      "name": "已回答检查和选择分支共同判断",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "all",
+          "expressions": [
+            {
+              "op": "answered",
+              "question_id": "00000000-0000-4000-8000-000000000001"
+            },
+            {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            }
+          ]
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000001\":\"00000000-0000-4000-8000-000000000101\"}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "多选无序集合与Unicode标量长度参与条件",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "all",
+          "expressions": [
+            {
+              "op": "contains_all",
+              "question_id": "00000000-0000-4000-8000-000000000002",
+              "option_ids": [
+                "00000000-0000-4000-8000-000000000104",
+                "00000000-0000-4000-8000-000000000103"
+              ]
+            },
+            {
+              "op": "compare",
+              "comparison": "eq",
+              "left": {
+                "op": "length",
+                "value": {
+                  "op": "answer",
+                  "question_id": "00000000-0000-4000-8000-000000000003"
+                }
+              },
+              "right": {
+                "op": "number",
+                "value": "4"
+              }
+            }
+          ]
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000002\":[\"00000000-0000-4000-8000-000000000104\",\"00000000-0000-4000-8000-000000000103\"],\"00000000-0000-4000-8000-000000000003\":\"中😀é\"}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "多选部分包含和集合长度一致",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "all",
+          "expressions": [
+            {
+              "op": "contains_any",
+              "question_id": "00000000-0000-4000-8000-000000000002",
+              "option_ids": [
+                "00000000-0000-4000-8000-000000000103",
+                "00000000-0000-4000-8000-000000000104"
+              ]
+            },
+            {
+              "op": "compare",
+              "comparison": "eq",
+              "left": {
+                "op": "length",
+                "value": {
+                  "op": "answer",
+                  "question_id": "00000000-0000-4000-8000-000000000002"
+                }
+              },
+              "right": {
+                "op": "number",
+                "value": "1"
+              }
+            }
+          ]
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000002\":[\"00000000-0000-4000-8000-000000000104\"]}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "跨题数字比较先检查类型",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "ge",
+          "left": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000004"
+          },
+          "right": {
+            "op": "number",
+            "value": "18"
+          }
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":18}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "不将数字字符串作为数字答案",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "ge",
+          "left": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000004"
+          },
+          "right": {
+            "op": "number",
+            "value": "18"
+          }
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":\"18\"}",
+      "expected": {
+        "error": {
+          "code": "invalid_answer",
+          "path": "$.answers.00000000-0000-4000-8000-000000000004",
+          "question_id": "00000000-0000-4000-8000-000000000004"
+        }
+      }
+    },
+    {
+      "name": "未回答数字不隐式变成零",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "lt",
+          "left": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000004"
+          },
+          "right": {
+            "op": "number",
+            "value": "18"
+          }
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":null}",
+      "expected": {
+        "value": {
+          "type": "missing"
+        }
+      }
+    },
+    {
+      "name": "零是存在的答案",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "answered",
+          "question_id": "00000000-0000-4000-8000-000000000004"
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":0}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "真假短路不会执行除零",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "any",
+          "expressions": [
+            {
+              "op": "boolean",
+              "value": true
+            },
+            {
+              "op": "compare",
+              "comparison": "eq",
+              "left": {
+                "op": "arithmetic",
+                "operator": "divide",
+                "left": {
+                  "op": "number",
+                  "value": "1"
+                },
+                "right": {
+                  "op": "number",
+                  "value": "0"
+                }
+              },
+              "right": {
+                "op": "number",
+                "value": "1"
+              }
+            }
+          ]
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "默认值不能吞掉计算错误",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "coalesce",
+          "value": {
+            "op": "arithmetic",
+            "operator": "divide",
+            "left": {
+              "op": "number",
+              "value": "1"
+            },
+            "right": {
+              "op": "number",
+              "value": "0"
+            }
+          },
+          "fallback": {
+            "op": "number",
+            "value": "0"
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "arithmetic_error",
+          "path": "$.expression.value",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "有限操作数计算溢出必须报错",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "arithmetic",
+          "operator": "multiply",
+          "left": {
+            "op": "number",
+            "value": "1e308"
+          },
+          "right": {
+            "op": "number",
+            "value": "2"
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "arithmetic_error",
+          "path": "$.expression",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "显式计算按每步binary64语义执行",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "arithmetic",
+          "operator": "subtract",
+          "left": {
+            "op": "arithmetic",
+            "operator": "multiply",
+            "left": {
+              "op": "number",
+              "value": "2.5"
+            },
+            "right": {
+              "op": "number",
+              "value": "4"
+            }
+          },
+          "right": {
+            "op": "arithmetic",
+            "operator": "divide",
+            "left": {
+              "op": "number",
+              "value": "6"
+            },
+            "right": {
+              "op": "number",
+              "value": "2"
+            }
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "value": {
+          "type": "number",
+          "value": 7
+        }
+      }
+    },
+    {
+      "name": "不隐式引入浮点容差",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "eq",
+          "left": {
+            "op": "arithmetic",
+            "operator": "add",
+            "left": {
+              "op": "number",
+              "value": "0.1"
+            },
+            "right": {
+              "op": "number",
+              "value": "0.2"
+            }
+          },
+          "right": {
+            "op": "number",
+            "value": "0.3"
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": false
+        }
+      }
+    },
+    {
+      "name": "正负零比较等价",
+      "program": {
+        "dsl_version": 1.0,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "eq",
+          "left": {
+            "op": "number",
+            "value": "-0"
+          },
+          "right": {
+            "op": "number",
+            "value": "0"
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "拒绝失真裸整数常量",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "number",
+          "value": "9007199254740993"
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "invalid_number",
+          "path": "$.expression",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "保留可精确表示的大整数常量",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "eq",
+          "left": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000004"
+          },
+          "right": {
+            "op": "number",
+            "value": "9007199254740994"
+          }
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":9007199254740994}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "拒绝整数存储范围之外的常量",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "number",
+          "value": "18446744073709551616"
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "invalid_number",
+          "path": "$.expression",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "失真答案不能参与规则",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "eq",
+          "left": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000004"
+          },
+          "right": {
+            "op": "number",
+            "value": "9007199254740992"
+          }
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":9007199254740993}",
+      "expected": {
+        "error": {
+          "code": "invalid_answer",
+          "path": "$.answers.00000000-0000-4000-8000-000000000004",
+          "question_id": "00000000-0000-4000-8000-000000000004"
+        }
+      }
+    },
+    {
+      "name": "短路也不能掩盖上下文中的无效选项",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "any",
+          "expressions": [
+            {
+              "op": "boolean",
+              "value": true
+            },
+            {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            }
+          ]
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000001\":\"00000000-0000-4000-8000-000000000103\"}",
+      "expected": {
+        "error": {
+          "code": "invalid_answer",
+          "path": "$.answers.00000000-0000-4000-8000-000000000001",
+          "question_id": "00000000-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    {
+      "name": "拒绝重复多选答案",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "length",
+          "value": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000002"
+          }
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000002\":[\"00000000-0000-4000-8000-000000000103\",\"00000000-0000-4000-8000-000000000103\"]}",
+      "expected": {
+        "error": {
+          "code": "invalid_answer",
+          "path": "$.answers.00000000-0000-4000-8000-000000000002",
+          "question_id": "00000000-0000-4000-8000-000000000002"
+        }
+      }
+    },
+    {
+      "name": "短路分支仍必须通过静态类型检查",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "all",
+          "expressions": [
+            {
+              "op": "boolean",
+              "value": false
+            },
+            {
+              "op": "number",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "type_mismatch",
+          "path": "$.expression",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "选项不能跨题引用",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "selected",
+          "question_id": "00000000-0000-4000-8000-000000000001",
+          "option_id": "00000000-0000-4000-8000-000000000103"
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "invalid_reference",
+          "path": "$.expression",
+          "question_id": "00000000-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    {
+      "name": "文本和选项身份不可混用",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "eq",
+          "left": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000001"
+          },
+          "right": {
+            "op": "text",
+            "value": "00000000-0000-4000-8000-000000000101"
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "type_mismatch",
+          "path": "$.expression",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "不接受拼错的字段",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "boolean",
+          "value": true,
+          "typo": true
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "invalid_syntax",
+          "path": "$",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "拒绝空逻辑列表",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "all",
+          "expressions": []
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "invalid_syntax",
+          "path": "$.expression",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "文本不隐式裁剪",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "eq",
+          "left": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000003"
+          },
+          "right": {
+            "op": "text",
+            "value": "反馈"
+          }
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000003\":\" 反馈 \"}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": false
+        }
+      }
+    },
+    {
+      "name": "未知执行语义版本不能回退到当前版本",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 2,
+        "expression": {
+          "op": "boolean",
+          "value": true
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "unsupported_version",
+          "path": "$",
+          "question_id": null
+        }
+      }
+    }
+  ]
+}
