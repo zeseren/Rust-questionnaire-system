@@ -8,6 +8,7 @@ mod entities;
 mod error;
 mod http;
 mod logic;
+mod logic_document;
 mod migration;
 mod reports;
 mod repository;

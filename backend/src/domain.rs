@@ -14,6 +14,10 @@ use uuid::Uuid;
 pub use crate::logic::{
     CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType, compile_expression,
 };
+pub use crate::logic_document::{
+    CompiledDocumentLogic, ComputedVariable, DocumentLogic, DocumentLogicValues, QuestionRule,
+    RuleValues,
+};
 
 /// 每份问卷最多允许的题目数。
 pub const MAX_QUESTIONS: usize = 100;
@@ -53,6 +57,9 @@ const MAX_RATING_LABEL_LENGTH: usize = 100;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Document {
+    /// 可选的版本化规则；旧文档序列化时不增加字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logic: Option<DocumentLogic>,
     /// 问卷标题，最多 200 个 Unicode 标量值；发布时不能为空白。
     pub title: String,
     /// 调查说明，最多 5000 个 Unicode 标量值。
@@ -326,7 +333,20 @@ impl Document {
                 }
             }
         }
+        self.compile_logic()
+            .map_err(|error| ValidationError::new(error.question_id, error.to_string()))?;
         Ok(())
+    }
+
+    /// 编译文档规则；旧文档没有规则时返回 None。
+    ///
+    /// # 错误
+    /// 规则类型、引用、容量或依赖关系不合法时返回定位信息。
+    pub fn compile_logic(&self) -> Result<Option<CompiledDocumentLogic>, LogicError> {
+        self.logic
+            .as_ref()
+            .map(|logic| logic.compile(&self.questions))
+            .transpose()
     }
 
     /// 在草稿基本校验之上检查问卷是否已完整到可以发布。
@@ -347,6 +367,13 @@ impl Document {
         textarea_limit: usize,
     ) -> Result<(), ValidationError> {
         self.validate_draft_with_text_limits(text_limit, textarea_limit)?;
+        // 提交与填写尚未接入规则执行；不能发布会被旧流程忽略的规则。
+        if self.logic.is_some() {
+            return Err(ValidationError::new(
+                None,
+                "问卷规则执行尚未接入填写与提交，当前仅支持保存和复制规则草稿",
+            ));
+        }
         if self.title.trim().is_empty() {
             return Err(ValidationError::new(None, "发布前请填写问卷标题"));
         }
@@ -448,13 +475,19 @@ impl Document {
     ///
     /// 除身份外，内容、规则和显示顺序均保持不变；普通保存和排序不要调用。
     pub fn renew_ids(&mut self) {
+        let mut question_ids = BTreeMap::new();
+        let mut option_ids = BTreeMap::new();
         for question in &mut self.questions {
-            question.id = Uuid::new_v4();
+            let new_id = Uuid::new_v4();
+            question_ids.insert(question.id, new_id);
+            question.id = new_id;
             match &mut question.kind {
                 QuestionKind::SingleChoice { options }
                 | QuestionKind::MultipleChoice { options, .. } => {
                     for option in options {
-                        option.id = Uuid::new_v4();
+                        let new_id = Uuid::new_v4();
+                        option_ids.insert(option.id, new_id);
+                        option.id = new_id;
                     }
                 }
                 QuestionKind::Text { .. }
@@ -462,6 +495,9 @@ impl Document {
                 | QuestionKind::Number { .. }
                 | QuestionKind::Rating { .. } => {}
             }
+        }
+        if let Some(logic) = &mut self.logic {
+            logic.renew_references(&question_ids, &option_ids);
         }
     }
 

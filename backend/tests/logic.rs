@@ -1,7 +1,7 @@
 //! 与浏览器共用语义样例，防止缺失值、数值边界、错误分类和资源预算发生漂移。
 use std::collections::BTreeMap;
 
-use questionnaire_api::domain::{Question, compile_expression};
+use questionnaire_api::domain::{DocumentLogic, Question, compile_expression};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -102,4 +102,65 @@ fn 编译结果保留静态类型和去重依赖且可重复求值() {
         serde_json::to_value(compiled.evaluate(&empty).unwrap()).unwrap(),
         json!({"type": "boolean", "value": false})
     );
+}
+
+#[test]
+fn 文档共享样例保持变量排序和间接依赖规则一致() {
+    let fixtures: Fixtures =
+        serde_json::from_str(include_str!("../../fixtures/survey-logic/expressions.json")).unwrap();
+    let documents: Value =
+        serde_json::from_str(include_str!("../../fixtures/survey-logic/documents.json")).unwrap();
+    for case in documents["cases"].as_array().unwrap() {
+        let logic: DocumentLogic = serde_json::from_value(case["logic"].clone()).unwrap();
+        let answers: BTreeMap<Uuid, Value> =
+            serde_json::from_str(case["answers_json"].as_str().unwrap()).unwrap();
+        let result = logic.compile(&fixtures.questions).and_then(|compiled| {
+            compiled
+                .evaluate(&answers)
+                .map(|value| json!({ "order": compiled.variable_order(), "value": value }))
+        });
+        let actual = result.unwrap_or_else(
+            |error| json!({"error": {"code": error.code, "question_id": error.question_id}}),
+        );
+        let mut expected = case["expected"].clone();
+        normalize_expected_numbers(&mut expected);
+        assert_eq!(actual, expected, "文档语义样例：{}", case["name"]);
+    }
+}
+
+fn normalize_expected_numbers(value: &mut Value) {
+    match value {
+        Value::Object(fields) => {
+            if fields.get("type").is_some_and(|value| value == "number") {
+                let number = fields["value"].as_f64().unwrap();
+                fields.insert("value".into(), json!(number));
+            } else {
+                for value in fields.values_mut() {
+                    normalize_expected_numbers(value);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                normalize_expected_numbers(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn 文档总预算不能被拆成多个合法小表达式绕过() {
+    let expression =
+        json!({"op": "all", "expressions": vec![json!({"op": "boolean", "value": true}); 255]});
+    let variables: Vec<_> = (1..=17).map(|id| json!({"id": Uuid::from_u128(id), "value_type": "boolean", "expression": expression})).collect();
+    let raw =
+        json!({"dsl_version": 1, "semantics_version": 1, "variables": variables, "rules": []});
+    let mut logic: DocumentLogic = serde_json::from_value(raw).unwrap();
+    assert_eq!(
+        serde_json::to_value(logic.compile(&[]).unwrap_err().code).unwrap(),
+        "limit_exceeded"
+    );
+    logic.variables.pop();
+    assert!(logic.compile(&[]).is_ok());
 }

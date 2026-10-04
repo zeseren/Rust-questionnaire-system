@@ -1,0 +1,897 @@
+{
+  "description": "复用 expressions.json 的题目，验证文档级编译与计算。",
+  "cases": [
+    {
+      "name": "逆序声明按拓扑计算且规则使用派生值",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000000202",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "add",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000201"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000201",
+            "value_type": "number",
+            "expression": {
+              "op": "length",
+              "value": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+              }
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "visible_if": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              }
+            }
+          }
+        ]
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000001\":\"00000000-0000-4000-8000-000000000101\",\"00000000-0000-4000-8000-000000000002\":[\"00000000-0000-4000-8000-000000000104\",\"00000000-0000-4000-8000-000000000103\"],\"00000000-0000-4000-8000-000000000004\":5}",
+      "expected": {
+        "order": [
+          "00000000-0000-4000-8000-000000000201",
+          "00000000-0000-4000-8000-000000000202"
+        ],
+        "value": {
+          "variables": {
+            "00000000-0000-4000-8000-000000000201": {
+              "type": "number",
+              "value": 2
+            },
+            "00000000-0000-4000-8000-000000000202": {
+              "type": "number",
+              "value": 4
+            }
+          },
+          "rules": {
+            "00000000-0000-4000-8000-000000000004": {
+              "visible_if": {
+                "type": "boolean",
+                "value": true
+              },
+              "required_if": {
+                "type": "boolean",
+                "value": true
+              },
+              "validate": {
+                "type": "boolean",
+                "value": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "缺失沿计算链传播而不写回答案",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000000202",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "add",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000201"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000201",
+            "value_type": "number",
+            "expression": {
+              "op": "length",
+              "value": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+              }
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "visible_if": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              }
+            }
+          }
+        ]
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000001\":\"00000000-0000-4000-8000-000000000101\"}",
+      "expected": {
+        "order": [
+          "00000000-0000-4000-8000-000000000201",
+          "00000000-0000-4000-8000-000000000202"
+        ],
+        "value": {
+          "variables": {
+            "00000000-0000-4000-8000-000000000201": {
+              "type": "missing"
+            },
+            "00000000-0000-4000-8000-000000000202": {
+              "type": "missing"
+            }
+          },
+          "rules": {
+            "00000000-0000-4000-8000-000000000004": {
+              "visible_if": {
+                "type": "missing"
+              },
+              "required_if": {
+                "type": "boolean",
+                "value": true
+              },
+              "validate": {
+                "type": "missing"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "变量循环不能依赖声明顺序侥幸通过",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000000202",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "add",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000201"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000201",
+            "value_type": "number",
+            "expression": {
+              "op": "variable",
+              "variable_id": "00000000-0000-4000-8000-000000000202"
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "visible_if": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              }
+            }
+          }
+        ]
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "dependency_cycle",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "变量声明类型必须匹配计算结果",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000000202",
+            "value_type": "text",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "add",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000201"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000201",
+            "value_type": "number",
+            "expression": {
+              "op": "length",
+              "value": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+              }
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "visible_if": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              }
+            }
+          }
+        ]
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "type_mismatch",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "显示条件不能通过变量间接依赖当前题",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000000202",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "add",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000201"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000201",
+            "value_type": "number",
+            "expression": {
+              "op": "answer",
+              "question_id": "00000000-0000-4000-8000-000000000004"
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "visible_if": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              }
+            }
+          }
+        ]
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "forward_reference",
+          "question_id": "00000000-0000-4000-8000-000000000004"
+        }
+      }
+    },
+    {
+      "name": "重排题目后的间接前向引用必须拒绝",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000000202",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "add",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000201"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000201",
+            "value_type": "number",
+            "expression": {
+              "op": "length",
+              "value": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+              }
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000001",
+            "visible_if": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              }
+            }
+          }
+        ]
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "forward_reference",
+          "question_id": "00000000-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    {
+      "name": "变量身份不能与题目混用",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "add",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000201"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000201",
+            "value_type": "number",
+            "expression": {
+              "op": "length",
+              "value": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+              }
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "visible_if": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              }
+            }
+          }
+        ]
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "invalid_reference",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "删除被引用变量后不能静默清除规则",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000000202",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "add",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000201"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "visible_if": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              }
+            }
+          }
+        ]
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "invalid_reference",
+          "question_id": "00000000-0000-4000-8000-000000000201"
+        }
+      }
+    },
+    {
+      "name": "同题重复规则不能覆盖已有规则",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000000202",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "add",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000201"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000201",
+            "value_type": "number",
+            "expression": {
+              "op": "length",
+              "value": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+              }
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "visible_if": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              }
+            }
+          },
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "visible_if": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              }
+            }
+          }
+        ]
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "invalid_reference",
+          "question_id": "00000000-0000-4000-8000-000000000004"
+        }
+      }
+    },
+    {
+      "name": "规则结果必须为布尔",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000000202",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "add",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000201"
+              },
+              "right": {
+                "op": "number",
+                "value": "2"
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000201",
+            "value_type": "number",
+            "expression": {
+              "op": "length",
+              "value": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+              }
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "visible_if": {
+              "op": "variable",
+              "variable_id": "00000000-0000-4000-8000-000000000202"
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000000202"
+              }
+            }
+          }
+        ]
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "type_mismatch",
+          "question_id": "00000000-0000-4000-8000-000000000004"
+        }
+      }
+    },
+    {
+      "name": "规范化的大指数值可作为变量来源",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [{
+          "id": "00000000-0000-4000-8000-000000000201",
+          "value_type": "number",
+          "expression": { "op": "answer", "question_id": "00000000-0000-4000-8000-000000000004" }
+        }],
+        "rules": []
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":1e20}",
+      "expected": {
+        "order": ["00000000-0000-4000-8000-000000000201"],
+        "value": {
+          "variables": { "00000000-0000-4000-8000-000000000201": { "type": "number", "value": 1e20 } },
+          "rules": {}
+        }
+      }
+    },
+    {
+      "name": "自定义约束允许读取当前题答案",
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000004"
+              },
+              "right": {
+                "op": "number",
+                "value": "18"
+              }
+            }
+          }
+        ]
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":20}",
+      "expected": {
+        "order": [],
+        "value": {
+          "variables": {},
+          "rules": {
+            "00000000-0000-4000-8000-000000000004": {
+              "visible_if": null,
+              "required_if": null,
+              "validate": {
+                "type": "boolean",
+                "value": true
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

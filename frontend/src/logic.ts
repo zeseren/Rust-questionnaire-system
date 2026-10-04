@@ -19,6 +19,8 @@ export type LogicErrorCode =
   | 'invalid_number'
   | 'invalid_answer'
   | 'arithmetic_error'
+  | 'dependency_cycle'
+  | 'forward_reference'
 
 const messages: Record<LogicErrorCode, string> = {
   invalid_syntax: '规则结构或字段无效',
@@ -29,6 +31,8 @@ const messages: Record<LogicErrorCode, string> = {
   invalid_number: '规则数字无效或无法精确表示',
   invalid_answer: '规则上下文包含无效答案',
   arithmetic_error: '规则计算发生除零或数值溢出',
+  dependency_cycle: '计算变量存在循环依赖',
+  forward_reference: '题目规则不能依赖自身或后续题目',
 }
 
 export class LogicError extends Error {
@@ -47,7 +51,7 @@ export class LogicError extends Error {
 
 type Comparison = 'eq' | 'ne' | 'lt' | 'le' | 'gt' | 'ge'
 type Arithmetic = 'add' | 'subtract' | 'multiply' | 'divide'
-type Binding = { type: LogicValueType; options: Set<string> }
+type Binding = { type: LogicValueType; options: Set<string>; variable: boolean }
 type Node = { type: LogicValueType; path: string; kind: NodeKind }
 type NodeKind =
   | { op: 'literal'; value: LogicValue }
@@ -64,8 +68,12 @@ type NodeKind =
 export interface CompiledExpression {
   readonly valueType: LogicValueType
   readonly dependencies: readonly string[]
+  readonly variableDependencies: readonly string[]
   /** 输入须由问卷层规范化并排除不适用答案；此处防御性检查类型与选项身份。 */
-  evaluate(answers: Readonly<Record<string, unknown>>): LogicValue
+  evaluate(
+    answers: Readonly<Record<string, unknown>>,
+    variables?: ReadonlyMap<string, LogicValue>,
+  ): LogicValue
 }
 
 function fail(code: LogicErrorCode, path: string, id: string | null = null): never {
@@ -121,7 +129,7 @@ function numeric(raw: string): number | undefined {
   return value === 0 ? 0 : value
 }
 
-function checkBudget(raw: unknown, depth: number, budget: { count: number }) {
+export function checkExpressionBudget(raw: unknown, depth: number, budget: { count: number }) {
   budget.count++
   if (depth > 16 || budget.count > 256) fail('limit_exceeded', '$.expression')
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return
@@ -129,10 +137,10 @@ function checkBudget(raw: unknown, depth: number, budget: { count: number }) {
   for (const key of ['expression', 'left', 'right', 'fallback', 'value']) {
     const child = record[key]
     if (child && typeof child === 'object' && !Array.isArray(child))
-      checkBudget(child, depth + 1, budget)
+      checkExpressionBudget(child, depth + 1, budget)
   }
   if (Array.isArray(record.expressions)) {
-    for (const child of record.expressions) checkBudget(child, depth + 1, budget)
+    for (const child of record.expressions) checkExpressionBudget(child, depth + 1, budget)
   }
 }
 
@@ -140,9 +148,10 @@ function checkBudget(raw: unknown, depth: number, budget: { count: number }) {
 export function compileExpression(
   raw: unknown,
   questions: readonly Question[],
+  variableTypes: ReadonlyMap<string, LogicValueType> = new Map(),
 ): CompiledExpression {
   const program = object(raw)
-  checkBudget(program.expression, 1, { count: 0 })
+  checkExpressionBudget(program.expression, 1, { count: 0 })
   fields(program, ['dsl_version', 'semantics_version', 'expression'])
   for (const version of [program.dsl_version, program.semantics_version]) {
     if (
@@ -179,15 +188,26 @@ export function compileExpression(
         type = 'number'
         break
     }
-    bindings.set(id, { type, options })
+    bindings.set(id, { type, options, variable: false })
+  }
+  for (const [id, type] of variableTypes) {
+    if (bindings.has(id)) fail('invalid_reference', '$.variables')
+    bindings.set(id, { type, options: new Set(), variable: true })
   }
   const dependencies = new Set<string>()
   const root = compileNode(program.expression, '$.expression', bindings, dependencies)
-  const ids = Object.freeze([...dependencies].sort())
+  const ids = Object.freeze([...dependencies].filter((id) => !bindings.get(id)?.variable).sort())
+  const variableIds = Object.freeze(
+    [...dependencies].filter((id) => bindings.get(id)?.variable).sort(),
+  )
   return Object.freeze({
     valueType: root.type,
     dependencies: ids,
-    evaluate(answers: Readonly<Record<string, unknown>>) {
+    variableDependencies: variableIds,
+    evaluate(
+      answers: Readonly<Record<string, unknown>>,
+      variables: ReadonlyMap<string, LogicValue> = new Map(),
+    ) {
       const context = new Map<string, LogicValue>()
       for (const id of ids) {
         const binding = bindings.get(id)
@@ -196,6 +216,17 @@ export function compileExpression(
           id,
           readAnswer(Object.hasOwn(answers, id) ? answers[id] : undefined, binding, id),
         )
+      }
+      for (const id of variableIds) {
+        const value = variables.get(id)
+        if (!value) fail('invalid_reference', '$.variables')
+        if (
+          value.type !== 'missing' &&
+          (value.type !== bindings.get(id)?.type ||
+            (value.type === 'number' && !Number.isFinite(value.value)))
+        )
+          fail('type_mismatch', '$.variables')
+        context.set(id, value)
       }
       return evaluate(root, context)
     },
@@ -211,10 +242,11 @@ function compileNode(
   const expr = object(raw)
   const op = string(expr.op)
   const child = (key: string) => compileNode(expr[key], `${path}.${key}`, bindings, dependencies)
-  const bound = () => {
-    const id = reference(expr.question_id, path)
+  const bound = (variable = false) => {
+    const id = reference(variable ? expr.variable_id : expr.question_id, path)
     const binding = bindings.get(id)
     if (!binding) fail('invalid_reference', path, id)
+    if (binding.variable !== variable) fail('invalid_reference', path, variable ? null : id)
     dependencies.add(id)
     return { id, binding }
   }
@@ -243,6 +275,11 @@ function compileNode(
       fields(expr, ['op', 'question_id'])
       const { id, binding } = bound()
       return node(op === 'answered' ? 'boolean' : binding.type, { op, id })
+    }
+    case 'variable': {
+      fields(expr, ['op', 'variable_id'])
+      const { id, binding } = bound(true)
+      return node(binding.type, { op: 'answer', id })
     }
     case 'selected':
     case 'contains_any':
@@ -332,7 +369,16 @@ function readAnswer(raw: unknown, binding: Binding, id: string): LogicValue {
   switch (binding.type) {
     case 'number': {
       if (typeof raw !== 'number' && !isLosslessNumber(raw)) fail('invalid_answer', path, id)
-      const value = numeric(raw.toString())
+      // 原生 number 已经过调用方规范化，不能再把它的十进制显示形式当成裸整数。
+      // 例如有效的 1e20 会被 toString 展开到 u64 范围之外。
+      const value =
+        typeof raw === 'number'
+          ? Number.isFinite(raw)
+            ? raw === 0
+              ? 0
+              : raw
+            : undefined
+          : numeric(raw.toString())
       if (value === undefined) fail('invalid_answer', path, id)
       return { type: 'number', value }
     }

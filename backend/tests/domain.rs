@@ -34,6 +34,7 @@ fn choices() -> Vec<Choice> {
 
 fn document(questions: Vec<Question>) -> Document {
     Document {
+        logic: None,
         title: "课程反馈".into(),
         description: String::new(),
         purpose: "用于改进课程安排".into(),
@@ -47,6 +48,47 @@ fn answer(question: u128, value: Value) -> Answer {
         question_id: id(question),
         value,
     }
+}
+
+#[test]
+fn 旧文档不增加规则字段且规则草稿复制重写所有身份() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../fixtures/survey-logic/expressions.json")).unwrap();
+    let questions: Vec<Question> = serde_json::from_value(fixture["questions"].clone()).unwrap();
+    let mut doc = document(questions);
+    let old = serde_json::to_value(&doc).unwrap();
+    assert!(old.get("logic").is_none());
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<Document>(old.clone()).unwrap()).unwrap(),
+        old
+    );
+    let documents: Value =
+        serde_json::from_str(include_str!("../../fixtures/survey-logic/documents.json")).unwrap();
+    doc.logic = Some(serde_json::from_value(documents["cases"][0]["logic"].clone()).unwrap());
+    doc.validate_draft().unwrap();
+    assert!(
+        doc.validate_publish().is_err(),
+        "尚未接入提交执行的规则不能发布"
+    );
+    let source = serde_json::to_value(&doc).unwrap();
+    doc.renew_ids();
+    doc.validate_copy_draft().unwrap();
+    let copied = serde_json::to_value(&doc).unwrap();
+    let encoded = copied.to_string();
+    for question in source["questions"].as_array().unwrap() {
+        assert!(!encoded.contains(question["id"].as_str().unwrap()));
+        if let Some(options) = question["options"].as_array() {
+            for option in options {
+                assert!(!encoded.contains(option["id"].as_str().unwrap()));
+            }
+        }
+    }
+    for variable in source["logic"]["variables"].as_array().unwrap() {
+        assert!(!encoded.contains(variable["id"].as_str().unwrap()));
+    }
+    let round_trip: Document = serde_json::from_str(&encoded).unwrap();
+    round_trip.validate_draft().unwrap();
+    assert_eq!(serde_json::to_value(round_trip).unwrap(), copied);
 }
 
 #[test]

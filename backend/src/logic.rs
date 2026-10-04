@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::domain::{
@@ -35,6 +36,10 @@ pub enum LogicErrorCode {
     InvalidAnswer,
     /// 算术结果不是有限数字或发生除零。
     ArithmeticError,
+    /// 计算变量形成循环依赖。
+    DependencyCycle,
+    /// 题目规则依赖自身或后续题目。
+    ForwardReference,
 }
 
 /// 规则错误保留 AST 路径与相关题目，但不回显答案。
@@ -51,7 +56,7 @@ pub struct LogicError {
     pub message: &'static str,
 }
 
-fn error(code: LogicErrorCode, path: &str, question_id: Option<Uuid>) -> LogicError {
+pub(crate) fn error(code: LogicErrorCode, path: &str, question_id: Option<Uuid>) -> LogicError {
     let message = match code {
         LogicErrorCode::InvalidSyntax => "规则结构或字段无效",
         LogicErrorCode::UnsupportedVersion => "不支持此规则版本",
@@ -61,6 +66,8 @@ fn error(code: LogicErrorCode, path: &str, question_id: Option<Uuid>) -> LogicEr
         LogicErrorCode::InvalidNumber => "规则数字无效或无法精确表示",
         LogicErrorCode::InvalidAnswer => "规则上下文包含无效答案",
         LogicErrorCode::ArithmeticError => "规则计算发生除零或数值溢出",
+        LogicErrorCode::DependencyCycle => "计算变量存在循环依赖",
+        LogicErrorCode::ForwardReference => "题目规则不能依赖自身或后续题目",
     };
     LogicError {
         code,
@@ -71,7 +78,7 @@ fn error(code: LogicErrorCode, path: &str, question_id: Option<Uuid>) -> LogicEr
 }
 
 /// 编译阶段确定的类型；缺失值保留原表达式的静态类型。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LogicValueType {
     /// 布尔条件。
@@ -129,6 +136,9 @@ enum Expression {
     },
     Answered {
         question_id: String,
+    },
+    Variable {
+        variable_id: String,
     },
     Selected {
         question_id: String,
@@ -194,6 +204,7 @@ enum Arithmetic {
 struct Binding {
     value_type: LogicValueType,
     options: BTreeSet<Uuid>,
+    variable: bool,
 }
 
 #[derive(Debug)]
@@ -223,6 +234,7 @@ pub struct CompiledExpression {
     root: Node,
     bindings: BTreeMap<Uuid, Binding>,
     dependencies: BTreeSet<Uuid>,
+    variable_dependencies: BTreeSet<Uuid>,
 }
 
 impl CompiledExpression {
@@ -237,6 +249,10 @@ impl CompiledExpression {
         self.dependencies.iter().copied()
     }
 
+    pub(crate) fn variable_dependencies(&self) -> impl Iterator<Item = Uuid> + '_ {
+        self.variable_dependencies.iter().copied()
+    }
+
     /// 对已按问卷规则规范化、且已排除不适用答案的上下文求值。
     ///
     /// 本入口防御性检查引用答案的类型、数字和选项身份，不代替问卷的必填、
@@ -245,11 +261,25 @@ impl CompiledExpression {
     /// # 错误
     /// 引用答案类型错误、除零或非有限结果时返回结构化错误。
     pub fn evaluate(&self, answers: &BTreeMap<Uuid, Value>) -> Result<LogicValue, LogicError> {
+        self.evaluate_with_variables(answers, &BTreeMap::new())
+    }
+
+    pub(crate) fn evaluate_with_variables(
+        &self,
+        answers: &BTreeMap<Uuid, Value>,
+        variables: &BTreeMap<Uuid, LogicValue>,
+    ) -> Result<LogicValue, LogicError> {
         let mut context = BTreeMap::new();
         for id in &self.dependencies {
             let binding = &self.bindings[id];
             let value = read_answer(answers.get(id), binding, *id)?;
             context.insert(*id, value);
+        }
+        for id in &self.variable_dependencies {
+            let value = variables
+                .get(id)
+                .ok_or_else(|| error(LogicErrorCode::InvalidReference, "$.variables", None))?;
+            context.insert(*id, value.clone());
         }
         self.root.evaluate(&context)
     }
@@ -262,6 +292,14 @@ impl CompiledExpression {
 pub fn compile_expression(
     raw: &Value,
     questions: &[Question],
+) -> Result<CompiledExpression, LogicError> {
+    compile_with_variables(raw, questions, &BTreeMap::new())
+}
+
+pub(crate) fn compile_with_variables(
+    raw: &Value,
+    questions: &[Question],
+    variables: &BTreeMap<Uuid, LogicValueType>,
 ) -> Result<CompiledExpression, LogicError> {
     // 在递归反序列化前限制 AST 深度，避免无效规则构造深层递归类型。
     check_raw_budget(raw.get("expression"), 1, &mut 0)?;
@@ -323,6 +361,20 @@ pub fn compile_expression(
             Binding {
                 value_type,
                 options: ids,
+                variable: false,
+            },
+        );
+    }
+    for (id, value_type) in variables {
+        if bindings.contains_key(id) {
+            return Err(error(LogicErrorCode::InvalidReference, "$.variables", None));
+        }
+        bindings.insert(
+            *id,
+            Binding {
+                value_type: *value_type,
+                options: BTreeSet::new(),
+                variable: true,
             },
         );
     }
@@ -333,14 +385,21 @@ pub fn compile_expression(
         &bindings,
         &mut dependencies,
     )?;
+    let variable_dependencies = dependencies
+        .iter()
+        .copied()
+        .filter(|id| bindings[id].variable)
+        .collect();
+    dependencies.retain(|id| !bindings[id].variable);
     Ok(CompiledExpression {
         root,
         bindings,
         dependencies,
+        variable_dependencies,
     })
 }
 
-fn check_raw_budget(
+pub(crate) fn check_raw_budget(
     raw: Option<&Value>,
     depth: usize,
     count: &mut usize,
@@ -364,7 +423,7 @@ fn check_raw_budget(
     Ok(())
 }
 
-fn reference(raw: &str, path: &str) -> Result<Uuid, LogicError> {
+pub(crate) fn reference(raw: &str, path: &str) -> Result<Uuid, LogicError> {
     Uuid::parse_str(raw)
         .ok()
         .filter(|id| !id.is_nil() && id.to_string() == raw)
@@ -397,6 +456,7 @@ fn compile_node(
 ) -> Result<Node, LogicError> {
     use LogicValueType::{Boolean, Number, Text};
     let answered = matches!(&expr, Expression::Answered { .. });
+    let variable = matches!(&expr, Expression::Variable { .. });
     let all = matches!(
         &expr,
         Expression::All { .. } | Expression::ContainsAll { .. }
@@ -425,11 +485,22 @@ fn compile_node(
             }
             (NodeKind::Literal(LogicValue::Text(value)), Text)
         }
-        Expression::Answer { question_id } | Expression::Answered { question_id } => {
+        Expression::Answer { question_id }
+        | Expression::Answered { question_id }
+        | Expression::Variable {
+            variable_id: question_id,
+        } => {
             let id = reference(&question_id, &path)?;
             let binding = bindings
                 .get(&id)
                 .ok_or_else(|| error(LogicErrorCode::InvalidReference, &path, Some(id)))?;
+            if binding.variable != variable {
+                return Err(error(
+                    LogicErrorCode::InvalidReference,
+                    &path,
+                    if variable { None } else { Some(id) },
+                ));
+            }
             dependencies.insert(id);
             if answered {
                 (NodeKind::Answered(id), Boolean)
@@ -545,6 +616,9 @@ fn selection(
     let id = reference(question_id, path)?;
     let invalid = || error(LogicErrorCode::InvalidReference, path, Some(id));
     let binding = bindings.get(&id).ok_or_else(invalid)?;
+    if binding.variable {
+        return Err(invalid());
+    }
     if binding.value_type != LogicValueType::Choices
         && (multiple || binding.value_type != LogicValueType::Choice)
     {

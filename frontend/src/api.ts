@@ -1,6 +1,7 @@
 //! 所有写请求携带 CSRF 标记；网络失败不被误报为操作成功。
 //! 30 秒截止覆盖到响应正文消费结束，而不是只覆盖到收到响应头。
-import { isSafeNumber, LosslessNumber, parse, stringify } from 'lossless-json'
+import { decode, encode } from './json.ts'
+export { copy, decode, encode } from './json.ts'
 
 export class ApiError extends Error {
   constructor(
@@ -11,17 +12,6 @@ export class ApiError extends Error {
   ) {
     super(message)
   }
-}
-export function decode<T>(text: string): T {
-  return parse(text, undefined, {
-    parseNumber: (value) => (isSafeNumber(value) ? Number(value) : new LosslessNumber(value)),
-  }) as T
-}
-export function encode(value: unknown): string {
-  return stringify(value) ?? 'null'
-}
-export function copy<T>(value: T): T {
-  return decode<T>(encode(value))
 }
 export function message(error: unknown): string {
   return error instanceof ApiError ? error.message : '操作未完成，请稍后重试。'

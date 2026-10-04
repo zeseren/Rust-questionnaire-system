@@ -189,11 +189,11 @@ cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
-既有 18 个领域回归测试位于 [`backend/tests/domain.rs`](backend/tests/domain.rs)，DSL 表达式内核的独立回归位于 [`backend/tests/logic.rs`](backend/tests/logic.rs)，均不启动数据库；它们不能替代事务、权限和并发提交的真实服务验证。运行过的 HTTP、数据库及备份恢复场景见 [实施与验证记录](docs/requirements-analysis.md#11-后端实施与验证记录)。
+领域回归测试位于 [`backend/tests/domain.rs`](backend/tests/domain.rs)，DSL 表达式与文档编译回归位于 [`backend/tests/logic.rs`](backend/tests/logic.rs)，均不启动数据库；它们不能替代事务、权限和并发提交的真实服务验证。运行过的 HTTP、数据库及备份恢复场景见 [实施与验证记录](docs/requirements-analysis.md#11-后端实施与验证记录)。
 
-前端在 `frontend/` 执行 `npm run build` 检查类型并构建，`npm run format` 整理源码，`npm run format:check` 检查格式。`npm run test:regression` 使用 Node 内置测试运行器执行独立的 `frontend/tests/answers.test.mjs` 与 `frontend/tests/logic.test.mjs`，覆盖数字精度修复和 DSL 内核回归，不添加测试依赖。两端 DSL 测试读取同一份 [`fixtures/survey-logic/expressions.json`](fixtures/survey-logic/expressions.json)。没有引入前端自动化测试框架；实际浏览器联调范围单独记录在 [前端实施与验证记录](docs/requirements-analysis.md#12-前端-mvp-实施与验证记录)，不将静态原型视为业务验收。
+前端在 `frontend/` 执行 `npm run build` 检查类型并构建，`npm run format` 整理源码，`npm run format:check` 检查格式。`npm run test:regression` 使用 Node 内置测试运行器执行 `frontend/tests/` 中的数字精度、表达式和文档规则回归，不添加测试依赖。两端 DSL 测试读取同一目录下的[表达式样例](fixtures/survey-logic/expressions.json)与[文档样例](fixtures/survey-logic/documents.json)。没有引入前端自动化测试框架；实际浏览器联调范围单独记录在 [前端实施与验证记录](docs/requirements-analysis.md#12-前端-mvp-实施与验证记录)，不将静态原型视为业务验收。
 
-DSL 与流程引擎正在按[实施计划](docs/survey-dsl-plan.md)分阶段开发；表达式内核尚未接入发布、填写和统计界面，不能视为跳题功能已交付。
+DSL 与流程引擎正在按[实施计划](docs/survey-dsl-plan.md)分阶段开发。第二阶段已支持规则草稿持久化、计算变量、依赖编译和复制引用重写；带规则的草稿暂时不能发布，填写与统计尚未接入规则执行。无规则问卷保持原有行为。
 
 ### 7.1 编译速度配置
 

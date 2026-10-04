@@ -1,5 +1,6 @@
 //! DTO 与后端字段一一对应，数字答案保留原始精度。
 import type { LosslessNumber } from 'lossless-json'
+import type { DocumentLogic } from './document-logic'
 
 export type ExactNumber = number | LosslessNumber
 export type Status = 'unpublished' | 'collecting' | 'closed' | 'archived'
@@ -22,6 +23,7 @@ export type Question = QuestionBase &
     | { type: 'rating'; min: number; max: number; min_label: string; max_label: string }
   )
 export interface SurveyDocument {
+  logic?: DocumentLogic | null
   title: string
   description: string
   purpose: string

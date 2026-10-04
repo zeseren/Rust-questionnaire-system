@@ -317,7 +317,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
             :error="fieldError?.id === question.id ? fieldError.message : undefined"
             @update:model-value="draft.questions[index] = $event"
             @move="move(index, $event)"
-            @duplicate="draft.questions.splice(index + 1, 0, duplicateQuestion(question))"
+            @duplicate="draft.questions.splice(index + 1, 0, duplicateQuestion(question, draft))"
             @remove="draft.questions.splice(index, 1)"
           />
           <div v-if="!draft.questions.length" class="empty-state mt">
