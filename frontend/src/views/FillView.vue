@@ -58,7 +58,14 @@ async function focusError() {
   }
 }
 async function submit() {
-  if (!survey.value || busy.value || receipt.value || versionChanged.value) return
+  if (
+    !survey.value ||
+    survey.value.document.logic ||
+    busy.value ||
+    receipt.value ||
+    versionChanged.value
+  )
+    return
   error.value = ''
   if (!pending.value) {
     const result = buildAnswers(survey.value.document, values.value)
@@ -156,7 +163,11 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           </RouterLink>
         </p>
       </div>
-      <form v-if="survey" novalidate @submit.prevent="submit">
+      <section v-if="survey?.document.logic" class="panel">
+        <h1>{{ survey.document.title }}</h1>
+        <p class="notice mt">本问卷暂未开放网页填写，请联系发布者。</p>
+      </section>
+      <form v-if="survey && !survey.document.logic" novalidate @submit.prevent="submit">
         <section class="panel public-survey-header">
           <p class="eyebrow">
             {{ survey.mode === 'anonymous' ? '匿名填写' : '登录限次' }} · V{{

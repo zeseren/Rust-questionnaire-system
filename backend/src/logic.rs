@@ -52,6 +52,10 @@ pub enum LogicErrorCode {
     ConstraintFailed,
     /// 条件尚不能确定。
     UnknownCondition,
+    /// 提交携带不适用题目的答案。
+    InapplicableAnswer,
+    /// 筛选结束尚不接受持久化提交。
+    ScreenedOut,
 }
 
 /// 规则错误保留 AST 路径与相关题目，但不回显答案。
@@ -86,6 +90,8 @@ pub(crate) fn error(code: LogicErrorCode, path: &str, question_id: Option<Uuid>)
         LogicErrorCode::RequiredAnswer => "此题为必填项",
         LogicErrorCode::ConstraintFailed => "答案不符合自定义约束",
         LogicErrorCode::UnknownCondition => "条件尚不能确定，请补全相关答案",
+        LogicErrorCode::InapplicableAnswer => "提交包含隐藏或未进入分支的题目，请核对当前路径",
+        LogicErrorCode::ScreenedOut => "筛选结束不产生正式答卷",
     };
     LogicError {
         code,

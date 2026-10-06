@@ -66,10 +66,7 @@ fn 旧文档不增加规则字段且规则草稿复制重写所有身份() {
         serde_json::from_str(include_str!("../../fixtures/survey-logic/documents.json")).unwrap();
     doc.logic = Some(serde_json::from_value(documents["cases"][0]["logic"].clone()).unwrap());
     doc.validate_draft().unwrap();
-    assert!(
-        doc.validate_publish().is_err(),
-        "尚未接入提交执行的规则不能发布"
-    );
+    doc.validate_publish().unwrap();
     let source = serde_json::to_value(&doc).unwrap();
     doc.renew_ids();
     doc.validate_copy_draft().unwrap();

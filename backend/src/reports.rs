@@ -29,7 +29,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::AuthUser,
-    domain::{Choice, Document, Question, QuestionKind},
+    domain::{AnswerState, Choice, Document, FlowEvaluator, Question, QuestionKind},
     entities::{response, version},
     error::{AppError, AppResult, ErrorResponse},
     http::{ApiPath, ApiQuery, Pagination},
@@ -100,6 +100,8 @@ struct ResponseDetail {
     document: Document,
     /// 题目 UUID 到规范化答案；未回答的可选题没有对应键。
     answers: BTreeMap<Uuid, Value>,
+    /// 每题区分已答、适用未答和规则跳过；按此答卷的历史版本重算。
+    question_states: BTreeMap<Uuid, AnswerState>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -172,6 +174,12 @@ struct QuestionStatistics {
     title: String,
     /// 真正回答本题的答卷数，不包括缺失值。
     answered_count: u64,
+    /// 进入有效路径且可见的答卷数，等于已答加适用未答。
+    applicable_count: u64,
+    /// 适用但没有回答的答卷数。
+    unanswered_count: u64,
+    /// 被分支或显示规则跳过的答卷数。
+    skipped_count: u64,
     #[serde(flatten)]
     statistics: QuestionStatisticsData,
 }
@@ -330,14 +338,24 @@ async fn response_detail(
         .one(&state.db)
         .await?
         .ok_or_else(AppError::not_found)?;
+    let document: Document = serde_json::from_value(version.document)?;
+    let evaluator = report_evaluator(&document)?;
+    let row = snapshot_row(
+        &document,
+        evaluator.as_ref(),
+        row.id,
+        row.submitted_at,
+        serde_json::from_value(row.answers)?,
+    )?;
     Ok(Json(ResponseDetail {
-        receipt_id: row.id,
+        receipt_id: row.receipt_id,
         version_id: version.id,
         version_number: version.number,
         submitted_at: row.submitted_at.with_timezone(&SHANGHAI_OFFSET),
         timezone: TIMEZONE,
-        document: serde_json::from_value(version.document)?,
-        answers: serde_json::from_value(row.answers)?,
+        document,
+        answers: row.answers,
+        question_states: row.question_states,
     }))
 }
 
@@ -346,6 +364,7 @@ async fn response_detail(
 /// 总数、趋势、分布和分母均由一次 SELECT 的固定结果计算；不会混合版本。
 /// 选择题占比以该题有效回答数为分母，多选占比之和可超过 100%。
 /// 缺失不参与数值统计，合法 0 参与；零分母的占比和均值返回 null。
+/// 适用数等于已答加适用未答；适用数加规则跳过数等于本次答卷总数。
 #[utoipa::path(
     get, path = "/api/surveys/{id}/statistics", tag = "答卷与报表",
     params(
@@ -374,11 +393,15 @@ async fn statistics(
     let range = TimeRange::parse(&filter)?;
     let version = selected_version(&state.db, user.id, id, filter.version_id).await?;
     let document: Document = serde_json::from_value(version.document)?;
-    let rows = response_snapshot(&state.db, user.id, id, version.id, &range).await?;
+    let rows = response_snapshot(&state.db, user.id, id, version.id, &range, &document).await?;
     let mut dates = BTreeMap::new();
-    for (_, submitted_at, _) in &rows {
+    for row in &rows {
         *dates
-            .entry(submitted_at.with_timezone(&SHANGHAI_OFFSET).date_naive())
+            .entry(
+                row.submitted_at
+                    .with_timezone(&SHANGHAI_OFFSET)
+                    .date_naive(),
+            )
             .or_insert(0) += 1;
     }
     let questions = document
@@ -401,7 +424,8 @@ async fn statistics(
 ///
 /// 每次下载重新认证并校验归属；一次 SELECT 固定导出行，按提交时间和回执升序。
 /// 表头包含版本、提交时间（Asia/Shanghai +08:00）、题目 UUID 和标题。
-/// 多选是一个字段内的 JSON 数组，缺失留空；所有字段统一防护公式注入，再按 CSV 规则转义。
+/// 多选是一个字段内的 JSON 数组，缺失留空；带规则的版本在每题后增加状态列，区分适用未答与规则跳过。
+/// 无规则历史版本的列与值格式保持不变；所有字段统一防护公式注入，再按 CSV 规则转义。
 /// 为保持电子表格安全，以等号、加减号或 @ 开头的单元格会加单引号，含前导空白/控制字符的绕过同样处理。
 #[utoipa::path(
     get, path = "/api/surveys/{id}/export.csv", tag = "答卷与报表",
@@ -433,7 +457,7 @@ async fn export_csv(
     let range = TimeRange::parse(&filter)?;
     let version = selected_version(&state.db, user.id, id, filter.version_id).await?;
     let document: Document = serde_json::from_value(version.document)?;
-    let rows = response_snapshot(&state.db, user.id, id, version.id, &range).await?;
+    let rows = response_snapshot(&state.db, user.id, id, version.id, &range, &document).await?;
     let bytes = encode_csv(&document, version.id, version.number, &rows)?;
     let mut response = bytes.into_response();
     response.headers_mut().insert(
@@ -547,11 +571,65 @@ fn filtered_responses(
 }
 
 // 元组对应固定 SELECT 的三列；Json 直接解码规范化答案，避免再复制一份 JSON 树。
-type SnapshotRow = (
+type StoredRow = (
     Uuid,
     DateTime<Utc>,
     sqlx::types::Json<BTreeMap<Uuid, Value>>,
 );
+
+// 适用性只来自历史版本重建；不按当前草稿推断，也不从答案是否缺失猜测跳题。
+struct SnapshotRow {
+    receipt_id: Uuid,
+    submitted_at: DateTime<Utc>,
+    answers: BTreeMap<Uuid, Value>,
+    question_states: BTreeMap<Uuid, AnswerState>,
+}
+
+fn report_evaluator(document: &Document) -> AppResult<Option<FlowEvaluator<'_>>> {
+    document
+        .logic
+        .as_ref()
+        .map(|_| FlowEvaluator::new(document))
+        .transpose()
+        .map_err(|error| AppError::internal(error))
+}
+
+fn snapshot_row(
+    document: &Document,
+    evaluator: Option<&FlowEvaluator<'_>>,
+    receipt_id: Uuid,
+    submitted_at: DateTime<Utc>,
+    answers: BTreeMap<Uuid, Value>,
+) -> AppResult<SnapshotRow> {
+    let (answers, question_states) = if let Some(evaluator) = evaluator {
+        let result = evaluator
+            .evaluate_stored(answers)
+            .map_err(|error| AppError::internal(error))?;
+        (result.answers, result.question_states)
+    } else {
+        let states = document
+            .questions
+            .iter()
+            .map(|question| {
+                (
+                    question.id,
+                    if answers.contains_key(&question.id) {
+                        AnswerState::Answered
+                    } else {
+                        AnswerState::Unanswered
+                    },
+                )
+            })
+            .collect();
+        (answers, states)
+    };
+    Ok(SnapshotRow {
+        receipt_id,
+        submitted_at,
+        answers,
+        question_states,
+    })
+}
 
 async fn response_snapshot(
     db: &DatabaseConnection,
@@ -559,10 +637,11 @@ async fn response_snapshot(
     survey_id: Uuid,
     version_id: Uuid,
     range: &TimeRange,
+    document: &Document,
 ) -> AppResult<Vec<SnapshotRow>> {
     // 单条 PostgreSQL SELECT 自带一致快照。这里不处于 ORM 事务内，直接复用同一个连接池。
     // SQL 自身仍限制 owner_id，不能因为使用 SQLx 就绕过权限。
-    Ok(sqlx::query_as(
+    let stored: Vec<StoredRow> = sqlx::query_as(
         "SELECT r.id, r.submitted_at, r.answers
          FROM responses AS r
          INNER JOIN surveys AS s ON s.id = r.survey_id
@@ -577,14 +656,26 @@ async fn response_snapshot(
     .bind(range.from)
     .bind(range.to)
     .fetch_all(db.get_postgres_connection_pool())
-    .await?)
+    .await?;
+    let evaluator = report_evaluator(document)?;
+    stored
+        .into_iter()
+        .map(|(id, submitted_at, answers)| {
+            snapshot_row(document, evaluator.as_ref(), id, submitted_at, answers.0)
+        })
+        .collect()
 }
 
 fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<QuestionStatistics> {
     let answered_count = rows
         .iter()
-        .filter(|(_, _, answers)| answers.0.contains_key(&question.id))
+        .filter(|row| row.answers.contains_key(&question.id))
         .count() as u64;
+    let skipped_count = rows
+        .iter()
+        .filter(|row| row.question_states.get(&question.id) == Some(&AnswerState::Skipped))
+        .count() as u64;
+    let applicable_count = rows.len() as u64 - skipped_count;
     let is_multiple = matches!(&question.kind, QuestionKind::MultipleChoice { .. });
     let is_textarea = matches!(&question.kind, QuestionKind::Textarea { .. });
     let statistics = match question.kind {
@@ -601,8 +692,14 @@ fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<Que
         }
         QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => {
             let mut answers = Vec::with_capacity(answered_count as usize);
-            for (receipt_id, submitted_at, values) in rows {
-                if let Some(value) = values.0.get(&question.id) {
+            for SnapshotRow {
+                receipt_id,
+                submitted_at,
+                answers: values,
+                ..
+            } in rows
+            {
+                if let Some(value) = values.get(&question.id) {
                     answers.push(TextResponse {
                         receipt_id: *receipt_id,
                         submitted_at: submitted_at.with_timezone(&SHANGHAI_OFFSET),
@@ -621,8 +718,8 @@ fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<Que
             let mut mean = 0.0;
             let mut min: Option<f64> = None;
             let mut max: Option<f64> = None;
-            for (_, _, values) in rows {
-                if let Some(value) = values.0.get(&question.id) {
+            for row in rows {
+                if let Some(value) = row.answers.get(&question.id) {
                     let value = value.as_f64().ok_or_else(invalid_stored_answer)?;
                     count += 1;
                     update_mean(&mut mean, value, count);
@@ -639,8 +736,8 @@ fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<Que
         QuestionKind::Rating { min, max, .. } => {
             let mut distribution = BTreeMap::<i32, u64>::new();
             let mut sum = 0.0;
-            for (_, _, values) in rows {
-                if let Some(value) = values.0.get(&question.id) {
+            for row in rows {
+                if let Some(value) = row.answers.get(&question.id) {
                     // 写入前已校验整数与 i32 范围；规范化 JSON 可能保存为 0.0。
                     let value = value.as_f64().ok_or_else(invalid_stored_answer)?;
                     *distribution.entry(value as i32).or_default() += 1;
@@ -662,6 +759,9 @@ fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<Que
         question_id: question.id,
         title: question.title,
         answered_count,
+        applicable_count,
+        unanswered_count: applicable_count - answered_count,
+        skipped_count,
         statistics,
     })
 }
@@ -673,8 +773,8 @@ fn summarize_choices(
     rows: &[SnapshotRow],
 ) -> AppResult<Vec<OptionFrequency>> {
     let mut counts = HashMap::<&str, u64>::new();
-    for (_, _, answers) in rows {
-        let Some(value) = answers.0.get(&question_id) else {
+    for row in rows {
+        let Some(value) = row.answers.get(&question_id) else {
             continue;
         };
         match value {
@@ -732,7 +832,9 @@ fn encode_csv(
         .from_writer(Vec::new());
     let version_id = version_id.to_string();
     let version_number = version_number.to_string();
-    let mut record: Vec<Cow<'_, str>> = Vec::with_capacity(document.questions.len() + 4);
+    let with_states = document.logic.is_some();
+    let mut record: Vec<Cow<'_, str>> =
+        Vec::with_capacity(document.questions.len() * if with_states { 2 } else { 1 } + 4);
     record.extend(
         [
             "receipt_id",
@@ -743,12 +845,12 @@ fn encode_csv(
         .into_iter()
         .map(Cow::Borrowed),
     );
-    record.extend(
-        document
-            .questions
-            .iter()
-            .map(|question| Cow::Owned(format!("{} [{}]", question.title, question.id))),
-    );
+    for question in &document.questions {
+        record.push(Cow::Owned(format!("{} [{}]", question.title, question.id)));
+        if with_states {
+            record.push(Cow::Owned(format!("状态 [{}]", question.id)));
+        }
+    }
     for cell in &record {
         writer
             .write_field(formula_safe(cell).as_bytes())
@@ -757,7 +859,13 @@ fn encode_csv(
     writer
         .write_record(std::iter::empty::<&[u8]>())
         .map_err(|error| AppError::internal(error))?;
-    for (receipt_id, submitted_at, answers) in rows {
+    for SnapshotRow {
+        receipt_id,
+        submitted_at,
+        answers,
+        question_states,
+    } in rows
+    {
         record.clear();
         record.push(Cow::Owned(receipt_id.to_string()));
         record.push(Cow::Borrowed(&version_id));
@@ -768,13 +876,24 @@ fn encode_csv(
                 .to_rfc3339_opts(SecondsFormat::AutoSi, false),
         ));
         for question in &document.questions {
-            let cell = match answers.0.get(&question.id) {
+            let cell = match answers.get(&question.id) {
                 None | Some(Value::Null) => Cow::Borrowed(""),
                 Some(Value::String(value)) => Cow::Borrowed(value.as_str()),
                 // 多选保持 JSON 数组，不用逗号连接，以免丢失集合与 CSV 字段边界。
                 Some(value) => Cow::Owned(serde_json::to_string(value)?),
             };
             record.push(cell);
+            if with_states {
+                let state = match question_states
+                    .get(&question.id)
+                    .ok_or_else(invalid_stored_answer)?
+                {
+                    AnswerState::Answered => "已答",
+                    AnswerState::Unanswered => "适用未答",
+                    AnswerState::Skipped => "规则跳过",
+                };
+                record.push(Cow::Borrowed(state));
+            }
         }
         for cell in &record {
             writer

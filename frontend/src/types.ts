@@ -1,6 +1,7 @@
 //! DTO 与后端字段一一对应，数字答案保留原始精度。
 import type { LosslessNumber } from 'lossless-json'
 import type { DocumentLogic } from './document-logic'
+import type { AnswerState } from './flow'
 
 export type ExactNumber = number | LosslessNumber
 export type Status = 'unpublished' | 'collecting' | 'closed' | 'archived'
@@ -117,6 +118,7 @@ export interface ResponseSummary {
 export interface ResponseDetail extends Omit<ReportSelection, 'from' | 'to'>, ResponseSummary {
   document: SurveyDocument
   answers: Record<string, AnswerValue>
+  question_states: Record<string, AnswerState>
 }
 export interface OptionFrequency {
   option_id: string
@@ -124,7 +126,14 @@ export interface OptionFrequency {
   count: number
   proportion: ExactNumber | null
 }
-export type QuestionStatistics = { question_id: string; title: string; answered_count: number } & (
+export type QuestionStatistics = {
+  question_id: string
+  title: string
+  answered_count: number
+  applicable_count: number
+  unanswered_count: number
+  skipped_count: number
+} & (
   | {
       type: 'single_choice' | 'multiple_choice'
       options: OptionFrequency[]

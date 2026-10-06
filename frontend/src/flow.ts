@@ -28,6 +28,13 @@ export interface FlowSnapshot extends Omit<Projection, 'path'> {
   cleared: string[]
 }
 
+export type AnswerState = 'answered' | 'unanswered' | 'skipped'
+export interface EvaluatedResponse {
+  answers: Record<string, Answer>
+  question_states: Record<string, AnswerState>
+  path: string[]
+}
+
 /** 会话持有文档副本，外部不能修改答案、编译结果或可信历史。 */
 export class FlowSession {
   #document: SurveyDocument
@@ -83,6 +90,41 @@ export class FlowSession {
       path: this.#projection.path.map((index) => this.#id(index)),
       cleared: this.#cleared,
     })
+  }
+
+  /** 从最终输入重建路径，不读取或修改当前会话的历史与输入；到达 complete 不代表已提交。 */
+  evaluateAnswers(answers: readonly { question_id: string; value: unknown }[]): EvaluatedResponse {
+    const inputs: Record<string, unknown> = {}
+    for (const answer of answers) {
+      if (!this.#document.questions.some((question) => question.id === answer.question_id))
+        throw new LogicError('invalid_reference', '$.answers', answer.question_id)
+      if (Object.hasOwn(inputs, answer.question_id))
+        throw new LogicError('invalid_answer', '$.answers', answer.question_id)
+      inputs[answer.question_id] = answer.value
+    }
+    const result = this.#project(inputs)
+    for (const question of this.#document.questions) {
+      const code = result.errors[question.id]
+      if (code) throw new LogicError(code, '$.answers', question.id)
+    }
+    if (result.route_error) throw new LogicError(result.route_error, '$.route')
+    for (const id of Object.keys(inputs).sort())
+      if (!result.visible.includes(id)) throw new LogicError('inapplicable_answer', '$.answers', id)
+    const final = this.#flow.nodes[result.path.at(-1)!]
+    if (final?.type !== 'end') throw new LogicError('unknown_condition', '$.route')
+    if (final.outcome === 'screen_out') throw new LogicError('screened_out', '$.route')
+    const question_states: Record<string, AnswerState> = {}
+    for (const question of this.#document.questions)
+      question_states[question.id] = !result.visible.includes(question.id)
+        ? 'skipped'
+        : Object.hasOwn(result.answers, question.id)
+          ? 'answered'
+          : 'unanswered'
+    return {
+      answers: result.answers,
+      question_states,
+      path: result.path.map((index) => this.#id(index)),
+    }
   }
 
   /** 事件失败不改状态；无效答案保留为输入错误，不进入下游计算。 */

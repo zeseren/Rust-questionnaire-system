@@ -12,7 +12,8 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 pub use crate::flow::{
-    FlowBranch, FlowDefinition, FlowEvent, FlowNode, FlowOutcome, FlowSession, FlowSnapshot,
+    AnswerState, EvaluatedResponse, FlowBranch, FlowDefinition, FlowEvaluator, FlowEvent, FlowNode,
+    FlowOutcome, FlowSession, FlowSnapshot,
 };
 pub use crate::logic::{
     CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType, compile_expression,
@@ -370,11 +371,26 @@ impl Document {
         textarea_limit: usize,
     ) -> Result<(), ValidationError> {
         self.validate_draft_with_text_limits(text_limit, textarea_limit)?;
-        // 提交与填写尚未接入规则执行；不能发布会被旧流程忽略的规则。
-        if self.logic.is_some() {
+        // 筛选结果的保存与账号限次策略尚未确定，暂不发布包含筛选结束的流程。
+        if self
+            .logic
+            .as_ref()
+            .and_then(|logic| logic.flow.as_ref())
+            .is_some_and(|flow| {
+                flow.nodes.iter().any(|node| {
+                    matches!(
+                        node,
+                        FlowNode::End {
+                            outcome: FlowOutcome::ScreenOut,
+                            ..
+                        }
+                    )
+                })
+            })
+        {
             return Err(ValidationError::new(
                 None,
-                "问卷规则执行尚未接入填写与提交，当前仅支持保存和复制规则草稿",
+                "筛选结束的保存与限次策略尚未开放，请使用普通完成节点后再发布",
             ));
         }
         if self.title.trim().is_empty() {
@@ -523,6 +539,12 @@ impl Document {
         answers: Vec<Answer>,
     ) -> Result<BTreeMap<Uuid, Value>, ValidationError> {
         self.validate_publish_with_text_limits(MAX_TEXT_LENGTH, MAX_TEXT_LENGTH)?;
+        if self.logic.is_some() {
+            return FlowEvaluator::new(self)
+                .and_then(|evaluator| evaluator.evaluate_answers(answers))
+                .map(|result| result.answers)
+                .map_err(|error| ValidationError::new(error.question_id, error.to_string()));
+        }
         let questions: HashMap<_, _> = self
             .questions
             .iter()
@@ -712,7 +734,7 @@ pub(crate) fn finite_number(value: &Value, question_id: Uuid) -> Result<f64, Val
     Ok(number)
 }
 
-fn canonical_number(number: f64, question_id: Uuid) -> Result<Value, ValidationError> {
+pub(crate) fn canonical_number(number: f64, question_id: Uuid) -> Result<Value, ValidationError> {
     // IEEE 754 保留负零的符号，但问卷中的正零与负零是相同答案。
     Number::from_f64(if number == 0.0 { 0.0 } else { number })
         .map(Value::Number)

@@ -27,6 +27,8 @@ export type LogicErrorCode =
   | 'required_answer'
   | 'constraint_failed'
   | 'unknown_condition'
+  | 'inapplicable_answer'
+  | 'screened_out'
 
 const messages: Record<LogicErrorCode, string> = {
   invalid_syntax: '规则结构或字段无效',
@@ -45,6 +47,8 @@ const messages: Record<LogicErrorCode, string> = {
   required_answer: '请回答当前必填题目',
   constraint_failed: '答案不满足自定义约束',
   unknown_condition: '条件尚不能确定',
+  inapplicable_answer: '提交包含隐藏或未进入分支的题目，请核对当前路径',
+  screened_out: '筛选结束不产生正式答卷',
 }
 
 export class LogicError extends Error {

@@ -73,3 +73,22 @@ test('整卷和单题复制重写流程引用且会话与外部修改隔离', ()
   assert.deepEqual(session.snapshot().history, [before.logic.flow.entry])
   assert.deepEqual(session.snapshot().visible, [before.questions[0].id])
 })
+
+test('最终提交共享样例拒绝路径外输入并重建适用性', () => {
+  const submissions = JSON.parse(
+    readFileSync(new URL('../../fixtures/survey-logic/submissions.json', import.meta.url), 'utf8'),
+  )
+  for (const fixture of submissions.cases) {
+    const session = new FlowSession(fixtures.documents[fixture.document])
+    const before = session.snapshot()
+    let actual
+    try {
+      actual = { value: session.evaluateAnswers(decode(fixture.answers_json)) }
+    } catch (error) {
+      assert.ok(error instanceof LogicError, fixture.name)
+      actual = { error: { code: error.code, question_id: error.question_id } }
+    }
+    assert.deepEqual(actual, fixture.expected, fixture.name)
+    assert.deepEqual(session.snapshot(), before, '最终路径重建不能修改交互状态')
+  }
+})

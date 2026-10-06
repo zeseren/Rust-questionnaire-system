@@ -261,7 +261,8 @@ async fn submit_response(
         ));
     }
 
-    // 历史版本不可变：旧版本的成功重试仍按旧规则规范化，而不是套用新题面。
+    // 历史版本不可变：旧版本重试仍按旧规则规范化；有逻辑时从入口重建路径，
+    // 只有已校验且适用的答案进入下游条件，客户端不能指定可信历史或可见题目。
     let document: Document = serde_json::from_value(published.document)?;
     let answers = document.validate_answers(request.answers)?;
     let payload = NormalizedPayload {

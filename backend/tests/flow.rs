@@ -1,5 +1,7 @@
 //! 两端执行同一份流程和事件序列，防止路径、清理、回退与缺失处理发生漂移。
-use questionnaire_api::domain::{Document, FlowEvent, FlowNode, FlowSession};
+use questionnaire_api::domain::{
+    Answer, Document, FlowEvaluator, FlowEvent, FlowNode, FlowSession,
+};
 use serde_json::{Value, json};
 
 fn fixtures() -> Value {
@@ -86,15 +88,18 @@ fn equivalent(actual: &Value, expected: &Value) -> bool {
 }
 
 #[test]
-fn 整卷复制重写流程所有身份并保留来源和发布保护() {
+fn 整卷复制重写流程所有身份且仅普通完成流程可发布() {
     let fixtures = fixtures();
     let source: Document =
         serde_json::from_value(fixtures["documents"]["diamond"].clone()).unwrap();
     let mut copied = source.clone();
     copied.renew_ids();
     assert!(copied.validate_draft().is_ok());
-    assert!(source.validate_publish().is_err());
-    assert!(copied.validate_publish().is_err());
+    source.validate_publish().unwrap();
+    copied.validate_publish().unwrap();
+    let screened: Document =
+        serde_json::from_value(fixtures["documents"]["priority"].clone()).unwrap();
+    assert!(screened.validate_publish().is_err());
     let source_flow = source.logic.as_ref().unwrap().flow.as_ref().unwrap();
     let copied_flow = copied.logic.as_ref().unwrap().flow.as_ref().unwrap();
     assert_ne!(source_flow.entry, copied_flow.entry);
@@ -118,4 +123,39 @@ fn 整卷复制重写流程所有身份并保留来源和发布保护() {
     }
     let session = FlowSession::new(&copied).unwrap();
     assert_eq!(session.snapshot().current_node, copied_flow.entry);
+}
+
+#[test]
+fn 最终提交共享样例拒绝路径外输入并重建适用性() {
+    let fixtures = fixtures();
+    let submissions: Value =
+        serde_json::from_str(include_str!("../../fixtures/survey-logic/submissions.json")).unwrap();
+    for case in submissions["cases"].as_array().unwrap() {
+        let document: Document = serde_json::from_value(
+            fixtures["documents"][case["document"].as_str().unwrap()].clone(),
+        )
+        .unwrap();
+        let answers: Vec<Answer> =
+            serde_json::from_str(case["answers_json"].as_str().unwrap()).unwrap();
+        let result = FlowEvaluator::new(&document)
+            .unwrap()
+            .evaluate_answers(answers.clone());
+        let actual = match result {
+            Ok(value) => {
+                // 同时守住 HTTP 实际调用的领域入口，避免只测纯引擎却遗漏提交接线。
+                assert_eq!(document.validate_answers(answers).unwrap(), value.answers);
+                json!({"value": value})
+            }
+            Err(error) => {
+                assert!(document.validate_answers(answers).is_err());
+                json!({"error": {"code": error.code, "question_id": error.question_id}})
+            }
+        };
+        assert!(
+            equivalent(&actual, &case["expected"]),
+            "提交样例：{}，实际 {actual}，预期 {}",
+            case["name"],
+            case["expected"]
+        );
+    }
 }

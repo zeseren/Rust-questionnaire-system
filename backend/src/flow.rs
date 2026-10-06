@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::domain::{Document, Question, QuestionKind};
+use crate::domain::{Answer, Document, Question, QuestionKind, canonical_number};
 use crate::logic::{
     CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType,
     compile_with_variables, error,
@@ -494,23 +494,42 @@ pub struct FlowSnapshot {
     pub cleared: Vec<Uuid>,
 }
 
-/// 状态只能通过事件修改，不能从客户端反序列化可信运行历史。
+/// 某题在最终有效路径上的适用性；跳过与可选未答不可混用。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerState {
+    /// 适用且已有有效答案。
+    Answered,
+    /// 适用但未回答。
+    Unanswered,
+    /// 被显示规则或流程分支跳过。
+    Skipped,
+}
+
+/// 已到达 complete 的重建结果，不表示数据库已经保存答卷。
+#[derive(Debug, Serialize)]
+pub struct EvaluatedResponse {
+    /// 用于存储与幂等比较的规范化答案。
+    pub answers: BTreeMap<Uuid, Value>,
+    /// 覆盖全部题目的适用性。
+    pub question_states: BTreeMap<Uuid, AnswerState>,
+    /// 从最终答案重建的路径，不是实际访问轨迹。
+    pub path: Vec<Uuid>,
+}
+
+/// 只持有编译结果与不可变题面；交互会话和服务端重建共用一次顺序求值。
 #[derive(Debug)]
-pub struct FlowSession<'a> {
+pub struct FlowEvaluator<'a> {
     document: &'a Document,
     logic: CompiledDocumentLogic,
     flow: CompiledFlow,
-    inputs: BTreeMap<Uuid, Value>,
-    history: Vec<usize>,
-    projection: Projection,
-    cleared: Vec<Uuid>,
 }
 
-impl<'a> FlowSession<'a> {
-    /// 绑定不可变文档并创建空填写会话；旧问卷使用内存中的单页流程。
+impl<'a> FlowEvaluator<'a> {
+    /// 编译并绑定文档；同一发布版本可复用此实例重建多份答卷。
     ///
     /// # 错误
-    /// 草稿、规则或流程不合法时拒绝启动。
+    /// 草稿结构、规则或流程不合法时返回定位错误。
     pub fn new(document: &'a Document) -> Result<Self, LogicError> {
         let empty = DocumentLogic {
             flow: None,
@@ -531,133 +550,131 @@ impl<'a> FlowSession<'a> {
             .flow
             .take()
             .unwrap_or_else(|| CompiledFlow::implicit(&document.questions));
-        let mut session = Self {
+        Ok(Self {
             document,
             logic,
             flow,
-            inputs: BTreeMap::new(),
-            history: vec![0],
-            projection: Projection::default(),
-            cleared: Vec::new(),
-        };
-        session.projection = session.project(&session.inputs);
-        Ok(session)
+        })
     }
 
-    /// 返回独立的只读快照，外部修改不会改变会话。
-    #[must_use]
-    pub fn snapshot(&self) -> FlowSnapshot {
-        let current = self.current();
-        FlowSnapshot {
-            current_node: self.flow.id(current),
-            outcome: match &self.flow.nodes[current] {
-                Node::End { outcome, .. } => Some(*outcome),
-                _ => None,
-            },
-            history: self
-                .history
+    /// 从入口重建最终答卷，不接受客户端历史或预先计算的可见题目。
+    ///
+    /// # 错误
+    /// 重复/未知题目、不适用答案、校验失败、未决条件或筛选结束均拒绝。
+    pub fn evaluate_answers(&self, answers: Vec<Answer>) -> Result<EvaluatedResponse, LogicError> {
+        let mut inputs = BTreeMap::new();
+        for answer in answers {
+            if !self
+                .document
+                .questions
                 .iter()
-                .map(|index| self.flow.id(*index))
-                .collect(),
-            path: self
-                .projection
+                .any(|question| question.id == answer.question_id)
+            {
+                return Err(error(
+                    LogicErrorCode::InvalidReference,
+                    "$.answers",
+                    Some(answer.question_id),
+                ));
+            }
+            if inputs.insert(answer.question_id, answer.value).is_some() {
+                return Err(error(
+                    LogicErrorCode::InvalidAnswer,
+                    "$.answers",
+                    Some(answer.question_id),
+                ));
+            }
+        }
+        self.finish(&inputs)
+    }
+
+    // 只用于数据库中的已规范化答案。JSONB 会展开指数，不能再次套用原始传输字节预算
+    // 或裸整数词法限制；恢复 f64 的规范表示后，仍完整重算规则、范围和路径。
+    pub(crate) fn evaluate_stored(
+        &self,
+        mut answers: BTreeMap<Uuid, Value>,
+    ) -> Result<EvaluatedResponse, LogicError> {
+        for question in &self.document.questions {
+            if matches!(
+                question.kind,
+                QuestionKind::Number { .. } | QuestionKind::Rating { .. }
+            ) && let Some(value) = answers.get_mut(&question.id)
+            {
+                let number = value
+                    .as_f64()
+                    .filter(|number| number.is_finite())
+                    .ok_or_else(|| {
+                        error(
+                            LogicErrorCode::InvalidAnswer,
+                            "$.answers",
+                            Some(question.id),
+                        )
+                    })?;
+                *value = canonical_number(number, question.id).map_err(|_| {
+                    error(
+                        LogicErrorCode::InvalidAnswer,
+                        "$.answers",
+                        Some(question.id),
+                    )
+                })?;
+            }
+        }
+        self.finish(&answers)
+    }
+
+    fn finish(&self, inputs: &BTreeMap<Uuid, Value>) -> Result<EvaluatedResponse, LogicError> {
+        let projection = self.project(inputs);
+        for question in &self.document.questions {
+            if let Some(code) = projection.errors.get(&question.id) {
+                return Err(error(*code, "$.answers", Some(question.id)));
+            }
+        }
+        if let Some(code) = projection.route_error {
+            return Err(error(code, "$.route", None));
+        }
+        for id in inputs.keys() {
+            if !projection.visible.contains(id) {
+                return Err(error(
+                    LogicErrorCode::InapplicableAnswer,
+                    "$.answers",
+                    Some(*id),
+                ));
+            }
+        }
+        match projection.path.last().map(|index| &self.flow.nodes[*index]) {
+            Some(Node::End {
+                outcome: FlowOutcome::Complete,
+                ..
+            }) => {}
+            Some(Node::End {
+                outcome: FlowOutcome::ScreenOut,
+                ..
+            }) => return Err(error(LogicErrorCode::ScreenedOut, "$.route", None)),
+            _ => return Err(error(LogicErrorCode::UnknownCondition, "$.route", None)),
+        }
+        let question_states = self
+            .document
+            .questions
+            .iter()
+            .map(|question| {
+                let state = if !projection.visible.contains(&question.id) {
+                    AnswerState::Skipped
+                } else if projection.answers.contains_key(&question.id) {
+                    AnswerState::Answered
+                } else {
+                    AnswerState::Unanswered
+                };
+                (question.id, state)
+            })
+            .collect();
+        Ok(EvaluatedResponse {
+            answers: projection.answers,
+            question_states,
+            path: projection
                 .path
                 .iter()
                 .map(|index| self.flow.id(*index))
                 .collect(),
-            visible: self.projection.visible.clone(),
-            answers: self.projection.answers.clone(),
-            errors: self.projection.errors.clone(),
-            route_error: self.projection.route_error,
-            cleared: self.cleared.clone(),
-        }
-    }
-
-    fn current(&self) -> usize {
-        self.history.last().copied().unwrap_or(0)
-    }
-
-    /// 应用事件；不合法事件不修改状态，改答会保留输入错误供修正。
-    ///
-    /// # 错误
-    /// 页面校验失败、条件未决或越过当前页面改答时返回定位错误。
-    pub fn dispatch(&mut self, event: FlowEvent) -> Result<(), LogicError> {
-        let invalid = || error(LogicErrorCode::InvalidEvent, "$.event", None);
-        match event {
-            FlowEvent::Change { question_id, value } => {
-                let Node::Page { questions, .. } = &self.flow.nodes[self.current()] else {
-                    return Err(invalid());
-                };
-                if !questions.contains(&question_id)
-                    || !self.projection.visible.contains(&question_id)
-                {
-                    return Err(invalid());
-                }
-                let mut inputs = self.inputs.clone();
-                inputs.insert(question_id, value);
-                let projection = self.project(&inputs);
-                self.cleared = inputs
-                    .keys()
-                    .filter(|id| !projection.visible.contains(id))
-                    .copied()
-                    .collect();
-                inputs.retain(|id, _| projection.visible.contains(id));
-                self.history.retain(|index| projection.path.contains(index));
-                self.inputs = inputs;
-                self.projection = projection;
-            }
-            FlowEvent::Previous => {
-                if self.history.len() <= 1 {
-                    return Err(invalid());
-                }
-                self.history.pop();
-                self.cleared.clear();
-            }
-            FlowEvent::Next => {
-                let current = self.current();
-                let Node::Page { questions, .. } = &self.flow.nodes[current] else {
-                    return Err(invalid());
-                };
-                for id in questions {
-                    if let Some(code) = self.projection.errors.get(id) {
-                        return Err(error(*code, "$.answers", Some(*id)));
-                    }
-                }
-                let Some(position) = self
-                    .projection
-                    .path
-                    .iter()
-                    .position(|index| *index == current)
-                else {
-                    return Err(invalid());
-                };
-                let next = self
-                    .projection
-                    .path
-                    .iter()
-                    .skip(position + 1)
-                    .find(|index| match &self.flow.nodes[**index] {
-                        Node::Page { questions, .. } => questions
-                            .iter()
-                            .any(|id| self.projection.visible.contains(id)),
-                        Node::End { .. } => true,
-                        Node::Branch { .. } => false,
-                    })
-                    .copied();
-                let Some(next) = next else {
-                    return Err(error(
-                        self.projection
-                            .route_error
-                            .unwrap_or(LogicErrorCode::UnknownCondition),
-                        "$.route",
-                        None,
-                    ));
-                };
-                self.history.push(next);
-                self.cleared.clear();
-            }
-        }
-        Ok(())
+        })
     }
 
     fn project(&self, inputs: &BTreeMap<Uuid, Value>) -> Projection {
@@ -784,5 +801,150 @@ impl<'a> FlowSession<'a> {
                 }
             }
         }
+    }
+}
+
+/// 状态只能通过事件修改，不能从客户端反序列化可信运行历史。
+#[derive(Debug)]
+pub struct FlowSession<'a> {
+    evaluator: FlowEvaluator<'a>,
+    inputs: BTreeMap<Uuid, Value>,
+    history: Vec<usize>,
+    projection: Projection,
+    cleared: Vec<Uuid>,
+}
+
+impl<'a> FlowSession<'a> {
+    /// 绑定不可变文档并创建空填写会话；旧问卷使用内存中的单页流程。
+    ///
+    /// # 错误
+    /// 草稿、规则或流程不合法时拒绝启动。
+    pub fn new(document: &'a Document) -> Result<Self, LogicError> {
+        let evaluator = FlowEvaluator::new(document)?;
+        let projection = evaluator.project(&BTreeMap::new());
+        Ok(Self {
+            evaluator,
+            inputs: BTreeMap::new(),
+            history: vec![0],
+            projection,
+            cleared: Vec::new(),
+        })
+    }
+
+    /// 返回独立的只读快照，外部修改不会改变会话。
+    #[must_use]
+    pub fn snapshot(&self) -> FlowSnapshot {
+        let current = self.current();
+        FlowSnapshot {
+            current_node: self.evaluator.flow.id(current),
+            outcome: match &self.evaluator.flow.nodes[current] {
+                Node::End { outcome, .. } => Some(*outcome),
+                _ => None,
+            },
+            history: self
+                .history
+                .iter()
+                .map(|index| self.evaluator.flow.id(*index))
+                .collect(),
+            path: self
+                .projection
+                .path
+                .iter()
+                .map(|index| self.evaluator.flow.id(*index))
+                .collect(),
+            visible: self.projection.visible.clone(),
+            answers: self.projection.answers.clone(),
+            errors: self.projection.errors.clone(),
+            route_error: self.projection.route_error,
+            cleared: self.cleared.clone(),
+        }
+    }
+
+    fn current(&self) -> usize {
+        self.history.last().copied().unwrap_or(0)
+    }
+
+    /// 应用事件；不合法事件不修改状态，改答会保留输入错误供修正。
+    ///
+    /// # 错误
+    /// 页面校验失败、条件未决或越过当前页面改答时返回定位错误。
+    pub fn dispatch(&mut self, event: FlowEvent) -> Result<(), LogicError> {
+        let invalid = || error(LogicErrorCode::InvalidEvent, "$.event", None);
+        match event {
+            FlowEvent::Change { question_id, value } => {
+                let Node::Page { questions, .. } = &self.evaluator.flow.nodes[self.current()]
+                else {
+                    return Err(invalid());
+                };
+                if !questions.contains(&question_id)
+                    || !self.projection.visible.contains(&question_id)
+                {
+                    return Err(invalid());
+                }
+                let mut inputs = self.inputs.clone();
+                inputs.insert(question_id, value);
+                let projection = self.evaluator.project(&inputs);
+                self.cleared = inputs
+                    .keys()
+                    .filter(|id| !projection.visible.contains(id))
+                    .copied()
+                    .collect();
+                inputs.retain(|id, _| projection.visible.contains(id));
+                self.history.retain(|index| projection.path.contains(index));
+                self.inputs = inputs;
+                self.projection = projection;
+            }
+            FlowEvent::Previous => {
+                if self.history.len() <= 1 {
+                    return Err(invalid());
+                }
+                self.history.pop();
+                self.cleared.clear();
+            }
+            FlowEvent::Next => {
+                let current = self.current();
+                let Node::Page { questions, .. } = &self.evaluator.flow.nodes[current] else {
+                    return Err(invalid());
+                };
+                for id in questions {
+                    if let Some(code) = self.projection.errors.get(id) {
+                        return Err(error(*code, "$.answers", Some(*id)));
+                    }
+                }
+                let Some(position) = self
+                    .projection
+                    .path
+                    .iter()
+                    .position(|index| *index == current)
+                else {
+                    return Err(invalid());
+                };
+                let next = self
+                    .projection
+                    .path
+                    .iter()
+                    .skip(position + 1)
+                    .find(|index| match &self.evaluator.flow.nodes[**index] {
+                        Node::Page { questions, .. } => questions
+                            .iter()
+                            .any(|id| self.projection.visible.contains(id)),
+                        Node::End { .. } => true,
+                        Node::Branch { .. } => false,
+                    })
+                    .copied();
+                let Some(next) = next else {
+                    return Err(error(
+                        self.projection
+                            .route_error
+                            .unwrap_or(LogicErrorCode::UnknownCondition),
+                        "$.route",
+                        None,
+                    ));
+                };
+                self.history.push(next);
+                self.cleared.clear();
+            }
+        }
+        Ok(())
     }
 }

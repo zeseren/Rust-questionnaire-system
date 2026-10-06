@@ -303,7 +303,15 @@ async function openReceipt(receipt: string) {
         class="text-answer"
       >
         <h3>{{ index + 1 }}. {{ question.title }}</h3>
-        <p class="plain-text">{{ answerText(question, detail.answers[question.id]) }}</p>
+        <p class="plain-text">
+          {{
+            detail.question_states[question.id] === 'skipped'
+              ? '规则跳过'
+              : detail.question_states[question.id] === 'unanswered'
+                ? '适用未答'
+                : answerText(question, detail.answers[question.id])
+          }}
+        </p>
       </div>
     </template>
   </Modal>

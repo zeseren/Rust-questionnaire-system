@@ -27,6 +27,10 @@ function width(value: ExactNumber | null) {
       </h2>
       <span class="hint">{{ question.answered_count }} 份有效回答</span>
     </div>
+    <p class="hint mb">
+      适用 {{ question.applicable_count }} 份 · 适用未答 {{ question.unanswered_count }} 份 ·
+      规则跳过 {{ question.skipped_count }} 份
+    </p>
     <template v-if="question.type === 'single_choice' || question.type === 'multiple_choice'">
       <div class="distribution">
         <div v-for="option in question.options" :key="option.option_id">

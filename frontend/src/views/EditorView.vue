@@ -125,6 +125,7 @@ async function save() {
   }
 }
 async function preparePublish() {
+  if (draft.value?.logic) return
   busy.value = true
   error.value = ''
   fieldError.value = null
@@ -264,12 +265,17 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
         <button class="button" :disabled="locked || !changed" @click="save">
           {{ busy ? '正在处理…' : '保存修改' }}
         </button>
-        <button class="button button-primary" :disabled="locked || changed" @click="preparePublish">
+        <button
+          class="button button-primary"
+          :disabled="locked || changed || !!draft?.logic"
+          @click="preparePublish"
+        >
           {{ survey.current_version_id ? '发布新版本' : '发布问卷' }}
         </button>
       </div>
     </div>
     <ErrorNotice :message="error" :retry="!survey" @retry="load" />
+    <p v-if="draft?.logic" class="notice">此问卷暂未开放网页填写，当前页面暂不支持发布。</p>
     <div v-if="conflict" class="notice">
       <div class="grow">当前编辑内容已保留。可以先下载草稿，再读取服务器上的最新内容。</div>
       <div class="actions">

@@ -16,6 +16,7 @@ const errors = ref<Record<string, string>>({})
 const mobile = ref(false)
 const feedback = ref('')
 function validate() {
+  if (preview.data.value?.document.logic) return
   if (!preview.data.value?.publishable) {
     feedback.value = '请先修正发布校验问题，再体验填写校验。'
     return
@@ -52,9 +53,17 @@ function validate() {
             收集目的：{{ preview.data.value.document.purpose || '尚未填写' }}
           </p>
         </section>
-        <SurveyFields v-model="values" :document="preview.data.value.document" :errors="errors" />
+        <p v-if="preview.data.value.document.logic" class="notice mt">
+          此问卷的分步预览暂未开放，请先返回编辑核对题目。
+        </p>
+        <SurveyFields
+          v-else
+          v-model="values"
+          :document="preview.data.value.document"
+          :errors="errors"
+        />
         <p v-if="feedback" class="notice mt" role="status">{{ feedback }}</p>
-        <div class="fill-footer">
+        <div v-if="!preview.data.value.document.logic" class="fill-footer">
           <span class="hint">此处的回答仅用于预览。</span>
           <button class="button button-primary" @click="validate">体验填写校验</button>
         </div>
