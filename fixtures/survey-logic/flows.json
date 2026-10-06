@@ -1,0 +1,2997 @@
+{
+  "description": "共享人工预期：编译案例只替换指定字段；事件 JSON 保留原始数字。每步检查列出的快照字段，失败事件还必须保持整个状态不变。",
+  "documents": {
+    "diamond": {
+      "title": "流程回归",
+      "description": "",
+      "purpose": "验证流程契约",
+      "thank_you": "完成",
+      "questions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "title": "入口选择",
+          "required": true,
+          "type": "single_choice",
+          "options": [
+            {
+              "id": "00000000-0000-4000-8000-000000000101",
+              "label": "甲"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000102",
+              "label": "乙"
+            }
+          ]
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "title": "数字",
+          "required": false,
+          "type": "number",
+          "integer": false,
+          "min": null,
+          "max": null
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "title": "文字",
+          "type": "text",
+          "required": true,
+          "max_length": 200
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "title": "文字",
+          "type": "text",
+          "required": false,
+          "max_length": 200
+        }
+      ],
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000002001",
+            "value_type": "number",
+            "expression": {
+              "op": "answer",
+              "question_id": "00000000-0000-4000-8000-000000000002"
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000002002",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "divide",
+              "left": {
+                "op": "number",
+                "value": "1"
+              },
+              "right": {
+                "op": "number",
+                "value": "0"
+              }
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000002",
+            "validate": {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+              },
+              "right": {
+                "op": "number",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "required_if": {
+              "op": "coalesce",
+              "value": {
+                "op": "compare",
+                "comparison": "gt",
+                "left": {
+                  "op": "variable",
+                  "variable_id": "00000000-0000-4000-8000-000000002001"
+                },
+                "right": {
+                  "op": "number",
+                  "value": "0"
+                }
+              },
+              "fallback": {
+                "op": "boolean",
+                "value": false
+              }
+            }
+          }
+        ],
+        "flow": {
+          "entry": "00000000-0000-4000-8000-000000001001",
+          "nodes": [
+            {
+              "type": "page",
+              "id": "00000000-0000-4000-8000-000000001001",
+              "question_ids": [
+                "00000000-0000-4000-8000-000000000001"
+              ],
+              "next": "00000000-0000-4000-8000-000000001002"
+            },
+            {
+              "type": "branch",
+              "id": "00000000-0000-4000-8000-000000001002",
+              "branches": [
+                {
+                  "when": {
+                    "op": "selected",
+                    "question_id": "00000000-0000-4000-8000-000000000001",
+                    "option_id": "00000000-0000-4000-8000-000000000101"
+                  },
+                  "target": "00000000-0000-4000-8000-000000001003"
+                }
+              ],
+              "otherwise": "00000000-0000-4000-8000-000000001004"
+            },
+            {
+              "type": "page",
+              "id": "00000000-0000-4000-8000-000000001003",
+              "question_ids": [
+                "00000000-0000-4000-8000-000000000002"
+              ],
+              "next": "00000000-0000-4000-8000-000000001005"
+            },
+            {
+              "type": "page",
+              "id": "00000000-0000-4000-8000-000000001004",
+              "question_ids": [
+                "00000000-0000-4000-8000-000000000003"
+              ],
+              "next": "00000000-0000-4000-8000-000000001005"
+            },
+            {
+              "type": "page",
+              "id": "00000000-0000-4000-8000-000000001005",
+              "question_ids": [
+                "00000000-0000-4000-8000-000000000004"
+              ],
+              "next": "00000000-0000-4000-8000-000000001006"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000001006",
+              "outcome": "complete"
+            }
+          ]
+        }
+      }
+    },
+    "priority": {
+      "title": "流程回归",
+      "description": "",
+      "purpose": "验证流程契约",
+      "thank_you": "完成",
+      "questions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "title": "入口选择",
+          "required": false,
+          "type": "single_choice",
+          "options": [
+            {
+              "id": "00000000-0000-4000-8000-000000000101",
+              "label": "甲"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000102",
+              "label": "乙"
+            }
+          ]
+        }
+      ],
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [],
+        "rules": [],
+        "flow": {
+          "entry": "00000000-0000-4000-8000-000000001001",
+          "nodes": [
+            {
+              "type": "page",
+              "id": "00000000-0000-4000-8000-000000001001",
+              "question_ids": [
+                "00000000-0000-4000-8000-000000000001"
+              ],
+              "next": "00000000-0000-4000-8000-000000001002"
+            },
+            {
+              "type": "branch",
+              "id": "00000000-0000-4000-8000-000000001002",
+              "branches": [
+                {
+                  "when": {
+                    "op": "selected",
+                    "question_id": "00000000-0000-4000-8000-000000000001",
+                    "option_id": "00000000-0000-4000-8000-000000000101"
+                  },
+                  "target": "00000000-0000-4000-8000-000000001006"
+                },
+                {
+                  "when": {
+                    "op": "boolean",
+                    "value": true
+                  },
+                  "target": "00000000-0000-4000-8000-000000001007"
+                }
+              ],
+              "otherwise": "00000000-0000-4000-8000-000000001007"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000001006",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000001007",
+              "outcome": "screen_out"
+            }
+          ]
+        }
+      }
+    },
+    "cascade": {
+      "title": "流程回归",
+      "description": "",
+      "purpose": "验证流程契约",
+      "thank_you": "完成",
+      "questions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "title": "入口选择",
+          "required": false,
+          "type": "single_choice",
+          "options": [
+            {
+              "id": "00000000-0000-4000-8000-000000000101",
+              "label": "甲"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000102",
+              "label": "乙"
+            }
+          ]
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "title": "文字",
+          "type": "text",
+          "required": true,
+          "max_length": 4
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "title": "评分",
+          "required": false,
+          "type": "rating",
+          "min": 1,
+          "max": 5,
+          "min_label": "低",
+          "max_label": "高"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "title": "文字",
+          "type": "textarea",
+          "required": true,
+          "max_length": 200
+        }
+      ],
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000002002",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "divide",
+              "left": {
+                "op": "number",
+                "value": "1"
+              },
+              "right": {
+                "op": "number",
+                "value": "0"
+              }
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000002",
+            "visible_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "required_if": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000002002"
+              },
+              "right": {
+                "op": "number",
+                "value": "0"
+              }
+            }
+          },
+          {
+            "question_id": "00000000-0000-4000-8000-000000000003",
+            "visible_if": {
+              "op": "answered",
+              "question_id": "00000000-0000-4000-8000-000000000002"
+            },
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "validate": {
+              "op": "compare",
+              "comparison": "le",
+              "left": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000003"
+              },
+              "right": {
+                "op": "number",
+                "value": "3"
+              }
+            }
+          },
+          {
+            "question_id": "00000000-0000-4000-8000-000000000004",
+            "visible_if": {
+              "op": "boolean",
+              "value": false
+            }
+          }
+        ],
+        "flow": {
+          "entry": "00000000-0000-4000-8000-000000001001",
+          "nodes": [
+            {
+              "type": "page",
+              "id": "00000000-0000-4000-8000-000000001001",
+              "question_ids": [
+                "00000000-0000-4000-8000-000000000001",
+                "00000000-0000-4000-8000-000000000002",
+                "00000000-0000-4000-8000-000000000003"
+              ],
+              "next": "00000000-0000-4000-8000-000000001003"
+            },
+            {
+              "type": "page",
+              "id": "00000000-0000-4000-8000-000000001003",
+              "question_ids": [
+                "00000000-0000-4000-8000-000000000004"
+              ],
+              "next": "00000000-0000-4000-8000-000000001006"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000001006",
+              "outcome": "complete"
+            }
+          ]
+        }
+      }
+    },
+    "lazy": {
+      "title": "流程回归",
+      "description": "",
+      "purpose": "验证流程契约",
+      "thank_you": "完成",
+      "questions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "title": "入口选择",
+          "required": false,
+          "type": "single_choice",
+          "options": [
+            {
+              "id": "00000000-0000-4000-8000-000000000101",
+              "label": "甲"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000102",
+              "label": "乙"
+            }
+          ]
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "title": "文字",
+          "type": "text",
+          "required": false,
+          "max_length": 200
+        }
+      ],
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000002002",
+            "value_type": "number",
+            "expression": {
+              "op": "arithmetic",
+              "operator": "divide",
+              "left": {
+                "op": "number",
+                "value": "1"
+              },
+              "right": {
+                "op": "number",
+                "value": "0"
+              }
+            }
+          }
+        ],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000002",
+            "visible_if": {
+              "op": "any",
+              "expressions": [
+                {
+                  "op": "not",
+                  "expression": {
+                    "op": "answered",
+                    "question_id": "00000000-0000-4000-8000-000000000001"
+                  }
+                },
+                {
+                  "op": "compare",
+                  "comparison": "gt",
+                  "left": {
+                    "op": "variable",
+                    "variable_id": "00000000-0000-4000-8000-000000002002"
+                  },
+                  "right": {
+                    "op": "number",
+                    "value": "0"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "old": {
+      "title": "流程回归",
+      "description": "",
+      "purpose": "验证流程契约",
+      "thank_you": "完成",
+      "questions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "title": "入口选择",
+          "required": false,
+          "type": "single_choice",
+          "options": [
+            {
+              "id": "00000000-0000-4000-8000-000000000101",
+              "label": "甲"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000102",
+              "label": "乙"
+            }
+          ]
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "title": "多选",
+          "type": "multiple_choice",
+          "required": false,
+          "options": [
+            {
+              "id": "00000000-0000-4000-8000-000000000103",
+              "label": "丙"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000104",
+              "label": "丁"
+            }
+          ],
+          "min_choices": 1,
+          "max_choices": 2
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "title": "文字",
+          "type": "text",
+          "required": false,
+          "max_length": 200
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "title": "数字",
+          "required": false,
+          "type": "number",
+          "integer": false,
+          "min": null,
+          "max": null
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "title": "文字",
+          "type": "textarea",
+          "required": false,
+          "max_length": 200
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000006",
+          "title": "评分",
+          "required": false,
+          "type": "rating",
+          "min": 1,
+          "max": 5,
+          "min_label": "低",
+          "max_label": "高"
+        }
+      ]
+    },
+    "dynamic": {
+      "title": "流程回归",
+      "description": "",
+      "purpose": "验证流程契约",
+      "thank_you": "完成",
+      "questions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "title": "入口选择",
+          "required": false,
+          "type": "single_choice",
+          "options": [
+            {
+              "id": "00000000-0000-4000-8000-000000000101",
+              "label": "甲"
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000102",
+              "label": "乙"
+            }
+          ]
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "title": "文字",
+          "type": "text",
+          "required": false,
+          "max_length": 200
+        }
+      ],
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [],
+        "rules": [
+          {
+            "question_id": "00000000-0000-4000-8000-000000000002",
+            "required_if": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "compilation": [
+    {
+      "name": "完整菱形流程与受保护的变量引用可编译",
+      "document": "diamond",
+      "edits": [],
+      "error": null
+    },
+    {
+      "name": "回边被拒绝",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "flow",
+            "nodes",
+            2,
+            "next"
+          ],
+          "value": "00000000-0000-4000-8000-000000001001"
+        }
+      ],
+      "error": "invalid_flow"
+    },
+    {
+      "name": "目标不存在被拒绝",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "flow",
+            "nodes",
+            2,
+            "next"
+          ],
+          "value": "00000000-0000-4000-8000-000000009999"
+        }
+      ],
+      "error": "invalid_flow"
+    },
+    {
+      "name": "结构上不可达的节点被拒绝",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "flow",
+            "nodes",
+            1,
+            "otherwise"
+          ],
+          "value": "00000000-0000-4000-8000-000000001003"
+        }
+      ],
+      "error": "invalid_flow"
+    },
+    {
+      "name": "题目重复归属被拒绝",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "flow",
+            "nodes",
+            3,
+            "question_ids"
+          ],
+          "value": [
+            "00000000-0000-4000-8000-000000000002"
+          ]
+        }
+      ],
+      "error": "invalid_flow"
+    },
+    {
+      "name": "题目遗漏被拒绝",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "flow",
+            "nodes",
+            4,
+            "question_ids"
+          ],
+          "value": []
+        }
+      ],
+      "error": "invalid_flow"
+    },
+    {
+      "name": "流程身份不得与变量冲突",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "flow",
+            "nodes",
+            5,
+            "id"
+          ],
+          "value": "00000000-0000-4000-8000-000000002001"
+        }
+      ],
+      "error": "invalid_flow"
+    },
+    {
+      "name": "间接读取未来页即使有缺失默认值也拒绝",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "flow",
+            "nodes",
+            1,
+            "branches",
+            0,
+            "when"
+          ],
+          "value": {
+            "op": "coalesce",
+            "value": {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {
+                "op": "variable",
+                "variable_id": "00000000-0000-4000-8000-000000002001"
+              },
+              "right": {
+                "op": "number",
+                "value": "0"
+              }
+            },
+            "fallback": {
+              "op": "boolean",
+              "value": false
+            }
+          }
+        }
+      ],
+      "error": "forward_reference"
+    },
+    {
+      "name": "合流不能直接读取分支独有答案",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "rules",
+            1,
+            "required_if"
+          ],
+          "value": {
+            "op": "compare",
+            "comparison": "gt",
+            "left": {
+              "op": "answer",
+              "question_id": "00000000-0000-4000-8000-000000000002"
+            },
+            "right": {
+              "op": "number",
+              "value": "0"
+            }
+          }
+        }
+      ],
+      "error": "unavailable_dependency"
+    },
+    {
+      "name": "合流不能借变量绕过缺失检查",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "rules",
+            1,
+            "required_if"
+          ],
+          "value": {
+            "op": "compare",
+            "comparison": "gt",
+            "left": {
+              "op": "variable",
+              "variable_id": "00000000-0000-4000-8000-000000002001"
+            },
+            "right": {
+              "op": "number",
+              "value": "0"
+            }
+          }
+        }
+      ],
+      "error": "unavailable_dependency"
+    },
+    {
+      "name": "先检查已回答再读取允许合流",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "rules",
+            1,
+            "required_if"
+          ],
+          "value": {
+            "op": "all",
+            "expressions": [
+              {
+                "op": "answered",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+              },
+              {
+                "op": "compare",
+                "comparison": "gt",
+                "left": {
+                  "op": "variable",
+                  "variable_id": "00000000-0000-4000-8000-000000002001"
+                },
+                "right": {
+                  "op": "number",
+                  "value": "0"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "先读答案再补已回答检查无效",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "rules",
+            1,
+            "required_if"
+          ],
+          "value": {
+            "op": "all",
+            "expressions": [
+              {
+                "op": "compare",
+                "comparison": "gt",
+                "left": {
+                  "op": "variable",
+                  "variable_id": "00000000-0000-4000-8000-000000002001"
+                },
+                "right": {
+                  "op": "number",
+                  "value": "0"
+                }
+              },
+              {
+                "op": "answered",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+              }
+            ]
+          }
+        }
+      ],
+      "error": "unavailable_dependency"
+    },
+    {
+      "name": "合流允许用析取保护未回答",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "rules",
+            1,
+            "required_if"
+          ],
+          "value": {
+            "op": "any",
+            "expressions": [
+              {
+                "op": "not",
+                "expression": {
+                  "op": "answered",
+                  "question_id": "00000000-0000-4000-8000-000000000002"
+                }
+              },
+              {
+                "op": "compare",
+                "comparison": "gt",
+                "left": {
+                  "op": "variable",
+                  "variable_id": "00000000-0000-4000-8000-000000002001"
+                },
+                "right": {
+                  "op": "number",
+                  "value": "0"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "name": "分支守卫必须为布尔",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "flow",
+            "nodes",
+            1,
+            "branches",
+            0,
+            "when"
+          ],
+          "value": {
+            "op": "number",
+            "value": "1"
+          }
+        }
+      ],
+      "error": "type_mismatch"
+    },
+    {
+      "name": "节点数仍有限制",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "flow",
+            "nodes"
+          ],
+          "value": [
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003000",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003001",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003002",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003003",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003004",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003005",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003006",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003007",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003008",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003009",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003010",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003011",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003012",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003013",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003014",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003015",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003016",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003017",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003018",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003019",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003020",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003021",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003022",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003023",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003024",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003025",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003026",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003027",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003028",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003029",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003030",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003031",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003032",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003033",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003034",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003035",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003036",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003037",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003038",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003039",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003040",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003041",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003042",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003043",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003044",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003045",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003046",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003047",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003048",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003049",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003050",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003051",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003052",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003053",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003054",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003055",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003056",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003057",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003058",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003059",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003060",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003061",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003062",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003063",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003064",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003065",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003066",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003067",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003068",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003069",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003070",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003071",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003072",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003073",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003074",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003075",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003076",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003077",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003078",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003079",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003080",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003081",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003082",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003083",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003084",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003085",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003086",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003087",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003088",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003089",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003090",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003091",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003092",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003093",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003094",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003095",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003096",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003097",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003098",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003099",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003100",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003101",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003102",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003103",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003104",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003105",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003106",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003107",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003108",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003109",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003110",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003111",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003112",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003113",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003114",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003115",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003116",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003117",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003118",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003119",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003120",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003121",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003122",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003123",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003124",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003125",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003126",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003127",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003128",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003129",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003130",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003131",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003132",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003133",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003134",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003135",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003136",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003137",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003138",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003139",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003140",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003141",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003142",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003143",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003144",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003145",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003146",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003147",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003148",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003149",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003150",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003151",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003152",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003153",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003154",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003155",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003156",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003157",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003158",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003159",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003160",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003161",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003162",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003163",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003164",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003165",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003166",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003167",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003168",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003169",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003170",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003171",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003172",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003173",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003174",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003175",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003176",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003177",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003178",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003179",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003180",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003181",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003182",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003183",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003184",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003185",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003186",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003187",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003188",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003189",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003190",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003191",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003192",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003193",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003194",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003195",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003196",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003197",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003198",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003199",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003200",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003201",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003202",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003203",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003204",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003205",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003206",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003207",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003208",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003209",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003210",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003211",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003212",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003213",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003214",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003215",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003216",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003217",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003218",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003219",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003220",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003221",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003222",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003223",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003224",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003225",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003226",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003227",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003228",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003229",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003230",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003231",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003232",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003233",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003234",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003235",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003236",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003237",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003238",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003239",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003240",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003241",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003242",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003243",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003244",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003245",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003246",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003247",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003248",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003249",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003250",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003251",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003252",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003253",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003254",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003255",
+              "outcome": "complete"
+            },
+            {
+              "type": "end",
+              "id": "00000000-0000-4000-8000-000000003256",
+              "outcome": "complete"
+            }
+          ]
+        }
+      ],
+      "error": "limit_exceeded"
+    },
+    {
+      "name": "永假分支必须删去而不能制造假可达节点",
+      "document": "diamond",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "flow",
+            "nodes",
+            1,
+            "branches",
+            0,
+            "when"
+          ],
+          "value": {
+            "op": "boolean",
+            "value": false
+          }
+        }
+      ],
+      "error": "invalid_flow"
+    },
+    {
+      "name": "无条件真不能遮蔽后续分支",
+      "document": "priority",
+      "edits": [
+        {
+          "path": [
+            "logic",
+            "flow",
+            "nodes",
+            1,
+            "branches",
+            0,
+            "when"
+          ],
+          "value": {
+            "op": "boolean",
+            "value": true
+          }
+        }
+      ],
+      "error": "invalid_flow"
+    }
+  ],
+  "sessions": [
+    {
+      "name": "分支改答清除旧答案和错误并保留合流答案",
+      "document": "diamond",
+      "steps": [
+        {
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001001",
+            "path": [
+              "00000000-0000-4000-8000-000000001001"
+            ],
+            "visible": [
+              "00000000-0000-4000-8000-000000000001"
+            ],
+            "answers": {},
+            "errors": {
+              "00000000-0000-4000-8000-000000000001": "required_answer"
+            },
+            "route_error": "unknown_condition",
+            "outcome": null,
+            "history": [
+              "00000000-0000-4000-8000-000000001001"
+            ],
+            "cleared": []
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {},
+          "error": "required_answer"
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":3}",
+          "expected": {},
+          "error": "invalid_event"
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000101\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001001",
+            "path": [
+              "00000000-0000-4000-8000-000000001001",
+              "00000000-0000-4000-8000-000000001003",
+              "00000000-0000-4000-8000-000000001005",
+              "00000000-0000-4000-8000-000000001006"
+            ],
+            "visible": [
+              "00000000-0000-4000-8000-000000000001",
+              "00000000-0000-4000-8000-000000000002",
+              "00000000-0000-4000-8000-000000000004"
+            ],
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101"
+            },
+            "errors": {},
+            "route_error": null
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001003",
+            "history": [
+              "00000000-0000-4000-8000-000000001001",
+              "00000000-0000-4000-8000-000000001003"
+            ]
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":7}",
+          "expected": {
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101",
+              "00000000-0000-4000-8000-000000000002": 7
+            },
+            "errors": {
+              "00000000-0000-4000-8000-000000000004": "required_answer"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001005"
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000004\",\"value\":\"汇合答案\"}",
+          "expected": {
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101",
+              "00000000-0000-4000-8000-000000000002": 7,
+              "00000000-0000-4000-8000-000000000004": "汇合答案"
+            },
+            "errors": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"previous\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001003"
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":-1}",
+          "expected": {
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101",
+              "00000000-0000-4000-8000-000000000004": "汇合答案"
+            },
+            "errors": {
+              "00000000-0000-4000-8000-000000000002": "constraint_failed"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {},
+          "error": "constraint_failed"
+        },
+        {
+          "event_json": "{\"type\":\"previous\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001001"
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000102\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001001",
+            "path": [
+              "00000000-0000-4000-8000-000000001001",
+              "00000000-0000-4000-8000-000000001004",
+              "00000000-0000-4000-8000-000000001005",
+              "00000000-0000-4000-8000-000000001006"
+            ],
+            "visible": [
+              "00000000-0000-4000-8000-000000000001",
+              "00000000-0000-4000-8000-000000000003",
+              "00000000-0000-4000-8000-000000000004"
+            ],
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000102",
+              "00000000-0000-4000-8000-000000000004": "汇合答案"
+            },
+            "errors": {
+              "00000000-0000-4000-8000-000000000003": "required_answer"
+            },
+            "cleared": [
+              "00000000-0000-4000-8000-000000000002"
+            ],
+            "history": [
+              "00000000-0000-4000-8000-000000001001"
+            ]
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001004"
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000003\",\"value\":\"乙路\"}",
+          "expected": {
+            "errors": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001005",
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000102",
+              "00000000-0000-4000-8000-000000000003": "乙路",
+              "00000000-0000-4000-8000-000000000004": "汇合答案"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"previous\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001004"
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"previous\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001001"
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000101\"}",
+          "expected": {
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101",
+              "00000000-0000-4000-8000-000000000004": "汇合答案"
+            },
+            "errors": {},
+            "cleared": [
+              "00000000-0000-4000-8000-000000000003"
+            ],
+            "path": [
+              "00000000-0000-4000-8000-000000001001",
+              "00000000-0000-4000-8000-000000001003",
+              "00000000-0000-4000-8000-000000001005",
+              "00000000-0000-4000-8000-000000001006"
+            ]
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001003"
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001005"
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001006",
+            "outcome": "complete",
+            "history": [
+              "00000000-0000-4000-8000-000000001001",
+              "00000000-0000-4000-8000-000000001003",
+              "00000000-0000-4000-8000-000000001005",
+              "00000000-0000-4000-8000-000000001006"
+            ]
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {},
+          "error": "invalid_event"
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000004\",\"value\":\"不能改\"}",
+          "expected": {},
+          "error": "invalid_event"
+        },
+        {
+          "event_json": "{\"type\":\"previous\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001005",
+            "outcome": null
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "name": "高优先级未知不让位于低优先级真且筛选结束无副作用",
+      "document": "priority",
+      "steps": [
+        {
+          "expected": {
+            "path": [
+              "00000000-0000-4000-8000-000000001001"
+            ],
+            "errors": {},
+            "route_error": "unknown_condition",
+            "outcome": null
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {},
+          "error": "unknown_condition"
+        },
+        {
+          "event_json": "{\"type\":\"previous\"}",
+          "expected": {},
+          "error": "invalid_event"
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000102\"}",
+          "expected": {
+            "path": [
+              "00000000-0000-4000-8000-000000001001",
+              "00000000-0000-4000-8000-000000001007"
+            ],
+            "route_error": null,
+            "current_node": "00000000-0000-4000-8000-000000001001",
+            "outcome": null
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001007",
+            "outcome": "screen_out",
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000102"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {},
+          "error": "invalid_event"
+        }
+      ]
+    },
+    {
+      "name": "同页级联隐藏清理必填错误并跳过空白页",
+      "document": "cascade",
+      "steps": [
+        {
+          "expected": {
+            "visible": [
+              "00000000-0000-4000-8000-000000000001"
+            ],
+            "errors": {},
+            "path": [
+              "00000000-0000-4000-8000-000000001001",
+              "00000000-0000-4000-8000-000000001003",
+              "00000000-0000-4000-8000-000000001006"
+            ]
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":\"越界\"}",
+          "expected": {},
+          "error": "invalid_event"
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000101\"}",
+          "expected": {
+            "visible": [
+              "00000000-0000-4000-8000-000000000001",
+              "00000000-0000-4000-8000-000000000002"
+            ],
+            "errors": {
+              "00000000-0000-4000-8000-000000000002": "required_answer"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":\"😀😀😀😀\"}",
+          "expected": {
+            "visible": [
+              "00000000-0000-4000-8000-000000000001",
+              "00000000-0000-4000-8000-000000000002",
+              "00000000-0000-4000-8000-000000000003"
+            ],
+            "errors": {
+              "00000000-0000-4000-8000-000000000003": "required_answer"
+            },
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101",
+              "00000000-0000-4000-8000-000000000002": "😀😀😀😀"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000003\",\"value\":4}",
+          "expected": {
+            "errors": {
+              "00000000-0000-4000-8000-000000000003": "constraint_failed"
+            },
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101",
+              "00000000-0000-4000-8000-000000000002": "😀😀😀😀"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":\"五个文字超\"}",
+          "expected": {
+            "visible": [
+              "00000000-0000-4000-8000-000000000001",
+              "00000000-0000-4000-8000-000000000002"
+            ],
+            "errors": {
+              "00000000-0000-4000-8000-000000000002": "invalid_answer"
+            },
+            "cleared": [
+              "00000000-0000-4000-8000-000000000003"
+            ],
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":\"合法\"}",
+          "expected": {
+            "visible": [
+              "00000000-0000-4000-8000-000000000001",
+              "00000000-0000-4000-8000-000000000002",
+              "00000000-0000-4000-8000-000000000003"
+            ],
+            "errors": {
+              "00000000-0000-4000-8000-000000000003": "required_answer"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000003\",\"value\":3}",
+          "expected": {
+            "errors": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000102\"}",
+          "expected": {
+            "visible": [
+              "00000000-0000-4000-8000-000000000001"
+            ],
+            "errors": {},
+            "cleared": [
+              "00000000-0000-4000-8000-000000000002",
+              "00000000-0000-4000-8000-000000000003"
+            ],
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000102"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {
+            "current_node": "00000000-0000-4000-8000-000000001006",
+            "history": [
+              "00000000-0000-4000-8000-000000001001",
+              "00000000-0000-4000-8000-000000001006"
+            ],
+            "outcome": "complete"
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "name": "变量按实际读取计算且运行错误不能当作隐藏",
+      "document": "lazy",
+      "steps": [
+        {
+          "expected": {
+            "visible": [
+              "00000000-0000-4000-8000-000000000001",
+              "00000000-0000-4000-8000-000000000002"
+            ],
+            "errors": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000101\"}",
+          "expected": {
+            "visible": [
+              "00000000-0000-4000-8000-000000000001",
+              "00000000-0000-4000-8000-000000000002"
+            ],
+            "errors": {
+              "00000000-0000-4000-8000-000000000002": "arithmetic_error"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {},
+          "error": "arithmetic_error"
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":null}",
+          "expected": {
+            "visible": [
+              "00000000-0000-4000-8000-000000000001",
+              "00000000-0000-4000-8000-000000000002"
+            ],
+            "errors": {},
+            "answers": {}
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "name": "旧文档六题型规范化仍采用同一单页契约",
+      "document": "old",
+      "steps": [
+        {
+          "expected": {
+            "current_node": "00000000-0000-0000-0000-000000000000",
+            "visible": [
+              "00000000-0000-4000-8000-000000000001",
+              "00000000-0000-4000-8000-000000000002",
+              "00000000-0000-4000-8000-000000000003",
+              "00000000-0000-4000-8000-000000000004",
+              "00000000-0000-4000-8000-000000000005",
+              "00000000-0000-4000-8000-000000000006"
+            ],
+            "errors": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":[\"00000000-0000-4000-8000-000000000104\",\"00000000-0000-4000-8000-000000000103\"]}",
+          "expected": {
+            "answers": {
+              "00000000-0000-4000-8000-000000000002": [
+                "00000000-0000-4000-8000-000000000103",
+                "00000000-0000-4000-8000-000000000104"
+              ]
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":[\"00000000-0000-4000-8000-000000000103\",\"00000000-0000-4000-8000-000000000103\"]}",
+          "expected": {
+            "answers": {},
+            "errors": {
+              "00000000-0000-4000-8000-000000000002": "invalid_answer"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":[]}",
+          "expected": {
+            "errors": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000003\",\"value\":\"\\n\"}",
+          "expected": {
+            "errors": {
+              "00000000-0000-4000-8000-000000000003": "invalid_answer"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000003\",\"value\":\" \\t\"}",
+          "expected": {
+            "errors": {},
+            "answers": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000005\",\"value\":\"\"}",
+          "expected": {
+            "answers": {},
+            "errors": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000005\",\"value\":\"﻿\"}",
+          "expected": {
+            "answers": {
+              "00000000-0000-4000-8000-000000000005": "﻿"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000004\",\"value\":9007199254740993}",
+          "expected": {
+            "errors": {
+              "00000000-0000-4000-8000-000000000004": "invalid_answer"
+            },
+            "answers": {
+              "00000000-0000-4000-8000-000000000005": "﻿"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000004\",\"value\":1e20}",
+          "expected": {
+            "errors": {},
+            "answers": {
+              "00000000-0000-4000-8000-000000000004": 100000000000000000000,
+              "00000000-0000-4000-8000-000000000005": "﻿"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000006\",\"value\":\"3\"}",
+          "expected": {
+            "errors": {
+              "00000000-0000-4000-8000-000000000006": "invalid_answer"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000006\",\"value\":3}",
+          "expected": {
+            "errors": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {
+            "outcome": "complete"
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "name": "动态必填未知不能默认为可选且已有输入仍需重校验",
+      "document": "dynamic",
+      "steps": [
+        {
+          "expected": {
+            "errors": {
+              "00000000-0000-4000-8000-000000000002": "unknown_condition"
+            },
+            "answers": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":\"保留输入\"}",
+          "expected": {
+            "answers": {},
+            "errors": {
+              "00000000-0000-4000-8000-000000000002": "unknown_condition"
+            }
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"next\"}",
+          "expected": {},
+          "error": "unknown_condition"
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000102\"}",
+          "expected": {
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000102",
+              "00000000-0000-4000-8000-000000000002": "保留输入"
+            },
+            "errors": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000101\"}",
+          "expected": {
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101",
+              "00000000-0000-4000-8000-000000000002": "保留输入"
+            },
+            "errors": {}
+          },
+          "error": null
+        },
+        {
+          "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":null}",
+          "expected": {
+            "answers": {
+              "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101"
+            },
+            "errors": {
+              "00000000-0000-4000-8000-000000000002": "required_answer"
+            }
+          },
+          "error": null
+        }
+      ]
+    }
+  ]
+}

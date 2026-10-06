@@ -17,6 +17,9 @@ use crate::logic::{
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DocumentLogic {
+    /// 缺省时沿用单页问卷；流程与规则一起冻结到版本中。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<crate::flow::FlowDefinition>,
     /// DSL 格式版本。
     #[schema(value_type = u32)]
     pub dsl_version: Number,
@@ -59,12 +62,12 @@ pub struct QuestionRule {
 }
 
 #[derive(Debug)]
-struct RuleExpressions {
-    question_id: Uuid,
+pub(crate) struct RuleExpressions {
+    pub(crate) question_id: Uuid,
     path: String,
-    visible_if: Option<CompiledExpression>,
-    required_if: Option<CompiledExpression>,
-    validate: Option<CompiledExpression>,
+    pub(crate) visible_if: Option<CompiledExpression>,
+    pub(crate) required_if: Option<CompiledExpression>,
+    pub(crate) validate: Option<CompiledExpression>,
 }
 
 /// 规则表达式原始求值结果；unknown 的产品处理由流程层负责。
@@ -94,9 +97,52 @@ pub struct CompiledDocumentLogic {
     variable_paths: BTreeMap<Uuid, String>,
     order: Vec<Uuid>,
     rules: Vec<RuleExpressions>,
+    question_dependencies: BTreeMap<Uuid, BTreeSet<Uuid>>,
+    pub(crate) flow: Option<crate::flow::CompiledFlow>,
 }
 
 impl CompiledDocumentLogic {
+    pub(crate) fn rule(&self, id: Uuid) -> Option<&RuleExpressions> {
+        self.rules.iter().find(|rule| rule.question_id == id)
+    }
+
+    pub(crate) fn dependencies(&self, expression: &CompiledExpression) -> BTreeSet<Uuid> {
+        let mut result: BTreeSet<_> = expression.dependencies().collect();
+        for id in expression.variable_dependencies() {
+            result.extend(&self.question_dependencies[&id]);
+        }
+        result
+    }
+
+    pub(crate) fn evaluate_expression(
+        &self,
+        expression: &CompiledExpression,
+        answers: &BTreeMap<Uuid, Value>,
+    ) -> Result<LogicValue, LogicError> {
+        // 按实际读取计算变量，短路分支不触发计算；同次求值缓存共享依赖。
+        let mut variables = BTreeMap::new();
+        expression.evaluate_resolving(answers, &mut |id| {
+            self.evaluate_variable(id, answers, &mut variables)
+        })
+    }
+
+    fn evaluate_variable(
+        &self,
+        id: Uuid,
+        answers: &BTreeMap<Uuid, Value>,
+        cache: &mut BTreeMap<Uuid, LogicValue>,
+    ) -> Result<LogicValue, LogicError> {
+        if let Some(value) = cache.get(&id) {
+            return Ok(value.clone());
+        }
+        let value = self.variables[&id]
+            .evaluate_resolving(answers, &mut |dependency| {
+                self.evaluate_variable(dependency, answers, cache)
+            })
+            .map_err(|failure| relocate(failure, &self.variable_paths[&id]))?;
+        cache.insert(id, value.clone());
+        Ok(value)
+    }
     /// 同时可执行的变量按 UUID 排序，声明重排不改变计算顺序。
     pub fn variable_order(&self) -> &[Uuid] {
         &self.order
@@ -166,6 +212,7 @@ impl DocumentLogic {
                     .into_iter()
                     .flatten()
             }))
+            .chain(self.flow.iter().flat_map(|flow| flow.expressions()))
         {
             let mut count = 0;
             check_raw_budget(Some(expression), 1, &mut count)?;
@@ -304,12 +351,18 @@ impl DocumentLogic {
                 path,
             });
         }
-        Ok(CompiledDocumentLogic {
+        let mut compiled = CompiledDocumentLogic {
             variables,
             variable_paths,
             order,
             rules,
-        })
+            question_dependencies,
+            flow: None,
+        };
+        if let Some(flow) = &self.flow {
+            compiled.flow = Some(crate::flow::compile_flow(flow, self, &compiled, questions)?);
+        }
+        Ok(compiled)
     }
 
     pub(crate) fn renew_references(
@@ -341,6 +394,9 @@ impl DocumentLogic {
                 rewrite(expression, questions, options, &variables);
             }
         }
+        if let Some(flow) = &mut self.flow {
+            flow.renew_ids(questions, options, &variables);
+        }
     }
 }
 
@@ -349,7 +405,7 @@ fn relocate(mut failure: LogicError, path: &str) -> LogicError {
     failure
 }
 
-fn rewrite(
+pub(crate) fn rewrite(
     expression: &mut Value,
     questions: &BTreeMap<Uuid, Uuid>,
     options: &BTreeMap<Uuid, Uuid>,

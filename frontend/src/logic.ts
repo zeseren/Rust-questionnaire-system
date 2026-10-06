@@ -21,6 +21,12 @@ export type LogicErrorCode =
   | 'arithmetic_error'
   | 'dependency_cycle'
   | 'forward_reference'
+  | 'invalid_flow'
+  | 'unavailable_dependency'
+  | 'invalid_event'
+  | 'required_answer'
+  | 'constraint_failed'
+  | 'unknown_condition'
 
 const messages: Record<LogicErrorCode, string> = {
   invalid_syntax: '规则结构或字段无效',
@@ -33,6 +39,12 @@ const messages: Record<LogicErrorCode, string> = {
   arithmetic_error: '规则计算发生除零或数值溢出',
   dependency_cycle: '计算变量存在循环依赖',
   forward_reference: '题目规则不能依赖自身或后续题目',
+  invalid_flow: '流程结构或题目归属无效',
+  unavailable_dependency: '规则必须显式处理分支答案缺失',
+  invalid_event: '当前状态不允许此事件',
+  required_answer: '请回答当前必填题目',
+  constraint_failed: '答案不满足自定义约束',
+  unknown_condition: '条件尚不能确定',
 }
 
 export class LogicError extends Error {
@@ -74,6 +86,11 @@ export interface CompiledExpression {
     answers: Readonly<Record<string, unknown>>,
     variables?: ReadonlyMap<string, LogicValue>,
   ): LogicValue
+  /** 流程内部按实际读取计算变量，仍预先检查直接引用的答案类型。 */
+  evaluateResolving(
+    answers: Readonly<Record<string, unknown>>,
+    variable: (id: string) => LogicValue,
+  ): LogicValue
 }
 
 function fail(code: LogicErrorCode, path: string, id: string | null = null): never {
@@ -114,7 +131,7 @@ function validText(value: string) {
   return !/[\0\uD800-\uDFFF]/u.test(value)
 }
 
-function numeric(raw: string): number | undefined {
+export function numeric(raw: string): number | undefined {
   if (raw.length > 64 || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(raw))
     return undefined
   const normalized = raw.replace(/([eE])(?=\d)/, '$1+')
@@ -228,7 +245,17 @@ export function compileExpression(
           fail('type_mismatch', '$.variables')
         context.set(id, value)
       }
-      return evaluate(root, context)
+      return evaluate(root, (id) => context.get(id) ?? { type: 'missing' })
+    },
+    evaluateResolving(
+      answers: Readonly<Record<string, unknown>>,
+      variable: (id: string) => LogicValue,
+    ) {
+      const context = new Map<string, LogicValue>()
+      for (const id of ids) context.set(id, readAnswer(answers[id], bindings.get(id)!, id))
+      return evaluate(root, (id) =>
+        variableIds.includes(id) ? variable(id) : (context.get(id) ?? { type: 'missing' }),
+      )
     },
   })
 }
@@ -403,7 +430,7 @@ function readAnswer(raw: unknown, binding: Binding, id: string): LogicValue {
   }
 }
 
-function evaluate(node: Node, context: Map<string, LogicValue>): LogicValue {
+function evaluate(node: Node, context: (id: string) => LogicValue): LogicValue {
   const kind = node.kind
   const missing: LogicValue = { type: 'missing' }
   const boolean = (value: boolean): LogicValue => ({ type: 'boolean', value })
@@ -412,13 +439,13 @@ function evaluate(node: Node, context: Map<string, LogicValue>): LogicValue {
     case 'literal':
       return { ...kind.value }
     case 'answer': {
-      const value = context.get(kind.id) ?? missing
+      const value = context(kind.id)
       return value.type === 'choices' ? { type: 'choices', value: [...value.value] } : { ...value }
     }
     case 'answered':
-      return boolean(context.has(kind.id) && context.get(kind.id)?.type !== 'missing')
+      return boolean(context(kind.id).type !== 'missing')
     case 'selection': {
-      const value = context.get(kind.id) ?? missing
+      const value = context(kind.id)
       if (value.type === 'missing') return missing
       if (value.type === 'choice') return boolean(kind.options.includes(value.value))
       if (value.type !== 'choices') fail('type_mismatch', node.path)

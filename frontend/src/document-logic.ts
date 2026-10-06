@@ -1,6 +1,8 @@
 //! 文档规则按依赖顺序编译与计算；规则引用的答案必须在使用位置可获得。
 import { checkExpressionBudget, compileExpression, LogicError } from './logic.ts'
 import { copy } from './json.ts'
+import { compileFlow, parseFlow } from './flow-compiler.ts'
+import type { CompiledFlow, FlowDefinition } from './flow-compiler.ts'
 import type { CompiledExpression, LogicValue, LogicValueType } from './logic.ts'
 import type { Question, SurveyDocument } from './types'
 
@@ -16,6 +18,7 @@ export interface QuestionRule {
   validate?: unknown
 }
 export interface DocumentLogic {
+  flow?: FlowDefinition | null
   dsl_version: number
   semantics_version: number
   variables: ComputedVariable[]
@@ -30,8 +33,22 @@ export interface DocumentLogicValues {
 }
 export interface CompiledDocumentLogic {
   readonly variableOrder: readonly string[]
+  readonly flow: CompiledFlow | null
+  rule(id: string): CompiledQuestionRule | undefined
+  dependencies(expression: CompiledExpression): ReadonlySet<string>
+  evaluateExpression(
+    expression: CompiledExpression,
+    answers: Readonly<Record<string, unknown>>,
+  ): LogicValue
   /** 输入须已规范化并排除不适用答案；结果不代表填写路径或提交资格。 */
   evaluate(answers: Readonly<Record<string, unknown>>): DocumentLogicValues
+}
+
+export interface CompiledQuestionRule {
+  readonly question_id: string
+  readonly visible_if: CompiledExpression | null
+  readonly required_if: CompiledExpression | null
+  readonly validate: CompiledExpression | null
 }
 
 function record(
@@ -61,7 +78,7 @@ function id(raw: unknown, path: string): string {
 
 /** 对 JSON 边界做结构检查，保留 AST 原文供编译器验证。 */
 function parseLogic(raw: unknown): DocumentLogic {
-  const logic = record(raw, ['dsl_version', 'semantics_version', 'variables', 'rules'])
+  const logic = record(raw, ['dsl_version', 'semantics_version', 'variables', 'rules'], ['flow'])
   if (!Array.isArray(logic.variables) || !Array.isArray(logic.rules))
     throw new LogicError('invalid_syntax', '$.logic')
   if (logic.variables.length > 100 || logic.rules.length > 100)
@@ -87,6 +104,7 @@ function parseLogic(raw: unknown): DocumentLogic {
   })
   // 版本的数值与范围由表达式编译入口统一检查。
   return {
+    flow: logic.flow == null ? null : parseFlow(logic.flow),
     dsl_version: logic.dsl_version as number,
     semantics_version: logic.semantics_version as number,
     variables,
@@ -107,6 +125,9 @@ export function compileDocumentLogic(
     ...logic.rules.flatMap((rule) =>
       [rule.visible_if, rule.required_if, rule.validate].filter((value) => value != null),
     ),
+    ...(logic.flow?.nodes.flatMap((node) =>
+      node.type === 'branch' ? node.branches.map((branch) => branch.when) : [],
+    ) ?? []),
   ]) {
     const budget = { count: 0 }
     checkExpressionBudget(expression, 1, budget)
@@ -139,8 +160,18 @@ export function compileDocumentLogic(
         questions,
         types,
       )
-      return {
+      return Object.freeze({
         ...compiled,
+        evaluateResolving(
+          answers: Readonly<Record<string, unknown>>,
+          variable: (id: string) => LogicValue,
+        ) {
+          try {
+            return compiled.evaluateResolving(answers, variable)
+          } catch (error) {
+            return relocate(error)
+          }
+        },
         evaluate(
           answers: Readonly<Record<string, unknown>>,
           variables?: ReadonlyMap<string, LogicValue>,
@@ -151,7 +182,7 @@ export function compileDocumentLogic(
             return relocate(error)
           }
         },
-      }
+      })
     } catch (error) {
       return relocate(error)
     }
@@ -212,15 +243,34 @@ export function compileDocumentLogic(
         throw new LogicError('forward_reference', fieldPath, rule.question_id)
       return expression
     }
-    return {
+    return Object.freeze({
       question_id: rule.question_id,
       visible_if: compileRule(rule.visible_if, 'visible_if', false),
       required_if: compileRule(rule.required_if, 'required_if', false),
       validate: compileRule(rule.validate, 'validate', true),
-    }
+    })
   })
-  return Object.freeze({
+  const compiled: CompiledDocumentLogic = {
+    flow: null,
     variableOrder: Object.freeze([...order]),
+    rule: (id: string) => rules.find((rule) => rule.question_id === id),
+    dependencies(expression: CompiledExpression) {
+      const result = new Set(expression.dependencies)
+      for (const id of expression.variableDependencies)
+        for (const question of questionDependencies.get(id)!) result.add(question)
+      return result
+    },
+    evaluateExpression(expression: CompiledExpression, answers: Readonly<Record<string, unknown>>) {
+      const cache = new Map<string, LogicValue>()
+      const resolve = (id: string): LogicValue => {
+        const cached = cache.get(id)
+        if (cached) return cached
+        const value = variables.get(id)!.evaluateResolving(answers, resolve)
+        cache.set(id, value)
+        return value
+      }
+      return expression.evaluateResolving(answers, resolve)
+    },
     evaluate(answers: Readonly<Record<string, unknown>>): DocumentLogicValues {
       const values = new Map<string, LogicValue>()
       for (const id of order) values.set(id, variables.get(id)!.evaluate(answers, values))
@@ -233,6 +283,10 @@ export function compileDocumentLogic(
         }
       return { variables: Object.fromEntries(values), rules: results }
     },
+  }
+  return Object.freeze({
+    ...compiled,
+    flow: logic.flow ? compileFlow(logic.flow, logic, compiled, questions, compile) : null,
   })
 }
 
@@ -269,6 +323,24 @@ export function duplicateSurveyDocument(document: SurveyDocument): SurveyDocumen
       for (const expression of [rule.visible_if, rule.required_if, rule.validate])
         rewrite(expression, questions, options, variables)
     }
+    const flow = duplicated.logic.flow
+    if (flow) {
+      const nodes = new Map(flow.nodes.map((node) => [node.id, crypto.randomUUID()]))
+      flow.entry = nodes.get(flow.entry) ?? flow.entry
+      for (const node of flow.nodes) {
+        node.id = nodes.get(node.id)!
+        if (node.type === 'page') {
+          node.question_ids = node.question_ids.map((id) => questions.get(id) ?? id)
+          node.next = nodes.get(node.next) ?? node.next
+        } else if (node.type === 'branch') {
+          node.otherwise = nodes.get(node.otherwise) ?? node.otherwise
+          for (const branch of node.branches) {
+            branch.target = nodes.get(branch.target) ?? branch.target
+            rewrite(branch.when, questions, options, variables)
+          }
+        }
+      }
+    }
   }
   return duplicated
 }
@@ -303,6 +375,11 @@ export function duplicateQuestionRule(
   source: Question,
   duplicated: Question,
 ) {
+  for (const node of document.logic?.flow?.nodes ?? []) {
+    if (node.type !== 'page') continue
+    const position = node.question_ids.indexOf(source.id)
+    if (position >= 0) node.question_ids.splice(position + 1, 0, duplicated.id)
+  }
   const rule = document.logic?.rules.find((rule) => rule.question_id === source.id)
   if (!rule || !document.logic) return
   const copied = copy(rule)

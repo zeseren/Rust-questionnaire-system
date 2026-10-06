@@ -40,6 +40,18 @@ pub enum LogicErrorCode {
     DependencyCycle,
     /// 题目规则依赖自身或后续题目。
     ForwardReference,
+    /// 流程结构无效或存在回跳。
+    InvalidFlow,
+    /// 分支汇合后的依赖未明确处理缺失。
+    UnavailableDependency,
+    /// 当前状态不接受此事件。
+    InvalidEvent,
+    /// 必填答案缺失。
+    RequiredAnswer,
+    /// 自定义答案约束不满足。
+    ConstraintFailed,
+    /// 条件尚不能确定。
+    UnknownCondition,
 }
 
 /// 规则错误保留 AST 路径与相关题目，但不回显答案。
@@ -68,6 +80,12 @@ pub(crate) fn error(code: LogicErrorCode, path: &str, question_id: Option<Uuid>)
         LogicErrorCode::ArithmeticError => "规则计算发生除零或数值溢出",
         LogicErrorCode::DependencyCycle => "计算变量存在循环依赖",
         LogicErrorCode::ForwardReference => "题目规则不能依赖自身或后续题目",
+        LogicErrorCode::InvalidFlow => "流程结构无效、不可达或包含回跳",
+        LogicErrorCode::UnavailableDependency => "此依赖可能被分支绕过，请明确处理缺失值",
+        LogicErrorCode::InvalidEvent => "当前填写状态不接受此操作",
+        LogicErrorCode::RequiredAnswer => "此题为必填项",
+        LogicErrorCode::ConstraintFailed => "答案不符合自定义约束",
+        LogicErrorCode::UnknownCondition => "条件尚不能确定，请补全相关答案",
     };
     LogicError {
         code,
@@ -281,7 +299,26 @@ impl CompiledExpression {
                 .ok_or_else(|| error(LogicErrorCode::InvalidReference, "$.variables", None))?;
             context.insert(*id, value.clone());
         }
-        self.root.evaluate(&context)
+        self.root
+            .evaluate(&mut |id| Ok(context.get(&id).cloned().unwrap_or(LogicValue::Missing)))
+    }
+
+    pub(crate) fn evaluate_resolving(
+        &self,
+        answers: &BTreeMap<Uuid, Value>,
+        variable: &mut dyn FnMut(Uuid) -> Result<LogicValue, LogicError>,
+    ) -> Result<LogicValue, LogicError> {
+        let mut context = BTreeMap::new();
+        for id in &self.dependencies {
+            context.insert(*id, read_answer(answers.get(id), &self.bindings[id], *id)?);
+        }
+        self.root.evaluate(&mut |id| {
+            if self.variable_dependencies.contains(&id) {
+                variable(id)
+            } else {
+                Ok(context.get(&id).cloned().unwrap_or(LogicValue::Missing))
+            }
+        })
     }
 }
 
@@ -686,21 +723,20 @@ fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<Logic
 }
 
 impl Node {
-    fn evaluate(&self, context: &BTreeMap<Uuid, LogicValue>) -> Result<LogicValue, LogicError> {
+    fn evaluate(
+        &self,
+        context: &mut dyn FnMut(Uuid) -> Result<LogicValue, LogicError>,
+    ) -> Result<LogicValue, LogicError> {
         use LogicValue::{Boolean, Missing, Number};
         let mismatch = || error(LogicErrorCode::TypeMismatch, &self.path, None);
         match &self.kind {
             NodeKind::Literal(value) => Ok(value.clone()),
-            NodeKind::Answer(id) => Ok(context.get(id).cloned().unwrap_or(Missing)),
-            NodeKind::Answered(id) => Ok(Boolean(
-                context
-                    .get(id)
-                    .is_some_and(|value| !matches!(value, Missing)),
-            )),
-            NodeKind::Selected(id, expected, all) => match context.get(id) {
-                None | Some(Missing) => Ok(Missing),
-                Some(LogicValue::Choice(option)) => Ok(Boolean(expected.contains(option))),
-                Some(LogicValue::Choices(options)) => Ok(Boolean(if *all {
+            NodeKind::Answer(id) => context(*id),
+            NodeKind::Answered(id) => Ok(Boolean(!matches!(context(*id)?, Missing))),
+            NodeKind::Selected(id, expected, all) => match context(*id)? {
+                Missing => Ok(Missing),
+                LogicValue::Choice(option) => Ok(Boolean(expected.contains(&option))),
+                LogicValue::Choices(options) => Ok(Boolean(if *all {
                     expected.iter().all(|id| options.contains(id))
                 } else {
                     expected.iter().any(|id| options.contains(id))

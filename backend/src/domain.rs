@@ -11,6 +11,9 @@ use serde_json::{Number, Value};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+pub use crate::flow::{
+    FlowBranch, FlowDefinition, FlowEvent, FlowNode, FlowOutcome, FlowSession, FlowSnapshot,
+};
 pub use crate::logic::{
     CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType, compile_expression,
 };
@@ -549,7 +552,7 @@ impl Document {
 }
 
 impl Question {
-    fn normalize_answer(&self, value: Value) -> Result<Option<Value>, ValidationError> {
+    pub(crate) fn normalize_answer(&self, value: Value) -> Result<Option<Value>, ValidationError> {
         let id = Some(self.id);
         if value.is_null() {
             return Ok(None);
