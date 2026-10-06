@@ -103,6 +103,45 @@
   --shadow-28: 0 0 8px rgb(0 0 0 / 20%), 0 14px 28px rgb(0 0 0 / 28%);
 }
 
+.logic-block {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  padding: 16px;
+  min-width: 0;
+}
+.expression-editor {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.expression-child {
+  border-left: 2px solid var(--accent-border);
+  padding-left: 12px;
+  min-width: 0;
+}
+.logic-block .actions {
+  flex-wrap: wrap;
+}
+.logic-block select,
+.expression-editor input {
+  min-width: 0;
+  width: 100%;
+}
+.flow-review dt {
+  margin-top: 16px;
+  font-weight: 600;
+}
+.flow-review dd {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dsl-source {
+  min-height: 420px;
+  font-family: Consolas, monospace;
+  tab-size: 2;
+}
+
 * {
   box-sizing: border-box;
 }

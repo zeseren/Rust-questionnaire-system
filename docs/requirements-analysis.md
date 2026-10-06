@@ -461,3 +461,9 @@ release 对照均使用 stable + LLVM，仅切换 profile 配置：
 为 Cranelift 别名补上 `--locked`；修正文档中“不改变运行语义”的表述，明确 release 的 panic 终止行为与普通测试的覆盖边界；将 release 的 LLVM 配置对照从 Cranelift 对照表中分开。
 
 本次重新执行并通过：stable + LLVM 下的 `cargo fmt --all -- --check`、`cargo test --locked --workspace`（18/18）、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo build --release --locked -p questionnaire-api`，以及可选别名 `cargo +nightly cranelift -p questionnaire-api`。前端 `npm run build` 与 `npm run format:check` 通过；格式检查最初仅因 Windows 检出的 CRLF 换行告警，恢复为仓库保存的 LF 后通过，未产生前端内容差异。本次未重做冷构建计时、性能压测或 HTTP/数据库联调，上面的性能数字仍属于 2026-10-02 的历史记录。
+
+## 17. DSL 与流程基础闭环（2026-10-06）
+
+[DSL 实施计划](survey-dsl-plan.md)的阶段 0—6 已完成：Rust 与 TypeScript 独立实现共享语义，网页可视化与文本规则生成同一 AST，预览和填写共用会话，服务端重建路径并保持历史版本幂等及报表适用性。
+
+本轮通过 Rust 30 项、前端 17 项独立回归，以及 stable 格式/Clippy 和前端生产构建。用真实 Edge、Rust API 和 PostgreSQL 完成网页创建题目、配置分支与汇合、文本往返/错误定位、保存发布、手机改答清理、丢失回执后原载荷重试，随后核对单份答卷和历史详情/统计/CSV；完整证据及未覆盖范围见 [阶段 5、6 验收记录](survey-dsl-plan.md#阶段-56-实施与验收记录)。测试保持纯领域与少量输入适配回归，浏览器工具及临时数据仅在忽略的 `target/`，未加入项目测试依赖。

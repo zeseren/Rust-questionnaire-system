@@ -2,12 +2,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { onBeforeRouteLeave, RouterLink, useRoute } from 'vue-router'
-import { api, ApiError, copy, message } from '../api'
+import { api, ApiError, message } from '../api'
+import { copyPayload } from '../json'
 import { buildAnswers, isAnswered, type Inputs } from '../answers'
 import { dateTime, shareLink } from '../format'
 import { useAuth } from '../stores'
 import type { PublicSurvey, Receipt, Submission, User } from '../types'
 import SurveyFields from '../components/SurveyFields.vue'
+import FlowFields from '../components/FlowFields.vue'
 import AuthForm from '../components/AuthForm.vue'
 import Modal from '../components/Modal.vue'
 import Icon from '../components/Icon.vue'
@@ -28,7 +30,17 @@ const uncertain = ref(false)
 const versionChanged = ref(false)
 const pending = shallowRef<Submission | null>(null)
 const account = ref<{ id: string; username: string } | null>(null)
-const answered = computed(() => Object.values(values.value).filter(isAnswered).length)
+const flowFields = ref<InstanceType<typeof FlowFields>>()
+const flowAnswered = ref(0)
+function flowChanged(count: number) {
+  flowAnswered.value = count
+  errors.value = {}
+}
+const answered = computed(() =>
+  survey.value?.document.logic
+    ? flowAnswered.value
+    : Object.values(values.value).filter(isAnswered).length,
+)
 async function load() {
   loading.value = true
   error.value = ''
@@ -53,22 +65,25 @@ async function loginSuccess() {
 async function focusError() {
   const first = survey.value?.document.questions.find((question) => errors.value[question.id])
   if (first) {
+    if (survey.value?.document.logic) {
+      await flowFields.value?.focusQuestion(first.id)
+      return
+    }
     await nextTick()
     document.getElementById(`answer-${first.id}`)?.focus()
   }
 }
 async function submit() {
-  if (
-    !survey.value ||
-    survey.value.document.logic ||
-    busy.value ||
-    receipt.value ||
-    versionChanged.value
-  )
-    return
+  if (!survey.value || busy.value || receipt.value || versionChanged.value) return
   error.value = ''
   if (!pending.value) {
-    const result = buildAnswers(survey.value.document, values.value)
+    const flowAnswers = survey.value.document.logic
+      ? flowFields.value?.submissionAnswers()
+      : undefined
+    if (survey.value.document.logic && !flowAnswers) return
+    const result = flowAnswers
+      ? { answers: flowAnswers, errors: {} }
+      : buildAnswers(survey.value.document, values.value)
     errors.value = result.errors
     if (Object.keys(result.errors).length) {
       error.value = '请检查标记的问题后再提交。'
@@ -78,7 +93,7 @@ async function submit() {
     pending.value = {
       version_id: survey.value.version_id,
       idempotency_key: crypto.randomUUID(),
-      answers: copy(result.answers),
+      answers: copyPayload(result.answers),
     }
   }
   busy.value = true
@@ -120,6 +135,8 @@ async function submit() {
     }
   } finally {
     busy.value = false
+    await nextTick()
+    if (!uncertain.value && !versionChanged.value) await focusError()
   }
 }
 function leave(event: BeforeUnloadEvent) {
@@ -163,11 +180,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           </RouterLink>
         </p>
       </div>
-      <section v-if="survey?.document.logic" class="panel">
-        <h1>{{ survey.document.title }}</h1>
-        <p class="notice mt">本问卷暂未开放网页填写，请联系发布者。</p>
-      </section>
-      <form v-if="survey && !survey.document.logic" novalidate @submit.prevent="submit">
+      <form v-if="survey" novalidate @submit.prevent="submit">
         <section class="panel public-survey-header">
           <p class="eyebrow">
             {{ survey.mode === 'anonymous' ? '匿名填写' : '登录限次' }} · V{{
@@ -203,13 +216,24 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
         <div v-if="uncertain && !loginNeeded" class="notice mt">
           尚未确认原提交结果。当前回答已暂时锁定，点击“重试原提交”获取结果，避免重复提交。
         </div>
+        <FlowFields
+          v-if="survey.document.logic"
+          ref="flowFields"
+          :document="survey.document"
+          :errors="errors"
+          :disabled="busy || uncertain || versionChanged"
+          :submit-disabled="loginNeeded"
+          @change="flowChanged"
+          @submit="submit"
+        />
         <SurveyFields
+          v-else
           v-model="values"
           :document="survey.document"
           :errors="errors"
           :disabled="busy || uncertain || versionChanged"
         />
-        <div class="fill-footer">
+        <div v-if="!survey.document.logic || uncertain" class="fill-footer">
           <span class="hint">
             已回答 {{ answered }} / {{ survey.document.questions.length }} 题 ·
             标注“必填”的题目必须回答

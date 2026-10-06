@@ -189,11 +189,11 @@ cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
-领域回归测试位于 [`backend/tests/domain.rs`](backend/tests/domain.rs)，DSL 表达式与文档编译回归位于 [`backend/tests/logic.rs`](backend/tests/logic.rs)，流程与改答清理回归位于 [`backend/tests/flow.rs`](backend/tests/flow.rs)，均不启动数据库；它们不能替代事务、权限和并发提交的真实服务验证。运行过的 HTTP、数据库及备份恢复场景见 [实施与验证记录](docs/requirements-analysis.md#11-后端实施与验证记录)。
+领域回归测试位于 [`backend/tests/domain.rs`](backend/tests/domain.rs)，DSL 表达式与文档编译回归位于 [`backend/tests/logic.rs`](backend/tests/logic.rs)，流程与改答清理回归位于 [`backend/tests/flow.rs`](backend/tests/flow.rs)，文本解析回归位于 [`backend/tests/logic_text.rs`](backend/tests/logic_text.rs)，均不启动数据库；它们不能替代事务、权限和并发提交的真实服务验证。运行过的 HTTP、数据库及备份恢复场景见 [实施与验证记录](docs/requirements-analysis.md#11-后端实施与验证记录)。
 
-前端在 `frontend/` 执行 `npm run build` 检查类型并构建，`npm run format` 整理源码，`npm run format:check` 检查格式。`npm run test:regression` 使用 Node 内置测试运行器执行 `frontend/tests/` 中的数字精度、表达式、文档规则与流程回归，不添加测试依赖。两端 DSL 测试读取同一目录下的[表达式样例](fixtures/survey-logic/expressions.json)、[文档样例](fixtures/survey-logic/documents.json)、[流程样例](fixtures/survey-logic/flows.json)与[最终提交样例](fixtures/survey-logic/submissions.json)。没有引入前端自动化测试框架；实际浏览器联调范围单独记录在 [前端实施与验证记录](docs/requirements-analysis.md#12-前端-mvp-实施与验证记录)，不将静态原型视为业务验收。
+前端在 `frontend/` 执行 `npm run build` 检查类型并构建，`npm run format` 整理源码，`npm run format:check` 检查格式。`npm run test:regression` 使用 Node 内置测试运行器执行 `frontend/tests/` 中的数字精度、表达式、文档规则、流程和文本回归，不添加测试依赖。两端 DSL 测试读取同一目录下的[表达式样例](fixtures/survey-logic/expressions.json)、[文档样例](fixtures/survey-logic/documents.json)、[流程样例](fixtures/survey-logic/flows.json)、[最终提交样例](fixtures/survey-logic/submissions.json)与[文本样例](fixtures/survey-logic/texts.json)。没有引入前端自动化测试框架；实际浏览器联调范围记录在 [前端实施与验证记录](docs/requirements-analysis.md#12-前端-mvp-实施与验证记录)和 [DSL 验收记录](docs/survey-dsl-plan.md#阶段-56-实施与验收记录)，不将静态原型视为业务验收。
 
-DSL 与流程引擎正在按[实施计划](docs/survey-dsl-plan.md)分阶段开发。第四阶段已支持普通完成流程的服务端发布与提交、历史版本路径重建、幂等重放，以及详情/统计/CSV 的适用性区分。筛选结束流程暂不开放发布；网页规则编辑、分步预览和填写留到第五阶段，现有网页对带规则文档提示暂未开放。无规则问卷保持原有行为。
+DSL 与流程引擎的[基础实施计划](docs/survey-dsl-plan.md)已完成：Rust 与 TypeScript 独立实现表达式、文档编译、流程和文本解析，共用语义样例；网页支持可视化规则/分支编辑、文本 DSL、分步预览与填写。服务端重建有效路径，保留历史版本幂等重放，并在详情/统计/CSV 中区分跳过和未答。真实浏览器与 PostgreSQL 已验证分支改答清理和丢失回执后的原载荷重试。筛选结束的持久化策略、重复组和子流程仍按计划留待后续，无规则问卷保持原有行为。
 
 ### 7.1 编译速度配置
 

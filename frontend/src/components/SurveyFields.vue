@@ -3,6 +3,7 @@
 import type { Question, SurveyDocument } from '../types'
 import type { Inputs, InputValue } from '../answers'
 const values = defineModel<Inputs>({ required: true })
+const emit = defineEmits<{ change: [id: string, value: InputValue] }>()
 withDefaults(
   defineProps<{ document: SurveyDocument; errors?: Record<string, string>; disabled?: boolean }>(),
   { errors: () => ({}) },
@@ -11,14 +12,16 @@ function textValue(question: Question) {
   return String(values.value[question.id] ?? '')
 }
 function update(question: Question, event: Event) {
-  values.value[question.id] = (event.target as HTMLInputElement).value
+  change(question, (event.target as HTMLInputElement).value)
+}
+function change(question: Question, value: InputValue) {
+  values.value = { ...values.value, [question.id]: value }
+  emit('change', question.id, value)
 }
 function toggle(question: Question, value: string) {
   const current = values.value[question.id]
   const list = Array.isArray(current) ? [...current] : []
-  values.value[question.id] = list.includes(value)
-    ? list.filter((item) => item !== value)
-    : [...list, value]
+  change(question, list.includes(value) ? list.filter((item) => item !== value) : [...list, value])
 }
 function selected(value: InputValue | undefined, id: string) {
   return Array.isArray(value) && value.includes(id)
@@ -52,7 +55,8 @@ function scores(question: Question) {
       <div v-if="question.type === 'single_choice'" class="answer-options">
         <label v-for="option in question.options" :key="option.id" class="answer-option">
           <input
-            v-model="values[question.id]"
+            :checked="values[question.id] === option.id"
+            @change="change(question, option.id)"
             type="radio"
             :name="question.id"
             :value="option.id"
@@ -118,7 +122,8 @@ function scores(question: Question) {
         <div v-if="scores(question).length" class="rating-options">
           <label v-for="score in scores(question)" :key="score" class="rating-option">
             <input
-              v-model="values[question.id]"
+              :checked="values[question.id] === score"
+              @change="change(question, score)"
               type="radio"
               :name="question.id"
               :value="score"
@@ -147,7 +152,7 @@ function scores(question: Question) {
         v-if="!question.required && values[question.id] != null"
         type="button"
         class="text-button mt"
-        @click="values[question.id] = null"
+        @click="change(question, null)"
       >
         清除此题回答
       </button>

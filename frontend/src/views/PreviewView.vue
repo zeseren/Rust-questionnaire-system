@@ -7,6 +7,7 @@ import { buildAnswers, type Inputs } from '../answers'
 import { useResource } from '../resource'
 import type { Preview } from '../types'
 import SurveyFields from '../components/SurveyFields.vue'
+import FlowFields from '../components/FlowFields.vue'
 import ErrorNotice from '../components/ErrorNotice.vue'
 import LoadingState from '../components/LoadingState.vue'
 const route = useRoute()
@@ -53,9 +54,13 @@ function validate() {
             收集目的：{{ preview.data.value.document.purpose || '尚未填写' }}
           </p>
         </section>
-        <p v-if="preview.data.value.document.logic" class="notice mt">
-          此问卷的分步预览暂未开放，请先返回编辑核对题目。
-        </p>
+        <FlowFields
+          v-if="preview.data.value.document.logic"
+          :document="preview.data.value.document"
+          preview
+          @submit="feedback = '填写校验通过。这是预览，未提交正式答卷。'"
+          @change="feedback = ''"
+        />
         <SurveyFields
           v-else
           v-model="values"

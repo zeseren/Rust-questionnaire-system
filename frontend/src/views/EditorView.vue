@@ -19,6 +19,9 @@ import Modal from '../components/Modal.vue'
 import ErrorNotice from '../components/ErrorNotice.vue'
 import LoadingState from '../components/LoadingState.vue'
 import QuestionEditor from '../components/QuestionEditor.vue'
+import LogicEditor from '../components/LogicEditor.vue'
+import { compileDocumentLogic } from '../document-logic'
+import { LogicError } from '../logic'
 const route = useRoute()
 const router = useRouter()
 const notice = useNotice()
@@ -36,6 +39,7 @@ const mode = ref<FillingMode>('anonymous')
 const deadline = ref('')
 const editorForm = ref<HTMLFormElement>()
 const action = ref<'publish' | 'close' | 'resume' | 'archive' | 'delete' | null>(null)
+const textPending = ref(false)
 const dirty = computed(() => !!draft.value && encode(draft.value) !== saved.value)
 const settingsDirty = computed(
   () =>
@@ -43,7 +47,10 @@ const settingsDirty = computed(
     (mode.value !== survey.value.mode || deadline.value !== localInput(survey.value.deadline)),
 )
 const changed = computed(
-  () => dirty.value || (survey.value?.status !== 'archived' && settingsDirty.value),
+  () =>
+    textPending.value ||
+    dirty.value ||
+    (survey.value?.status !== 'archived' && settingsDirty.value),
 )
 const locked = computed(() => busy.value || survey.value?.status === 'archived')
 const actionNames = {
@@ -71,6 +78,11 @@ async function handleError(reason: unknown) {
       document.getElementById(`question-${reason.question_id}`)?.focus()
     }
   }
+  if (reason instanceof LogicError) {
+    error.value = `${reason.message}（${reason.path}）`
+    await nextTick()
+    document.getElementById('logic-editor')?.focus()
+  }
 }
 async function load() {
   loading.value = true
@@ -95,12 +107,17 @@ async function reload() {
   if (!changed.value || window.confirm('重新加载将放弃当前未保存的修改，是否继续？')) await load()
 }
 async function save() {
+  if (textPending.value) {
+    error.value = '请先应用文本规则，或恢复当前规则文本，再保存草稿。'
+    return
+  }
   if (!draft.value || !survey.value || locked.value || !editorForm.value?.reportValidity()) return
   busy.value = true
   error.value = ''
   conflict.value = false
   fieldError.value = null
   try {
+    if (draft.value.logic) compileDocumentLogic(draft.value.logic, draft.value.questions)
     if (dirty.value) {
       const result = await api<SurveyDetail>(`/api/surveys/${id}/draft`, 'PUT', {
         revision: revision.value,
@@ -125,7 +142,6 @@ async function save() {
   }
 }
 async function preparePublish() {
-  if (draft.value?.logic) return
   busy.value = true
   error.value = ''
   fieldError.value = null
@@ -204,6 +220,8 @@ async function add(type: Question['type']) {
   if (!draft.value || draft.value.questions.length >= 100) return
   const question = newQuestion(type)
   draft.value.questions.push(question)
+  const page = draft.value.logic?.flow?.nodes.filter((node) => node.type === 'page').at(-1)
+  if (page?.type === 'page') page.question_ids.push(question.id)
   await nextTick()
   document.getElementById(`question-${question.id}`)?.focus()
 }
@@ -265,17 +283,12 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
         <button class="button" :disabled="locked || !changed" @click="save">
           {{ busy ? '正在处理…' : '保存修改' }}
         </button>
-        <button
-          class="button button-primary"
-          :disabled="locked || changed || !!draft?.logic"
-          @click="preparePublish"
-        >
+        <button class="button button-primary" :disabled="locked || changed" @click="preparePublish">
           {{ survey.current_version_id ? '发布新版本' : '发布问卷' }}
         </button>
       </div>
     </div>
     <ErrorNotice :message="error" :retry="!survey" @retry="load" />
-    <p v-if="draft?.logic" class="notice">此问卷暂未开放网页填写，当前页面暂不支持发布。</p>
     <div v-if="conflict" class="notice">
       <div class="grow">当前编辑内容已保留。可以先下载草稿，再读取服务器上的最新内容。</div>
       <div class="actions">
@@ -339,6 +352,11 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           >
             ＋ 添加题目
           </button>
+          <LogicEditor
+            v-model="draft.logic"
+            :questions="draft.questions"
+            @pending="textPending = $event"
+          />
         </fieldset>
       </form>
       <aside class="editor-aside">

@@ -5,7 +5,7 @@ import type { CompiledDocumentLogic } from './document-logic.ts'
 import type { CompiledFlow, CompiledFlowNode, FlowOutcome } from './flow-compiler.ts'
 import { LogicError, numeric } from './logic.ts'
 import type { CompiledExpression, LogicErrorCode, LogicValue } from './logic.ts'
-import { copy } from './json.ts'
+import { copy, copyPayload } from './json.ts'
 import type { Question, SurveyDocument } from './types'
 
 export type FlowEvent =
@@ -16,6 +16,7 @@ type Answer = string | string[] | number
 interface Projection {
   path: number[]
   visible: string[]
+  required: string[]
   answers: Record<string, Answer>
   errors: Record<string, LogicErrorCode>
   route_error: LogicErrorCode | null
@@ -142,7 +143,7 @@ export class FlowSession {
         )
           return invalid()
         // 原始数字对象保留精度；只通过 JSON 值传递输入，界面字符串由适配层转换。
-        const value = typeof event.value === 'number' ? event.value : copy(event.value)
+        const value = typeof event.value === 'number' ? event.value : copyPayload(event.value)
         const inputs = { ...this.#inputs, [event.question_id]: value }
         const projection = this.#project(inputs)
         const cleared = Object.keys(inputs)
@@ -198,7 +199,14 @@ export class FlowSession {
   }
 
   #project(inputs: Record<string, unknown>): Projection {
-    const result: Projection = { path: [], visible: [], answers: {}, errors: {}, route_error: null }
+    const result: Projection = {
+      path: [],
+      visible: [],
+      required: [],
+      answers: {},
+      errors: {},
+      route_error: null,
+    }
     let current = 0
     // 编译器已拒绝回边，循环步数不超过节点总数。
     while (true) {
@@ -218,6 +226,17 @@ export class FlowSession {
             continue
           }
           result.visible.push(id)
+          let required: LogicValue | LogicError
+          try {
+            required = question.required
+              ? { type: 'boolean', value: true }
+              : this.#evaluate(rule?.required_if, result.answers, false)
+          } catch (error) {
+            if (!(error instanceof LogicError)) throw error
+            required = error
+          }
+          if (!(required instanceof LogicError) && required.type === 'boolean' && required.value)
+            result.required.push(id)
           let value: Answer | null
           try {
             value = normalizeAnswer(question, Object.hasOwn(inputs, id) ? inputs[id] : null)
@@ -227,9 +246,7 @@ export class FlowSession {
             continue
           }
           try {
-            const required = question.required
-              ? { type: 'boolean', value: true }
-              : this.#evaluate(rule?.required_if, result.answers, false)
+            if (required instanceof LogicError) throw required
             if (required.type === 'missing') result.errors[id] = 'unknown_condition'
             else if ('value' in required && required.value === true && value === null)
               result.errors[id] = 'required_answer'

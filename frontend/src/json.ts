@@ -12,3 +12,8 @@ export function encode(value: unknown): string {
 export function copy<T>(value: T): T {
   return decode<T>(encode(value))
 }
+
+/** 冻结提交载荷时保留数字的传输写法，避免指数被展开成超范围裸整数。 */
+export function copyPayload<T>(value: T): T {
+  return parse(encode(value), undefined, { parseNumber: (value) => new LosslessNumber(value) }) as T
+}

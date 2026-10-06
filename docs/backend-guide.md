@@ -305,6 +305,8 @@ SeaORM 做大部分查询和写入；`reports::response_snapshot` 使用参数�
 
 带规则版本使用该历史版本的 `FlowEvaluator` 重建适用性；详情中的 `question_states` 区分 `answered`、`unanswered`、`skipped`。统计满足 `applicable_count = answered_count + unanswered_count`，且适用数加 `skipped_count` 等于答卷总数；选择题分母仍为已答数。规则版本 CSV 在每题后增加独立的状态列，无规则历史版本保留原 CSV 格式。提交同样重建路径，拒绝路径外答案；原有幂等指纹和重放顺序不变。完整阶段边界见 [DSL 实施计划](survey-dsl-plan.md)。
 
+文本入口为 `domain::parse_logic_text(source, questions)`，实现位于私有模块 `logic_text.rs`。入口先检查词元/嵌套预算、别名类别和 UUID，再生成 `DocumentLogic` 并调用同一文档编译器；返回值已通过类型、依赖与流程检查。`LogicTextError` 保留行列、稳定错误分类和语义 AST 路径。HTTP 仍接收文档 JSON AST，网页 TypeScript 解析文本后发送 AST，服务端重新编译验证；没有第二套文本执行路径，也没有新增数据库表或 HTTP 端点。文本回归位于独立的 `backend/tests/logic_text.rs`，与前端读取同一份 `fixtures/survey-logic/texts.json`。
+
 时间过滤使用 RFC3339，必须带 `Z` 或时区偏移；区间为 **`[from, to)`**：包含开始、不包含结束，两个值同时存在时必须 `from < to`。PostgreSQL 存储精度为微秒；过滤边界不能含非零的微秒以下精度，不会静默截断。客户端统一发送最多六位小数即可，额外全零尾位不改变时刻。不要把服务器本地时区或无时区日期字符串当作输入约定。
 
 内部时间按 UTC 比较；报表的返回时间、CSV 提交时间和自然日趋势明确用 **Asia/Shanghai（当前业务固定 `+08:00`）**，不依赖服务器操作系统时区。查询含 `+08:00` 时要编码 `+`，否则 URL 查询解码可能把它当空格。例如在前面脚本之后：

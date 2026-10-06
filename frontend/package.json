@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "test:regression": "node --test tests/answers.test.mjs tests/logic.test.mjs tests/document-logic.test.mjs tests/flow.test.mjs",
+    "test:regression": "node --test tests/answers.test.mjs tests/logic.test.mjs tests/document-logic.test.mjs tests/flow.test.mjs tests/flow-inputs.test.mjs tests/logic-text.test.mjs",
     "format": "prettier --write src vite.config.ts index.html package.json tsconfig.json .prettierrc.json",
     "format:check": "prettier --check src vite.config.ts index.html package.json tsconfig.json .prettierrc.json",
     "typecheck": "vue-tsc --noEmit",

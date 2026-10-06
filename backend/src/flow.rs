@@ -466,6 +466,7 @@ pub enum FlowEvent {
 struct Projection {
     path: Vec<usize>,
     visible: Vec<Uuid>,
+    required: Vec<Uuid>,
     answers: BTreeMap<Uuid, Value>,
     errors: BTreeMap<Uuid, LogicErrorCode>,
     route_error: Option<LogicErrorCode>,
@@ -484,6 +485,8 @@ pub struct FlowSnapshot {
     pub path: Vec<Uuid>,
     /// 当前路径上的可见题目。
     pub visible: Vec<Uuid>,
+    /// 当前可见且必填的题目，包含动态必填。
+    pub required: Vec<Uuid>,
     /// 已校验的有效答案。
     pub answers: BTreeMap<Uuid, Value>,
     /// 可见题目的错误；隐藏题目不留错误。
@@ -719,15 +722,6 @@ impl<'a> FlowEvaluator<'a> {
                             }
                         }
                         result.visible.push(*id);
-                        let value = match question
-                            .normalize_answer(inputs.get(id).cloned().unwrap_or(Value::Null))
-                        {
-                            Ok(value) => value,
-                            Err(_) => {
-                                result.errors.insert(*id, LogicErrorCode::InvalidAnswer);
-                                continue;
-                            }
-                        };
                         let required = if question.required {
                             Ok(LogicValue::Boolean(true))
                         } else {
@@ -736,6 +730,18 @@ impl<'a> FlowEvaluator<'a> {
                                 &result.answers,
                                 false,
                             )
+                        };
+                        if matches!(&required, Ok(LogicValue::Boolean(true))) {
+                            result.required.push(*id);
+                        }
+                        let value = match question
+                            .normalize_answer(inputs.get(id).cloned().unwrap_or(Value::Null))
+                        {
+                            Ok(value) => value,
+                            Err(_) => {
+                                result.errors.insert(*id, LogicErrorCode::InvalidAnswer);
+                                continue;
+                            }
                         };
                         match required {
                             Ok(LogicValue::Boolean(true)) if value.is_none() => {
@@ -853,6 +859,7 @@ impl<'a> FlowSession<'a> {
                 .map(|index| self.evaluator.flow.id(*index))
                 .collect(),
             visible: self.projection.visible.clone(),
+            required: self.projection.required.clone(),
             answers: self.projection.answers.clone(),
             errors: self.projection.errors.clone(),
             route_error: self.projection.route_error,

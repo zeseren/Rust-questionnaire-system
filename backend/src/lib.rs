@@ -10,6 +10,7 @@ mod flow;
 mod http;
 mod logic;
 mod logic_document;
+mod logic_text;
 mod migration;
 mod reports;
 mod repository;
