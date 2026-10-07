@@ -8,6 +8,7 @@ mod entities;
 mod error;
 mod flow;
 mod http;
+mod identity;
 mod logic;
 mod logic_document;
 mod logic_text;

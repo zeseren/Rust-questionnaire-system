@@ -1,7 +1,42 @@
 //! 预览与正式填写共用的数字校验必须拒绝失真整数，并保留后端允许的大整数。
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildAnswers } from '../src/answers.ts'
+import { readFileSync } from 'node:fs'
+import { buildAnswers, isAnswered } from '../src/answers.ts'
+import { FlowInputs } from '../src/flow-inputs.ts'
+
+test('共享空白样例保持普通填写与流程的进度必填和省略语义一致', () => {
+  const fixtures = JSON.parse(
+    readFileSync(
+      new URL('../../fixtures/survey-logic/input-contracts.json', import.meta.url),
+      'utf8',
+    ),
+  )
+  for (const item of fixtures.text_cases) {
+    assert.equal(isAnswered(item.value), item.answered, item.name)
+    for (const required of [false, true]) {
+      const doc = document(false)
+      doc.questions = [
+        { id: questionId, title: '多行文本', type: 'textarea', required, max_length: 1000 },
+      ]
+      const result = buildAnswers(doc, { [questionId]: item.value })
+      const form = new FlowInputs(doc)
+      form.change(questionId, item.value)
+      assert.equal(Boolean(result.errors[questionId]), required && !item.answered, item.name)
+      assert.equal(
+        Boolean(form.snapshot().errors[questionId]),
+        required && !item.answered,
+        item.name,
+      )
+      assert.equal(Object.hasOwn(form.snapshot().answers, questionId), item.answered, item.name)
+      assert.equal(result.answers.length, Number(item.answered), item.name)
+      if (item.answered) {
+        assert.equal(result.answers[0].value, item.value, item.name)
+        assert.equal(form.snapshot().answers[questionId], item.value, item.name)
+      }
+    }
+  }
+})
 
 const questionId = '00000000-0000-4000-8000-000000000001'
 

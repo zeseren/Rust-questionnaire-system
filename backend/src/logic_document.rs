@@ -37,6 +37,7 @@ pub struct DocumentLogic {
 #[serde(deny_unknown_fields)]
 pub struct ComputedVariable {
     /// 稳定变量 ID。
+    #[serde(deserialize_with = "crate::identity::deserialize")]
     pub id: Uuid,
     /// 期望结果类型；编译器核对表达式实际类型。
     pub value_type: LogicValueType,
@@ -49,6 +50,7 @@ pub struct ComputedVariable {
 #[serde(deny_unknown_fields)]
 pub struct QuestionRule {
     /// 应用规则的题目。
+    #[serde(deserialize_with = "crate::identity::deserialize")]
     pub question_id: Uuid,
     /// 缺省时显示。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -139,7 +141,7 @@ impl CompiledDocumentLogic {
             .evaluate_resolving(answers, &mut |dependency| {
                 self.evaluate_variable(dependency, answers, cache)
             })
-            .map_err(|failure| relocate(failure, &self.variable_paths[&id]))?;
+            .map_err(|failure| failure.relocate(&self.variable_paths[&id]))?;
         cache.insert(id, value.clone());
         Ok(value)
     }
@@ -162,7 +164,7 @@ impl CompiledDocumentLogic {
                 *id,
                 self.variables[id]
                     .evaluate_with_variables(answers, &variables)
-                    .map_err(|failure| relocate(failure, &self.variable_paths[id]))?,
+                    .map_err(|failure| failure.relocate(&self.variable_paths[id]))?,
             );
         }
         let mut rules = BTreeMap::new();
@@ -174,7 +176,7 @@ impl CompiledDocumentLogic {
                         expression
                             .evaluate_with_variables(answers, &variables)
                             .map_err(|failure| {
-                                relocate(failure, &format!("{}.{}", rule.path, field))
+                                failure.relocate(&format!("{}.{}", rule.path, field))
                             })
                     })
                     .transpose()
@@ -249,7 +251,7 @@ impl DocumentLogic {
         let compile = |expression: &Value, path: &str| {
             let program = json!({ "dsl_version": self.dsl_version, "semantics_version": self.semantics_version, "expression": expression });
             compile_with_variables(&program, questions, &types)
-                .map_err(|failure| relocate(failure, path))
+                .map_err(|failure| failure.relocate(path))
         };
         // 即使规则包为空，也必须检查版本和题目绑定。
         compile(&json!({ "op": "boolean", "value": true }), "$.logic")?;
@@ -398,11 +400,6 @@ impl DocumentLogic {
             flow.renew_ids(questions, options, &variables);
         }
     }
-}
-
-fn relocate(mut failure: LogicError, path: &str) -> LogicError {
-    failure.path = failure.path.replacen("$.expression", path, 1);
-    failure
 }
 
 pub(crate) fn rewrite(

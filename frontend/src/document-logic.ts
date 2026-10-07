@@ -1,6 +1,7 @@
 //! 文档规则按依赖顺序编译与计算；规则引用的答案必须在使用位置可获得。
 import { checkExpressionBudget, compileExpression, LogicError } from './logic.ts'
 import { copy } from './json.ts'
+import { isConfigurationId } from './value-contract.ts'
 import { compileFlow, parseFlow } from './flow-compiler.ts'
 import type { CompiledFlow, FlowDefinition } from './flow-compiler.ts'
 import type { CompiledExpression, LogicValue, LogicValueType } from './logic.ts'
@@ -67,12 +68,7 @@ function record(
   return value
 }
 function id(raw: unknown, path: string): string {
-  if (
-    typeof raw !== 'string' ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw) ||
-    raw === '00000000-0000-0000-0000-000000000000'
-  )
-    throw new LogicError('invalid_reference', path)
+  if (!isConfigurationId(raw)) throw new LogicError('invalid_reference', path)
   return raw
 }
 

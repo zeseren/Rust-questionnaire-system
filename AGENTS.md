@@ -4,6 +4,8 @@
 
 ## Project Overview
 
+当前开发前提（2026-10-07）：项目尚无正式发布版本，目前不需要考虑历史答卷兼容。后续设计和实现可以直接调整当前模型、DSL 与数据结构，不为旧格式、历史答卷或旧版本增加兼容分支、迁移方案和回归负担。既有文档中的历史兼容描述是此前的实现记录，不作为当前开发约束；仍按当前契约保留必要的回归验证。
+
 `questionnaire-api` 是问卷调查系统的 Rust HTTP JSON API；`frontend/` 现有连接真实接口的 Vue 3 前端 MVP。后端 `share_url` 仍指向 JSON 接口，前端填写页面为 `/s/:id`。
 
 Domain: publishers create surveys with 6 question types (single/multiple choice, text, textarea, number, rating), publish immutable versions, collect answers anonymously or one-per-account, then view per-version statistics and export CSV. Admins govern users/surveys with an audit trail.
@@ -29,7 +31,8 @@ Request trace example — `POST /api/surveys/{id}/publish`: `surveys::publish` �
 ## Key Directories
 
 - `backend/src/` — all source, flat (one file per feature area, no subdirectories).
-- `backend/tests/` — integration tests (`domain.rs` is currently the entire suite).
+- `backend/tests/` — 独立回归目标：`domain.rs`、`logic.rs`、`flow.rs`、`logic_text.rs`；业务源码中不放测试。
+- `fixtures/survey-logic/` — Rust 与 TypeScript 共用人工预期的表达式、文档、流程、最终提交、文本及输入契约样例。
 - `frontend/` — Vue 3、TypeScript、Vite、Vue Router、Pinia；`prototype.html` 与 `fluent-prototype.html` 保留为独立风格原型（后者对应当前 Fluent 2 视觉），`src/` 为真实应用。
 - `docs/` — Chinese design docs (`backend-guide.md`, `requirements-analysis.md`).
 - repo root — `Cargo.toml` / `Cargo.lock` (workspace + lockfile), `compose.yaml` (optional Postgres 18 only), `.env.example`.
@@ -46,6 +49,11 @@ Module map (useful reading order):
 | `security.rs` | CSRF + rate-limit + security-header middleware |
 | `auth.rs` | `AuthUser` extractor, Argon2, sessions, cookie plumbing |
 | `domain.rs` | pure survey document model + validation |
+| `identity.rs` | 配置与作答题目 UUID 的严格反序列化；与答案值的规范化分开 |
+| `logic.rs` | 类型化表达式编译与求值、三值逻辑、数值及资源预算 |
+| `logic_document.rs` | 变量依赖排序、题目规则、身份引用重写 |
+| `flow.rs` | 前向流程编译、会话、改答清理与提交路径重建 |
+| `logic_text.rs` | 文本解析为统一 AST，再调用文档编译器 |
 | `entities.rs` | 6 SeaORM entity modules |
 | `repository.rs` | ownership lookups + row locking rules |
 | `migration.rs` + `schema.sql` | migration entry + authoritative DDL |
@@ -111,18 +119,19 @@ Two paths over the same profiles. Stable + LLVM is always the default; Cranelift
 - `backend/src/lib.rs` — composition root: `run()`, `router()`, `AppState`, health check, OpenAPI merge. Read first.
 - `backend/src/error.rs` — the error contract everything returns.
 - `backend/src/repository.rs` — the locking/ownership invariant every writer obeys.
-- `backend/src/domain.rs` — all validation rules; the only module with automated tests.
+- `backend/src/domain.rs` — 问卷模型与校验，也是纯领域 DSL/流程接口的公共出口；实现模块保持私有。
 - `backend/src/http.rs`, `backend/src/config.rs`, `backend/src/security.rs` — boundary concerns (extractors, env contract, request gating).
 - `backend/Cargo.toml` — MSRV/edition/features; `Cargo.lock` — exact pins.
 - `Cargo.toml` (root) `[profile.*]` + `.cargo/config.toml` / `.cargo/cranelift.toml` — compile-speed tuning (dev/release), the opt-in Cranelift alias, and the child-process `TMP`/`TEMP` pin.
-- `backend/tests/domain.rs` — the whole test suite.
+- `backend/tests/` — 纯领域回归，按文档、表达式/规则、流程、文本入口分文件。
 - `compose.yaml`, `.env.example` — optional DB and the env contract.
 - `README.md`、`docs/backend-guide.md`、`docs/frontend-guide.md`、`docs/requirements-analysis.md` — 运行说明、前后端代码指南与分阶段验证记录。前端 MVP 已实现，性能目标仍未经过压测；以当前代码和验证记录为准。
 
 ## 前端 MVP 约定
 
 - 视觉基线是 2026-09-30 起的 Fluent 2 方向：控件 4px、卡片 8px、弹窗 12px 圆角，分级阴影，带轻微色调的 Mica 基底与磁贴渐变，移动导航在浏览器支持时使用 `backdrop-filter` 亚克力；主题仍是浅色、深色与跟随系统。以 `frontend/src/styles.css` 令牌和 `frontend/fluent-prototype.html` 为准，早期「直角、纯色、不用渐变/投影/毛玻璃」的说法已作废，不要再据此改样式。
-- 在 `frontend/` 运行 `npm ci`、`npm run dev`；必要构建使用 `npm run build`。开发和预览固定使用 `http://localhost:5173`，后端 `PUBLIC_ORIGIN` 必须匹配。
+- 在 `frontend/` 运行 `pnpm install --frozen-lockfile`、`pnpm run dev`；必要构建使用 `pnpm run build`。开发和预览固定使用 `http://localhost:5173`，后端 `PUBLIC_ORIGIN` 必须匹配。
+- 前端包管理器固定为 pnpm：版本的唯一来源是 `frontend/package.json` 的 `packageManager` 字段，锁文件是 `frontend/pnpm-lock.yaml`；不要用 npm/yarn/bun，不要重新生成 `package-lock.json`，依赖变更后用 pnpm 更新锁文件。
 - `/api` 经 Vite 同源代理访问后端，目标由服务器变量 `API_PROXY_TARGET` 配置；保留 Cookie 和 Origin 校验，不将秘密放入浏览器变量。
 - 用户要求按 MVP 范围推进，只做必要验证，不主动扩展测试工程或异常场景联调；静态原型无需测试。
 
@@ -152,7 +161,10 @@ Two paths over the same profiles. Stable + LLVM is always the default; Cranelift
 
 ## Testing & QA
 
-- Framework: built-in `cargo test`; one integration target `backend/tests/domain.rs` (18 synchronous tests, all passing as of 2026-10-01) covering pure domain rules only: normalization/idempotence (answer order, `-0.0` → `0`), duplicate/foreign answer identities, required vs optional answers, Unicode scalar limits + NUL rejection, per-type text capacity and historical-version capacity compatibility (`validate_copy_draft`), number precision/overflow and JSON-length limits checked before normalization, JSONB round-trip, and the publish-time submission budget (rejection boundary + worst-case payload coverage + JSON escaping at the request boundary).
+- 使用内置 `cargo test`，四个独立目标：`domain` 覆盖题型、身份、规范化、文本/数字边界与提交预算；`logic` 覆盖表达式及文档依赖；`flow` 覆盖拓扑、改答清理、最终提交及配置身份；`logic_text` 覆盖文本解析。前端以 Node 内置运行器执行 `frontend/tests/`。具体通过数量和真实服务验证记录在 `docs/requirements-analysis.md`，不把历史数量当作当前测试清单。
+- 只为已确认问题和当前契约补必要回归。新测试名、断言说明与样例说明使用中文；Rust 测试放 `backend/tests/`，不得追加到业务 `.rs` 文件末尾。两端独立实现，共享语义样例，不新增历史答卷兼容专项测试。
+- 文本空白统一按 Unicode `White_Space`（Rust `str::trim`）：U+0085 是空白，U+FEFF 不是；非空白文本保留原文。配置的题目、选项、变量及流程身份与引用只接受非零、小写连字符 UUID；答案中的选项值仍由规范化入口处理。
+- 提交答案和改答事件的 `question_id` 同样必须使用规范题目身份；不能把选项答案值的宽松 UUID 解析复用到身份字段。
 - `cargo test --locked --workspace` needs **no database and no env vars**. Useful filters: `cargo test -p questionnaire-api --test domain <name_substring>`.
 - Style: build input via the existing helpers (`id`, `question`, `choices`, `document`, `answer`); assert on `Result` and `question_id`, never on message wording; parse raw JSON strings with `serde_json::from_str` when digit precision matters.
 - Scope expectation: the suite is deliberately limited to pure domain logic. Do not add DB-less tests for HTTP/ORM plumbing — those paths are verified manually against a real Postgres (`docs/requirements-analysis.md` §11.2 records what was run, §11.3 lists what was not). If you change `domain.rs`, extend `tests/domain.rs`; if you change HTTP/auth/SQL behavior, verify by running the service.

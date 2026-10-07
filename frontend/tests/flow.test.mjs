@@ -12,6 +12,58 @@ const fixtures = JSON.parse(
   readFileSync(new URL('../../fixtures/survey-logic/flows.json', import.meta.url), 'utf8'),
 )
 
+test('配置与作答题目身份拒绝非规范 UUID 且选项值仍规范化', () => {
+  const contracts = JSON.parse(
+    readFileSync(
+      new URL('../../fixtures/survey-logic/input-contracts.json', import.meta.url),
+      'utf8',
+    ),
+  )
+  const source = fixtures.documents[contracts.document]
+  for (const path of contracts.configuration_paths) {
+    const segments = path.slice(1).split('/')
+    const original = segments.reduce((value, key) => value[key], source)
+    // 同步重命名声明和引用后，只扰动一个字段，避免其他字段掩盖校验缺口。
+    const renamed = JSON.stringify(source).replaceAll(original, contracts.canonical_id)
+    for (const item of contracts.uuid_cases) {
+      const doc = JSON.parse(renamed)
+      segments.slice(0, -1).reduce((value, key) => value[key], doc)[segments.at(-1)] = item.raw
+      let valid = true
+      try {
+        compileDocumentLogic(doc.logic, doc.questions)
+      } catch (error) {
+        assert.ok(error instanceof LogicError)
+        valid = false
+      }
+      assert.equal(valid, item.configuration_valid, `${path}：${item.name}`)
+    }
+  }
+  const doc = copy(source)
+  delete doc.logic
+  doc.questions.length = 1
+  doc.questions[0].options[0].id = contracts.canonical_id
+  const question_id = doc.questions[0].id
+  for (const item of contracts.uuid_cases) {
+    const evaluate = () => new FlowSession(doc).evaluateAnswers([{ question_id, value: item.raw }])
+    if (item.option_valid)
+      assert.equal(evaluate().answers[question_id], contracts.canonical_id, item.name)
+    else assert.throws(evaluate, LogicError, item.name)
+  }
+  doc.questions[0] = copy(source.questions[0])
+  doc.questions[0].id = contracts.canonical_id
+  const value = doc.questions[0].options[0].id
+  for (const item of contracts.uuid_cases) {
+    const answer = { question_id: item.raw, value }
+    for (const run of [
+      () => new FlowSession(doc).evaluateAnswers([answer]),
+      () => new FlowSession(doc).dispatch({ type: 'change', ...answer }),
+    ]) {
+      if (item.configuration_valid) assert.doesNotThrow(run, item.name)
+      else assert.throws(run, LogicError, item.name)
+    }
+  }
+})
+
 test('共享流程拒绝非法拓扑和未保护的分支依赖', () => {
   for (const fixture of fixtures.compilation) {
     const document = copy(fixtures.documents[fixture.document])

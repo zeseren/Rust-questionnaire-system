@@ -3,7 +3,9 @@ import { isLosslessNumber } from 'lossless-json'
 import { compileDocumentLogic } from './document-logic.ts'
 import type { CompiledDocumentLogic } from './document-logic.ts'
 import type { CompiledFlow, CompiledFlowNode, FlowOutcome } from './flow-compiler.ts'
-import { LogicError, numeric } from './logic.ts'
+import { LogicError } from './logic.ts'
+import { numeric } from './numbers.ts'
+import { isBlank, validText } from './value-contract.ts'
 import type { CompiledExpression, LogicErrorCode, LogicValue } from './logic.ts'
 import { copy, copyPayload } from './json.ts'
 import type { Question, SurveyDocument } from './types'
@@ -330,15 +332,10 @@ function normalizeAnswer(question: Question, raw: unknown): Answer | null {
     }
     case 'text':
     case 'textarea': {
-      if (
-        typeof raw !== 'string' ||
-        /[\0\uD800-\uDFFF]/u.test(raw) ||
-        [...raw].length > question.max_length
-      )
+      if (typeof raw !== 'string' || !validText(raw) || [...raw].length > question.max_length)
         return invalid()
       if (question.type === 'text' && /[\n\r\v\f\u0085\u2028\u2029]/u.test(raw)) return invalid()
-      // Rust str::trim 使用 Unicode White_Space；JS trim 对 U+0085、U+FEFF 的定义不同。
-      return /^\p{White_Space}*$/u.test(raw) ? null : raw
+      return isBlank(raw) ? null : raw
     }
     case 'number':
     case 'rating': {

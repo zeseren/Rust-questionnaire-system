@@ -51,6 +51,52 @@ fn answer(question: u128, value: Value) -> Answer {
 }
 
 #[test]
+fn 共享空白样例保持普通答卷与流程的必填和省略语义一致() {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../fixtures/survey-logic/input-contracts.json"
+    ))
+    .unwrap();
+    for case in fixtures["text_cases"].as_array().unwrap() {
+        let answered = case["answered"].as_bool().unwrap();
+        for required in [false, true] {
+            let doc = document(vec![question(
+                1,
+                required,
+                QuestionKind::Textarea { max_length: 1000 },
+            )]);
+            let answers = vec![answer(1, case["value"].clone())];
+            let plain = doc.validate_answers(answers.clone());
+            let flow = questionnaire_api::domain::FlowEvaluator::new(&doc)
+                .unwrap()
+                .evaluate_answers(answers);
+            if required && !answered {
+                assert_eq!(
+                    plain.unwrap_err().question_id,
+                    Some(id(1)),
+                    "{}",
+                    case["name"]
+                );
+                assert_eq!(
+                    flow.unwrap_err().question_id,
+                    Some(id(1)),
+                    "{}",
+                    case["name"]
+                );
+            } else {
+                let plain = plain.unwrap();
+                assert_eq!(plain, flow.unwrap().answers, "{}", case["name"]);
+                assert_eq!(
+                    plain.get(&id(1)),
+                    answered.then_some(&case["value"]),
+                    "{}",
+                    case["name"]
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn 旧文档不增加规则字段且规则草稿复制重写所有身份() {
     let fixture: Value =
         serde_json::from_str(include_str!("../../fixtures/survey-logic/expressions.json")).unwrap();

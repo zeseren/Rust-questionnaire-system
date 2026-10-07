@@ -211,6 +211,9 @@ main.rs: main
 | [`surveys.rs`](../backend/src/surveys.rs) | `save_draft` → `save_survey_draft`；`publish` → `publish_survey` | handler 不做数据库拼装；业务函数检查归属、修订、状态并提交事务 |
 | [`submissions.rs`](../backend/src/submissions.rs) | `submit` → `submit_response` → `lock_public_survey` | 模式判断、行锁、重验 Session、幂等、版本匹配、原子写入 |
 | [`domain.rs`](../backend/src/domain.rs) | `Document`、`QuestionKind`、`validate_answers` | 不依赖网络和数据库的题面/答案规则 |
+| [`identity.rs`](../backend/src/identity.rs) | `parse`、`deserialize`、`deserialize_vec` | 非零、小写连字符配置 UUID 的统一解析边界 |
+| [`logic.rs`](../backend/src/logic.rs)、[`logic_document.rs`](../backend/src/logic_document.rs) | `compile_expression`、`DocumentLogic::compile` | 表达式类型、变量依赖、题目规则、容量和引用重写 |
+| [`flow.rs`](../backend/src/flow.rs)、[`logic_text.rs`](../backend/src/logic_text.rs) | `FlowSession`、`FlowEvaluator`、`parse_logic_text` | 前向流程、改答清理、提交重建；文本编译到相同 AST |
 | [`repository.rs`](../backend/src/repository.rs)、[`entities.rs`](../backend/src/entities.rs) | `owned_survey`、`lock_user`、`lock_survey`、各 `Model` | 共用归属过滤与锁；数据库字段映射 |
 | [`reports.rs`](../backend/src/reports.rs) | `statistics`、`response_snapshot`、`summarize_question`、`encode_csv` | 同一版本与时间过滤；一次结果快照生成报表和导出 |
 | [`auth.rs`](../backend/src/auth.rs)、[`admin.rs`](../backend/src/admin.rs) | `authenticate`、`change_password`、`change_user`、`change_survey` | Session 失效与账号资格变化；治理操作和审计原子落库 |
@@ -293,6 +296,9 @@ SeaORM 做大部分查询和写入；`reports::response_snapshot` 使用参数�
 - 草稿允许不完整，但容量、ID 唯一性、数值有限性等基本约束始终有效。发布再要求标题、目的、至少一道题、有效题型配置；最多 100 题，每道选择题最多 50 个选项。单题上限之和可以合法超过单次提交的请求上限，因此发布期还按最坏情况总量预算把关（见 3.2）。
 - 文字按 Rust `chars()`，即 Unicode 标量值计数，不是 UTF-8 字节数，也不等同于用户眼里的字形数量。非空白答案保留原文；不会静默截断、修剪或按内容判断“有效性”。
 - `null`、空白文本、空多选视为缺失：可选题不存这一键，必填题拒绝。**合法数值 `0` 不等于缺失。** 单行文本拒绝换行，多行文本允许换行。
+- 空白按 Unicode `White_Space`（Rust `str::trim`），前端普通填写、流程填写与进度计数使用相同规则：U+0085 视为空白；U+FEFF 是内容，不视为空白。非空白文本仍保留首尾原文。
+- 配置中的题目、选项、变量、规则题目、流程入口/节点/出口/页面归属与 AST 引用均使用非零、小写连字符 UUID。Rust 配置 DTO 在反序列化时拒绝其他写法，经 HTTP 返回 `400 invalid_json`；AST 引用错误由编译器报告。答案的选项值仍接受可解析 UUID 并按现有选项规范化；这不是历史格式兼容分支。
+- 提交答案和改答事件的 `question_id` 也在反序列化时执行同一严格身份规则，与 TypeScript 按规范题目 ID 匹配的行为一致。
 - 题面文字、文本答案、治理原因拒绝 `U+0000`（NUL），不把无法存入 PostgreSQL 文本/JSONB 的输入拖到数据库层再报内部错误。文字作为纯文本使用，不是可信 HTML。
 - 数字题只接受 JSON 数字，拒绝字符串、布尔值、非有限值；边界是闭区间。`integer=true` 检查数学整数，评分还受 `i32` 整数范围和题面范围约束。
 - 数字与评分的 JSON 表示在规范化前最多 64 字节（`MAX_NUMBER_JSON_BYTES`），包括负号、小数点和指数。与 `serde_json` 一致，省略的正指数符号 `+` 也计入长度；例如 `1e3` 按 `1e+3` 计数。超限返回题目级 `422`，前端数字输入执行相同校验，不先舍入再发送。

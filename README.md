@@ -23,7 +23,7 @@
 | Rust / Cargo | Rust **1.94 或更新版本**；crate 使用 Rust 2024 edition，最低版本以 `backend/Cargo.toml` 为准，不能只按 edition 推断编译器版本 |
 | Windows 编译环境 | 安装 Rust MSVC 工具链所需的 Visual Studio C++ Build Tools 和 Windows SDK |
 | PostgreSQL | 按本指南使用 **PostgreSQL 18**；服务端与 `psql`、`createdb`、`pg_dump`、`pg_restore` 客户端均准备好，并将客户端 `bin` 目录加入 PATH |
-| Node.js / npm | 推荐 Node.js **24.12 或更新版本**，也支持 22.18+ 的 22.x；准确范围见 `frontend/package.json`，依赖由 `package-lock.json` 锁定 |
+| Node.js / pnpm | 推荐 Node.js **24.12 或更新版本**，也支持 22.18+ 的 22.x；准确范围见 `frontend/package.json`。前端依赖一律用 pnpm 安装，版本由 `frontend/package.json` 的 `packageManager` 字段固定，锁文件为 `frontend/pnpm-lock.yaml`（npm 只用于首次安装 pnpm，`package-lock.json` 已删除） |
 | PowerShell | Windows PowerShell 5.1 或 PowerShell 7；中文请求示例显式发送 UTF-8 字节 |
 
 根目录是单成员 Cargo workspace，成员目录为 `backend`，包名为 `questionnaire-api`。当前锁定的核心依赖为 Axum 0.8.9、SeaORM / sea-orm-migration 2.0.2、SQLx 0.9.0、Tokio 1.53.1；准确版本以 [Cargo.lock](Cargo.lock) 为准，命令加 `--locked` 避免无意更新依赖。PostgreSQL 18 是本项目的运行基线，并非对所有旧大版本作兼容保证。
@@ -33,7 +33,13 @@ rustc --version
 cargo --version
 psql --version
 node --version
-npm --version
+pnpm --version
+```
+
+本机没有 pnpm 时先安装一次；版本固定由 `frontend/package.json` 的 `packageManager` 字段承担，不需要手工挑选版本：
+
+```powershell
+npm install --global pnpm
 ```
 
 ## 2. 本机数据库：创建专用账号和空库
@@ -112,20 +118,20 @@ $OpenApi.info
 
 ```powershell
 Set-Location frontend
-npm ci
-npm run dev
+pnpm install --frozen-lockfile
+pnpm run dev
 ```
 
 打开 **http://localhost:5173**，注册账号后即可创建、编辑、发布问卷。发布后的填写链接为 `/s/:id`，可复制给填写者；前端分享的是网页，后端响应中的 `share_url` 仍是公开 JSON 接口路径。管理员初始化沿用第 4 节，登录后会显示“平台管理”。
 
-开发服务器固定使用 `localhost:5173`，将 `/api` 代理到 `http://127.0.0.1:3000`，保留浏览器的 `Origin` 和 Cookie。后端使用其他地址时，可复制 `frontend/.env.example` 为 `frontend/.env` 并修改 `API_PROXY_TARGET`，或在运行 `npm run dev` 的终端设置该环境变量。它仅由 Vite 服务器读取；不要用 `VITE_` 环境变量存放密钥。
+开发服务器固定使用 `localhost:5173`，将 `/api` 代理到 `http://127.0.0.1:3000`，保留浏览器的 `Origin` 和 Cookie。后端使用其他地址时，可复制 `frontend/.env.example` 为 `frontend/.env` 并修改 `API_PROXY_TARGET`，或在运行 `pnpm run dev` 的终端设置该环境变量。它仅由 Vite 服务器读取；不要用 `VITE_` 环境变量存放密钥。
 
 构建与本机预览也在 `frontend/` 中执行：
 
 ```powershell
-npm run build
-# 先停止 npm run dev，避免占用同一端口
-npm run preview
+pnpm run build
+# 先停止 pnpm run dev，避免占用同一端口
+pnpm run preview
 ```
 
 `build` 包含 TypeScript 检查，生成 `frontend/dist/`；`preview` 使用相同的 `5173` 端口与 API 代理，仍需运行后端及数据库。不能通过双击 `dist/index.html` 使用实际应用。前端不由 Rust 服务托管，访问后端根路径不会显示工作台。
@@ -191,9 +197,11 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 
 领域回归测试位于 [`backend/tests/domain.rs`](backend/tests/domain.rs)，DSL 表达式与文档编译回归位于 [`backend/tests/logic.rs`](backend/tests/logic.rs)，流程与改答清理回归位于 [`backend/tests/flow.rs`](backend/tests/flow.rs)，文本解析回归位于 [`backend/tests/logic_text.rs`](backend/tests/logic_text.rs)，均不启动数据库；它们不能替代事务、权限和并发提交的真实服务验证。运行过的 HTTP、数据库及备份恢复场景见 [实施与验证记录](docs/requirements-analysis.md#11-后端实施与验证记录)。
 
-前端在 `frontend/` 执行 `npm run build` 检查类型并构建，`npm run format` 整理源码，`npm run format:check` 检查格式。`npm run test:regression` 使用 Node 内置测试运行器执行 `frontend/tests/` 中的数字精度、表达式、文档规则、流程和文本回归，不添加测试依赖。两端 DSL 测试读取同一目录下的[表达式样例](fixtures/survey-logic/expressions.json)、[文档样例](fixtures/survey-logic/documents.json)、[流程样例](fixtures/survey-logic/flows.json)、[最终提交样例](fixtures/survey-logic/submissions.json)与[文本样例](fixtures/survey-logic/texts.json)。没有引入前端自动化测试框架；实际浏览器联调范围记录在 [前端实施与验证记录](docs/requirements-analysis.md#12-前端-mvp-实施与验证记录)和 [DSL 验收记录](docs/survey-dsl-plan.md#阶段-56-实施与验收记录)，不将静态原型视为业务验收。
+前端在 `frontend/` 执行 `pnpm run build` 检查类型并构建，`pnpm run format` 整理源码，`pnpm run format:check` 检查格式。`pnpm run test:regression` 使用 Node 内置测试运行器执行 `frontend/tests/` 中的数字精度、表达式、文档规则、流程和文本回归，不添加测试依赖。两端 DSL 测试读取同一目录下的[表达式样例](fixtures/survey-logic/expressions.json)、[文档样例](fixtures/survey-logic/documents.json)、[流程样例](fixtures/survey-logic/flows.json)、[最终提交样例](fixtures/survey-logic/submissions.json)与[文本样例](fixtures/survey-logic/texts.json)。没有引入前端自动化测试框架；实际浏览器联调范围记录在 [前端实施与验证记录](docs/requirements-analysis.md#12-前端-mvp-实施与验证记录)和 [DSL 验收记录](docs/survey-dsl-plan.md#阶段-56-实施与验收记录)，不将静态原型视为业务验收。
 
-DSL 与流程引擎的[基础实施计划](docs/survey-dsl-plan.md)已完成：Rust 与 TypeScript 独立实现表达式、文档编译、流程和文本解析，共用语义样例；网页支持可视化规则/分支编辑、文本 DSL、分步预览与填写。服务端重建有效路径，保留历史版本幂等重放，并在详情/统计/CSV 中区分跳过和未答。真实浏览器与 PostgreSQL 已验证分支改答清理和丢失回执后的原载荷重试。筛选结束的持久化策略、重复组和子流程仍按计划留待后续，无规则问卷保持原有行为。
+DSL 与流程引擎的[基础实施计划](docs/survey-dsl-plan.md)已完成：Rust 与 TypeScript 独立实现表达式、文档编译、流程和文本解析，共用语义样例；网页支持可视化规则/分支编辑、文本 DSL、分步预览与填写。服务端重建有效路径，支持原提交载荷的幂等重放，并在详情/统计/CSV 中区分跳过和未答。真实浏览器与 PostgreSQL 已验证分支改答清理和丢失回执后的原载荷重试。筛选结束的持久化策略、重复组和子流程仍按计划留待后续，无规则问卷保持单页行为。当前尚无正式发布版本，后续开发不承担历史答卷或旧格式兼容要求。
+
+两端的[输入契约回归](fixtures/survey-logic/input-contracts.json)固定 Unicode 空白和配置 UUID 的接受集：U+0085 是空白，U+FEFF 是内容；配置 UUID 必须非零、小写、带连字符。对应代码与局部去重的复核结论见 [DSL 评审](docs/survey-dsl-review.md)。
 
 ### 7.1 编译速度配置
 

@@ -9,6 +9,73 @@ fn fixtures() -> Value {
 }
 
 #[test]
+fn 配置与作答题目身份拒绝非规范_uuid且选项值仍规范化() {
+    let contracts: Value = serde_json::from_str(include_str!(
+        "../../fixtures/survey-logic/input-contracts.json"
+    ))
+    .unwrap();
+    let source = &fixtures()["documents"][contracts["document"].as_str().unwrap()];
+    let canonical = contracts["canonical_id"].as_str().unwrap();
+    for path in contracts["configuration_paths"].as_array().unwrap() {
+        let path = path.as_str().unwrap();
+        let original = source.pointer(path).unwrap().as_str().unwrap();
+        // 先同步替换声明和引用，保证标准写法仍构成有效问卷；再单独扰动待测字段。
+        let renamed = serde_json::to_string(source)
+            .unwrap()
+            .replace(original, canonical);
+        for case in contracts["uuid_cases"].as_array().unwrap() {
+            let mut raw: Value = serde_json::from_str(&renamed).unwrap();
+            *raw.pointer_mut(path).unwrap() = case["raw"].clone();
+            let valid = serde_json::from_value::<Document>(raw)
+                .is_ok_and(|document| document.compile_logic().is_ok());
+            assert_eq!(
+                valid,
+                case["configuration_valid"].as_bool().unwrap(),
+                "{path}：{}",
+                case["name"]
+            );
+        }
+    }
+    let mut raw = source.clone();
+    raw.as_object_mut().unwrap().remove("logic");
+    raw["questions"].as_array_mut().unwrap().truncate(1);
+    raw["questions"][0]["options"][0]["id"] = canonical.into();
+    let document: Document = serde_json::from_value(raw.clone()).unwrap();
+    let question_id = document.questions[0].id;
+    for case in contracts["uuid_cases"].as_array().unwrap() {
+        let result = document.validate_answers(vec![Answer {
+            question_id,
+            value: case["raw"].clone(),
+        }]);
+        assert_eq!(
+            result.is_ok(),
+            case["option_valid"].as_bool().unwrap(),
+            "选项答案：{}",
+            case["name"]
+        );
+        if let Ok(answers) = result {
+            assert_eq!(answers[&question_id], canonical);
+        }
+    }
+    raw["questions"][0] = source["questions"][0].clone();
+    raw["questions"][0]["id"] = canonical.into();
+    let document: Document = serde_json::from_value(raw).unwrap();
+    let value = &source["questions"][0]["options"][0]["id"];
+    for case in contracts["uuid_cases"].as_array().unwrap() {
+        let valid = case["configuration_valid"].as_bool().unwrap();
+        let answer = json!({ "question_id": case["raw"], "value": value });
+        let accepted = serde_json::from_value::<Answer>(answer)
+            .is_ok_and(|answer| document.validate_answers(vec![answer]).is_ok());
+        assert_eq!(accepted, valid, "答案题目身份：{}", case["name"]);
+        let event = json!({ "type": "change", "question_id": case["raw"], "value": value });
+        let mut session = FlowSession::new(&document).unwrap();
+        let accepted = serde_json::from_value::<FlowEvent>(event)
+            .is_ok_and(|event| session.dispatch(event).is_ok());
+        assert_eq!(accepted, valid, "事件题目身份：{}", case["name"]);
+    }
+}
+
+#[test]
 fn 共享流程拒绝非法拓扑和未保护的分支依赖() {
     let fixtures = fixtures();
     for case in fixtures["compilation"].as_array().unwrap() {

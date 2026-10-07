@@ -467,3 +467,32 @@ release 对照均使用 stable + LLVM，仅切换 profile 配置：
 [DSL 实施计划](survey-dsl-plan.md)的阶段 0—6 已完成：Rust 与 TypeScript 独立实现共享语义，网页可视化与文本规则生成同一 AST，预览和填写共用会话，服务端重建路径并保持历史版本幂等及报表适用性。
 
 本轮通过 Rust 30 项、前端 17 项独立回归，以及 stable 格式/Clippy 和前端生产构建。用真实 Edge、Rust API 和 PostgreSQL 完成网页创建题目、配置分支与汇合、文本往返/错误定位、保存发布、手机改答清理、丢失回执后原载荷重试，随后核对单份答卷和历史详情/统计/CSV；完整证据及未覆盖范围见 [阶段 5、6 验收记录](survey-dsl-plan.md#阶段-56-实施与验收记录)。测试保持纯领域与少量输入适配回归，浏览器工具及临时数据仅在忽略的 `target/`，未加入项目测试依赖。
+
+## 18. 前端包管理器改为 pnpm（2026-10-07）
+
+前端依赖安装与脚本执行的调用方由 npm 改为 pnpm，仓库不再保留 `package-lock.json`。
+
+- 变更：删除 `frontend/package-lock.json`，改为提交 `frontend/pnpm-lock.yaml`；`frontend/package.json` 增加 `"packageManager": "pnpm@12.9.1"`，包管理器版本只由该字段固定。pnpm 12 会把被固定的包管理器自身的解析结果写入同一锁文件的第一份 YAML 文档（`packageManagerDependencies` 与 `@pnpm/exe.*` 平台包），第二份文档仍是项目依赖图，两者都由 pnpm 生成，`--frozen-lockfile` 会一起校验。
+- 脚本本身不变，只把调用形式从 `npm run <script>` 换成 `pnpm run <script>`；README、[前端指南](frontend-guide.md)、`AGENTS.md`、[DSL 实施计划](survey-dsl-plan.md)的门禁描述与本节同步更新，更早条目里的 `npm ...` 保留为当时的历史证据，不追改。
+- 验证（Windows、Node.js 24.13.0、pnpm 12.9.1）：删除 `frontend/node_modules` 与旧锁文件后全新 `pnpm install --frozen-lockfile` 解析并安装 66 个包；再次执行同一命令通过且不重写锁文件（前后 MD5 均为 `92ebb0263f36ee7c7a9803e9ae60f09a`）。`pnpm run test:regression` 17/17 通过；`pnpm run build` 的 `vue-tsc --noEmit` 与 Vite 8.3.0 生产构建通过；`pnpm run dev` 启动后 `GET /` 与 `GET /src/main.ts` 均返回 200。
+- 未执行：未重跑后端、数据库或浏览器闭环，运行行为沿用第 11.2、12、17 节记录；未新增依赖、脚本或测试框架。`pnpm run format:check` 仍报告 `src/answers.ts` 与 `src/views/AdminView.vue`（与第 16.1 节相同的 Windows CRLF 检查出问题，去掉 CRLF 后仍有既有格式差异）；这两处本轮未被修改，未扩大格式化范围，本轮新增/修改的文件本身通过 Prettier 检查。
+
+## 19. DSL 输入契约修复与局部去重（2026-10-07）
+
+对[静态评审](survey-dsl-review.md#8-复核与处置2026-10-07)进行实际核查后，完成以下修复：
+
+- 普通填写和流程填写共用 Unicode `White_Space` 空白规则，消除 U+0085、U+FEFF 在必填、省略答案、进度与离开提醒中的差异；非空白文本保留原文，Unicode 标量检查共用同一入口。
+- Rust 配置身份、答案及改答事件的题目身份在反序列化时要求非零、小写连字符 UUID，与 TypeScript 的接受集一致。AST 引用及文本绑定使用相同配置规则；选项答案值仍按其独立规范化契约处理。共享样例逐个扰动 15 个配置入口，并核对作答身份和选项值，包含尾随换行拒绝。
+- 前端数字原文校验集中到 `numbers.ts`，保留 64 字节预算、正指数补号、裸整数精度和无损传输；增加数字常量尾随换行的共享样例。Rust 错误路径重定位改为 `LogicError` 的单一方法。单题复制要求问卷上下文，答案排序使用默认码元序，填写页消费流程组件发出的答案。
+- pnpm 锁文件纳入版本控制；在只复制 `package.json` 和 `pnpm-lock.yaml`、没有 `node_modules` 的临时目录执行 `pnpm install --frozen-lockfile`，成功安装 66 个包，锁文件 SHA-256 与原文件一致。同步 AGENTS 的模块和测试布局、前后端指南、DSL 契约与评审处置；历史验证条目仍描述当时状态。
+
+本轮只增加两端各两个独立回归测试，并扩展已有共享表达式样例，没有新增测试框架、依赖、迁移或历史答卷兼容分支。Rust 测试全部位于 `backend/tests/`。项目尚无正式发布版本，旧文档中的兼容说明不作为后续开发约束。
+
+验证结果：
+
+- stable + LLVM：`cargo fmt --all -- --check`、`cargo test --locked --workspace`（32/32：domain 20、logic 5、flow 5、logic_text 2）、`cargo clippy --locked --workspace --all-targets -- -D warnings` 通过。
+- pnpm 12.9.1：冻结安装、`pnpm run test:regression`（19/19）、`pnpm run build`、`pnpm run format:check` 通过。此前格式检查报告的 `AdminView.vue` 仅整理工作区换行，没有内容差异。
+- 真实 PostgreSQL 18.1 与 Rust API：标准配置可保存并读回；大写、无连字符、花括号变量身份及非法页面题目身份返回 `400 invalid_json`，失败保存后原草稿和修订不变；普通及规则问卷都拒绝非规范提交题目身份。两种问卷的必填多行文本均拒绝仅 U+0085 的回答（422 并定位题目），接受 U+FEFF 并完成持久提交（201）。
+- 真实 Edge：普通与流程填写都在发送请求前拦截 U+0085；普通填写的进度保持 0/1；U+FEFF 能完成填写和提交，流程确认载荷正常传递，每份只发出一次提交，无页面异常。临时核对程序和数据均位于忽略的 `target/`。
+
+本轮没有重做完整编辑器、报表、权限并发、性能或移动端矩阵；相关既有证据仍见第 17 节及 DSL 阶段记录。

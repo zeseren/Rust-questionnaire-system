@@ -3,6 +3,7 @@ import { compileDocumentLogic } from './document-logic.ts'
 import type { DocumentLogic } from './document-logic.ts'
 import type { FlowNode } from './flow-compiler.ts'
 import { checkExpressionBudget, LogicError } from './logic.ts'
+import { isConfigurationId, validText } from './value-contract.ts'
 import type { LogicErrorCode, LogicValueType } from './logic.ts'
 import type { Question } from './types'
 
@@ -126,7 +127,7 @@ class Parser {
     const token = this.take()
     if (token.kind !== 'string') this.fail('invalid_syntax', token)
     const value = JSON.parse(token.raw) as string
-    if (/[\0\uD800-\uDFFF]/u.test(value)) this.fail('invalid_syntax', token)
+    if (!validText(value)) this.fail('invalid_syntax', token)
     return value
   }
   reference(category: Category) {
@@ -253,12 +254,7 @@ class Parser {
       this.expect('=')
       const id = this.string()
       this.expect(';')
-      if (
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) ||
-        /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(id) ||
-        this.#bindings.has(alias) ||
-        boundIds.has(id)
-      )
+      if (!isConfigurationId(id) || this.#bindings.has(alias) || boundIds.has(id))
         this.fail('invalid_reference', token)
       this.#bindings.set(alias, { category: category as Category, id })
       boundIds.add(id)

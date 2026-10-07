@@ -24,13 +24,13 @@ export function newQuestion(type: Question['type']): Question {
       return { ...base, type, min: 1, max: 5, min_label: '很不满意', max_label: '非常满意' }
   }
 }
-export function duplicateQuestion(question: Question, document?: SurveyDocument) {
+export function duplicateQuestion(question: Question, document: SurveyDocument) {
   const duplicated = copy(question)
   duplicated.id = crypto.randomUUID()
   if ('options' in duplicated)
     duplicated.options.forEach((option) => {
       option.id = crypto.randomUUID()
     })
-  if (document) duplicateQuestionRule(document, question, duplicated)
+  duplicateQuestionRule(document, question, duplicated)
   return duplicated
 }

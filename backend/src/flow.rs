@@ -19,6 +19,7 @@ use crate::logic_document::{CompiledDocumentLogic, DocumentLogic, rewrite};
 #[serde(deny_unknown_fields)]
 pub struct FlowDefinition {
     /// 入口页面的稳定身份。
+    #[serde(deserialize_with = "crate::identity::deserialize")]
     pub entry: Uuid,
     /// 页面、自动分支和结束节点。
     pub nodes: Vec<FlowNode>,
@@ -31,6 +32,7 @@ pub struct FlowBranch {
     /// 布尔表达式。
     pub when: Value,
     /// 后续节点身份。
+    #[serde(deserialize_with = "crate::identity::deserialize")]
     pub target: Uuid,
 }
 
@@ -51,24 +53,30 @@ pub enum FlowNode {
     /// 一页有序题目，点击下一步后才离开。
     Page {
         /// 页面身份。
+        #[serde(deserialize_with = "crate::identity::deserialize")]
         id: Uuid,
         /// 题目身份；全流程恰好覆盖文档题目一次。
+        #[serde(deserialize_with = "crate::identity::deserialize_vec")]
         question_ids: Vec<Uuid>,
         /// 下一节点。
+        #[serde(deserialize_with = "crate::identity::deserialize")]
         next: Uuid,
     },
     /// 自动条件分支，必须有默认出口。
     Branch {
         /// 分支节点身份。
+        #[serde(deserialize_with = "crate::identity::deserialize")]
         id: Uuid,
         /// 有优先级的条件列表。
         branches: Vec<FlowBranch>,
         /// 所有条件均为 false 时的出口。
+        #[serde(deserialize_with = "crate::identity::deserialize")]
         otherwise: Uuid,
     },
     /// 终点。
     End {
         /// 终点身份。
+        #[serde(deserialize_with = "crate::identity::deserialize")]
         id: Uuid,
         /// 结果种类。
         outcome: FlowOutcome,
@@ -352,10 +360,7 @@ pub(crate) fn compile_flow(
                     let path = format!("$.logic.flow.nodes[{index}].branches[{branch_index}].when");
                     let program = json!({"dsl_version": definition.dsl_version, "semantics_version": definition.semantics_version, "expression": branch.when});
                     let expression = compile_with_variables(&program, questions, &variable_types)
-                        .map_err(|mut failure| {
-                        failure.path = failure.path.replacen("$.expression", &path, 1);
-                        failure
-                    })?;
+                        .map_err(|failure| failure.relocate(&path))?;
                     if expression.value_type() != LogicValueType::Boolean {
                         return Err(error(LogicErrorCode::TypeMismatch, &path, None));
                     }
@@ -452,6 +457,7 @@ pub enum FlowEvent {
     /// 修改当前页面上的可见题目。
     Change {
         /// 题目身份。
+        #[serde(deserialize_with = "crate::identity::deserialize")]
         question_id: Uuid,
         /// 原始 JSON 答案，null 表示清空。
         value: Value,

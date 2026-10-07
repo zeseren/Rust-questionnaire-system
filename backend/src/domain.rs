@@ -121,7 +121,7 @@ impl<'de> Deserialize<'de> for Question {
         let title = common("title")?;
         let required = common("required")?;
         Ok(Self {
-            id: Uuid::deserialize(id).map_err(D::Error::custom)?,
+            id: crate::identity::deserialize(id).map_err(D::Error::custom)?,
             title: String::deserialize(title).map_err(D::Error::custom)?,
             required: bool::deserialize(required).map_err(D::Error::custom)?,
             kind: QuestionKind::deserialize(Value::Object(fields)).map_err(D::Error::custom)?,
@@ -203,6 +203,7 @@ impl QuestionKind {
 #[serde(deny_unknown_fields)]
 pub struct Choice {
     /// 在整份问卷中唯一且非空的稳定选项 ID。
+    #[serde(deserialize_with = "crate::identity::deserialize")]
     pub id: Uuid,
     /// 显示文字，最多 500 个 Unicode 标量值；发布时不能为空白。
     pub label: String,
@@ -213,6 +214,7 @@ pub struct Choice {
 #[serde(deny_unknown_fields)]
 pub struct Answer {
     /// 此答案所属的稳定题目 ID。
+    #[serde(deserialize_with = "crate::identity::deserialize")]
     pub question_id: Uuid,
     /// 随题型而定的 JSON 值；`null` 表示未回答。
     pub value: Value,

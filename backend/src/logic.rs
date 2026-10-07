@@ -72,6 +72,13 @@ pub struct LogicError {
     pub message: &'static str,
 }
 
+impl LogicError {
+    pub(crate) fn relocate(mut self, path: &str) -> Self {
+        self.path = self.path.replacen("$.expression", path, 1);
+        self
+    }
+}
+
 pub(crate) fn error(code: LogicErrorCode, path: &str, question_id: Option<Uuid>) -> LogicError {
     let message = match code {
         LogicErrorCode::InvalidSyntax => "规则结构或字段无效",
@@ -467,10 +474,7 @@ pub(crate) fn check_raw_budget(
 }
 
 pub(crate) fn reference(raw: &str, path: &str) -> Result<Uuid, LogicError> {
-    Uuid::parse_str(raw)
-        .ok()
-        .filter(|id| !id.is_nil() && id.to_string() == raw)
-        .ok_or_else(|| error(LogicErrorCode::InvalidReference, path, None))
+    crate::identity::parse(raw).ok_or_else(|| error(LogicErrorCode::InvalidReference, path, None))
 }
 
 fn numeric(raw: &str) -> Option<f64> {

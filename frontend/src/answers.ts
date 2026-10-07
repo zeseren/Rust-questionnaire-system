@@ -1,15 +1,12 @@
 //! 数字输入按原始 JSON 数字发送，最终精度与资格校验由服务器执行。
 import { LosslessNumber } from 'lossless-json'
 import type { Answer, SurveyDocument } from './types'
-// 与后端 domain::MAX_NUMBER_JSON_BYTES 一致，按传输表示限制，不能先舍入数字。
-const MAX_NUMBER_JSON_BYTES = 64
-// 与后端 finite_number 的裸整数范围一致：i64 最小值至 u64 最大值。
-const MIN_JSON_INTEGER = -(1n << 63n)
-const MAX_JSON_INTEGER = (1n << 64n) - 1n
+import { numberError, numberInput } from './numbers.ts'
+import { isBlank, validText } from './value-contract.ts'
 export type InputValue = string | string[] | number | null
 export type Inputs = Record<string, InputValue>
 export function isAnswered(value: InputValue | undefined) {
-  return value != null && (Array.isArray(value) ? value.length > 0 : String(value).trim() !== '')
+  return value != null && (Array.isArray(value) ? value.length > 0 : !isBlank(String(value)))
 }
 export function buildAnswers(document: SurveyDocument, values: Inputs) {
   const answers: Answer[] = []
@@ -20,8 +17,8 @@ export function buildAnswers(document: SurveyDocument, values: Inputs) {
       errors[question.id] = text
     }
     if ((question.type === 'text' || question.type === 'textarea') && typeof value === 'string') {
-      if (value.includes('\0')) {
-        fail('回答不能包含空字符。')
+      if (!validText(value)) {
+        fail('回答不能包含空字符或无效 Unicode 字符。')
         continue
       }
       if ([...value].length > question.max_length) {
@@ -57,34 +54,13 @@ export function buildAnswers(document: SurveyDocument, values: Inputs) {
         answers.push({ question_id: question.id, value: String(value) })
         break
       case 'number': {
-        // 与 serde_json 一致补齐正指数符号，保持数值和原始整数精度。
-        const raw = String(value)
-          .trim()
-          .replace(/([eE])(?=\d)/, '$1+')
+        const raw = numberInput(String(value))
+        const error = numberError(raw)
+        if (error) {
+          fail(error)
+          break
+        }
         const numeric = Number(raw)
-        if (
-          !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(raw) ||
-          !Number.isFinite(numeric)
-        ) {
-          fail('请输入有限数字，例如 12、0.5 或 1e3。')
-          break
-        }
-        if (raw.length > MAX_NUMBER_JSON_BYTES) {
-          fail(`数字最多 ${MAX_NUMBER_JSON_BYTES} 个字符（含小数点和指数符号）。`)
-          break
-        }
-        // 只对裸整数核对原值；部分超过 Number 安全整数范围的值仍能被精确表示。
-        if (!/[.eE]/.test(raw)) {
-          const integer = BigInt(raw)
-          if (integer < MIN_JSON_INTEGER || integer > MAX_JSON_INTEGER) {
-            fail('整数超出支持的数值范围。')
-            break
-          }
-          if (integer !== BigInt(numeric)) {
-            fail('整数无法精确表示，请调整数值。')
-            break
-          }
-        }
         if (question.integer && !Number.isInteger(numeric)) fail('此题只接受整数。')
         else if (
           (question.min != null && numeric < question.min) ||

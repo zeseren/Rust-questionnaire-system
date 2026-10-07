@@ -1,5 +1,6 @@
 //! 流程只能指向后续节点；合流处的分支独有答案必须显式处理缺失。
 import { LogicError } from './logic.ts'
+import { isConfigurationId } from './value-contract.ts'
 import type { CompiledExpression } from './logic.ts'
 import type { CompiledDocumentLogic, DocumentLogic } from './document-logic.ts'
 import type { Question } from './types'
@@ -48,12 +49,7 @@ function fields(raw: unknown, names: string[]): Record<string, unknown> {
   return value
 }
 function uuid(raw: unknown): string {
-  if (
-    typeof raw !== 'string' ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw) ||
-    raw === '00000000-0000-0000-0000-000000000000'
-  )
-    return invalid()
+  if (!isConfigurationId(raw)) return invalid()
   return raw
 }
 

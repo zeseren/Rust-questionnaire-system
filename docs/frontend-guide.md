@@ -21,8 +21,8 @@
 | 后端默认地址 | `http://127.0.0.1:3000` |
 | 后端根目录 `.env` | `PUBLIC_ORIGIN=http://localhost:5173`、`COOKIE_SECURE=false`，另配真实 `DATABASE_URL` |
 | 前端可选 `.env` | `API_PROXY_TARGET=http://127.0.0.1:3000`，只供 Vite 服务器读取 |
-| 开发 | `npm ci` 后执行 `npm run dev` |
-| 构建与预览 | `npm run build`，停止开发服务器后执行 `npm run preview` |
+| 开发 | `pnpm install --frozen-lockfile` 后执行 `pnpm run dev` |
+| 构建与预览 | `pnpm run build`，停止开发服务器后执行 `pnpm run preview` |
 
 浏览器只请求同源 `/api`。Vite 保留 `Origin`，统一请求函数携带 Cookie，写请求额外携带 `X-CSRF-Protection: 1`。不要将后端密钥放到浏览器变量中，也不要为开发关闭来源校验。若出现 `csrf_rejected`，核对页面地址、后端 `PUBLIC_ORIGIN` 及进程环境变量，并重启后端。
 
@@ -38,6 +38,9 @@
 | `stores.ts` | 登录态、通知、浅色/深色/跟随系统偏好 |
 | `resource.ts` | 加载与重试，丢弃过时的筛选响应 |
 | `documents.ts`、`answers.ts`、`format.ts` | 题目身份、动态作答校验、数字与北京时间展示 |
+| `value-contract.ts`、`numbers.ts` | Unicode 空白/标量、配置 UUID、数字原文与精度契约 |
+| `logic.ts`、`document-logic.ts`、`flow-compiler.ts`、`logic-text.ts` | 表达式、规则依赖、流程拓扑与文本 AST 编译 |
+| `flow.ts`、`flow-inputs.ts`、`components/FlowFields.vue` | 会话重算、原始输入适配与分步填写 |
 | `components/QuestionEditor.vue` | 六种题型的编辑与配置 |
 | `components/SurveyFields.vue` | 预览和真实填写共享的题目控件 |
 | `components/QuestionStats.vue` | 选项占比、评分分布、数字摘要和文本回答 |
@@ -72,7 +75,7 @@
 
 本期使用自定义 CSS、浏览器原生控件和轻量 CSS 图表，没有引入 Element Plus、ECharts、富文本或拖拽框架。题目排序通过上移/下移完成，统计文本逐批展开。API 类型为手写 DTO，后端契约变更时需同步维护。视觉约束以当前样式代码和 [Element Plus 可行性评估](element-plus-feasibility.md) 为准；早期「直角控件、纯色、不使用渐变或投影」的说明已被 2026-09-30 的视觉更新取代。
 
-源码格式化为 `npm run format`，格式检查为 `npm run format:check`，类型和生产构建为 `npm run build`。没有新增前端自动化测试框架；实际联调证据与未覆盖范围见 [实施记录](requirements-analysis.md#12-前端-mvp-实施与验证记录)。
+源码格式化为 `pnpm run format`，格式检查为 `pnpm run format:check`，类型和生产构建为 `pnpm run build`。前端包管理器固定为 pnpm（`frontend/package.json` 的 `packageManager` 字段），锁文件为 `frontend/pnpm-lock.yaml`；不要在该目录使用 npm 或重建 `package-lock.json`。没有新增前端自动化测试框架；实际联调证据与未覆盖范围见 [实施记录](requirements-analysis.md#12-前端-mvp-实施与验证记录)。
 
 DSL 基础计划已完成，报表页展示适用未答与规则跳过。编辑页的“规则与跳题”支持计算变量、递归表达式、题目显隐/动态必填/答案约束，以及分页、条件分支、汇合和结束节点。点击“定位配置”可跳到错误的变量、规则或流程节点；删除题目、选项或节点后不会静默放宽依赖。
 

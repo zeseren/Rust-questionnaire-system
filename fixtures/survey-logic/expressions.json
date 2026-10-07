@@ -856,6 +856,25 @@
       }
     },
     {
+      "name": "数字常量不能接受尾随换行",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "number",
+          "value": "1\n"
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "invalid_number",
+          "path": "$.expression",
+          "question_id": null
+        }
+      }
+    },
+    {
       "name": "未知执行语义版本不能回退到当前版本",
       "program": {
         "dsl_version": 1,

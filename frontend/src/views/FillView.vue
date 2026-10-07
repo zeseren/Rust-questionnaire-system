@@ -7,7 +7,7 @@ import { copyPayload } from '../json'
 import { buildAnswers, isAnswered, type Inputs } from '../answers'
 import { dateTime, shareLink } from '../format'
 import { useAuth } from '../stores'
-import type { PublicSurvey, Receipt, Submission, User } from '../types'
+import type { Answer, PublicSurvey, Receipt, Submission, User } from '../types'
 import SurveyFields from '../components/SurveyFields.vue'
 import FlowFields from '../components/FlowFields.vue'
 import AuthForm from '../components/AuthForm.vue'
@@ -73,13 +73,11 @@ async function focusError() {
     document.getElementById(`answer-${first.id}`)?.focus()
   }
 }
-async function submit() {
+async function submit(flowAnswers?: Answer[]) {
   if (!survey.value || busy.value || receipt.value || versionChanged.value) return
   error.value = ''
   if (!pending.value) {
-    const flowAnswers = survey.value.document.logic
-      ? flowFields.value?.submissionAnswers()
-      : undefined
+    if (survey.value.document.logic) flowAnswers ??= flowFields.value?.submissionAnswers()
     if (survey.value.document.logic && !flowAnswers) return
     const result = flowAnswers
       ? { answers: flowAnswers, errors: {} }
@@ -180,7 +178,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           </RouterLink>
         </p>
       </div>
-      <form v-if="survey" novalidate @submit.prevent="submit">
+      <form v-if="survey" novalidate @submit.prevent="submit()">
         <section class="panel public-survey-header">
           <p class="eyebrow">
             {{ survey.mode === 'anonymous' ? '匿名填写' : '登录限次' }} · V{{

@@ -1,5 +1,7 @@
 //! 规则先编译后执行；三值逻辑、数字边界和错误分类与 Rust 共用语义样例。
 import { isLosslessNumber } from 'lossless-json'
+import { numeric } from './numbers.ts'
+import { isConfigurationId, validText } from './value-contract.ts'
 import type { Question } from './types'
 
 export type LogicValueType = 'boolean' | 'number' | 'text' | 'choice' | 'choices'
@@ -122,32 +124,8 @@ function string(value: unknown): string {
 
 function reference(value: unknown, path: string): string {
   const raw = string(value)
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw) ||
-    raw === '00000000-0000-0000-0000-000000000000'
-  )
-    fail('invalid_reference', path)
+  if (!isConfigurationId(raw)) fail('invalid_reference', path)
   return raw
-}
-
-function validText(value: string) {
-  // JS 允许孤立代理项，Rust String 不允许；按同一 Unicode 标量契约拒绝。
-  return !/[\0\uD800-\uDFFF]/u.test(value)
-}
-
-export function numeric(raw: string): number | undefined {
-  if (raw.length > 64 || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(raw))
-    return undefined
-  const normalized = raw.replace(/([eE])(?=\d)/, '$1+')
-  if (normalized.length > 64) return undefined
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return undefined
-  if (!/[.eE]/.test(raw)) {
-    const integer = BigInt(raw)
-    if (integer < -(1n << 63n) || integer > (1n << 64n) - 1n || integer !== BigInt(value))
-      return undefined
-  }
-  return value === 0 ? 0 : value
 }
 
 export function checkExpressionBudget(raw: unknown, depth: number, budget: { count: number }) {
