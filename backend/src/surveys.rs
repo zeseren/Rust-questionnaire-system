@@ -3,10 +3,9 @@
 //! 草稿与发布版本分别保存；修改草稿不会影响填写者已经读取的题面。
 
 use axum::{
-    Json, Router,
+    Json,
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::{get, patch, post, put},
 };
 use chrono::{DateTime, Utc};
 use sea_orm::{
@@ -17,6 +16,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -234,19 +234,19 @@ struct VersionListRow {
     published_at: DateTime<Utc>,
 }
 
-pub(crate) fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/surveys", get(list).post(create))
-        .route("/api/surveys/{id}", get(detail).delete(delete))
-        .route("/api/surveys/{id}/draft", put(save_draft))
-        .route("/api/surveys/{id}/preview", get(preview))
-        .route("/api/surveys/{id}/copy", post(copy))
-        .route("/api/surveys/{id}/publish", post(publish))
-        .route("/api/surveys/{id}/collection", patch(collection))
-        .route("/api/surveys/{id}/close", post(close))
-        .route("/api/surveys/{id}/resume", post(resume))
-        .route("/api/surveys/{id}/archive", post(archive))
-        .route("/api/surveys/{id}/versions", get(versions))
+pub(crate) fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(list, create))
+        .routes(routes!(detail, delete))
+        .routes(routes!(save_draft))
+        .routes(routes!(preview))
+        .routes(routes!(copy))
+        .routes(routes!(publish))
+        .routes(routes!(collection))
+        .routes(routes!(close))
+        .routes(routes!(resume))
+        .routes(routes!(archive))
+        .routes(routes!(versions))
 }
 
 /// 创建本人未发布问卷
@@ -1138,27 +1138,3 @@ fn survey_detail(record: survey::Model, now: DateTime<Utc>) -> AppResult<SurveyD
             .map(|_| format!("/api/public/surveys/{}", record.id)),
     })
 }
-
-#[derive(utoipa::OpenApi)]
-#[openapi(
-    paths(
-        create, list, detail, save_draft, preview, copy, delete, publish, collection, close,
-        resume, archive, versions
-    ),
-    components(schemas(
-        CreateSurvey,
-        SaveDraft,
-        PublishSurvey,
-        CollectionSettings,
-        SurveyStatus,
-        FillingMode,
-        SurveyDetail,
-        SurveySummary,
-        SurveyPage,
-        SurveyPreview,
-        VersionSummary,
-        VersionPage,
-        PublishedSurvey
-    ))
-)]
-pub(crate) struct ApiDoc;

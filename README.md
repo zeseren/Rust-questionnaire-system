@@ -26,7 +26,9 @@
 | Node.js / pnpm | 推荐 Node.js **24.12 或更新版本**，也支持 22.18+ 的 22.x；准确范围见 `frontend/package.json`。前端依赖一律用 pnpm 安装，版本由 `frontend/package.json` 的 `packageManager` 字段固定，锁文件为 `frontend/pnpm-lock.yaml`（npm 只用于首次安装 pnpm，`package-lock.json` 已删除） |
 | PowerShell | Windows PowerShell 5.1 或 PowerShell 7；中文请求示例显式发送 UTF-8 字节 |
 
-根目录是单成员 Cargo workspace，成员目录为 `backend`，包名为 `questionnaire-api`。当前锁定的核心依赖为 Axum 0.8.9、SeaORM / sea-orm-migration 2.0.2、SQLx 0.9.0、Tokio 1.53.1；准确版本以 [Cargo.lock](Cargo.lock) 为准，命令加 `--locked` 避免无意更新依赖。PostgreSQL 18 是本项目的运行基线，并非对所有旧大版本作兼容保证。
+根目录是单成员 Cargo workspace，成员目录为 `backend`，包名为 `questionnaire-api`。当前锁定的核心依赖为 Axum 0.8.9、SeaORM / sea-orm-migration 2.0.4、SQLx 0.9.0、Tokio 1.53.2；准确版本以 [Cargo.lock](Cargo.lock) 为准，命令加 `--locked` 避免无意更新依赖。PostgreSQL 18 是本项目的运行基线，并非对所有旧大版本作兼容保证。
+
+路由与 OpenAPI 通过 utoipa 6.0.0 / utoipa-axum 0.3.0 统一登记，Cookie 解析与构造使用 cookie 0.18.2，Rust DSL 文法与运算优先级使用 pest / pest_derive 2.9.2。领域语义、事务与会话撤销规则由项目实现，替换范围和验证记录见[后端 crate 评估](docs/backend-crate-assessment.md)。
 
 ```powershell
 rustc --version

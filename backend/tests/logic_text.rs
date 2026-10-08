@@ -76,3 +76,37 @@ fn 长中缀链与多层括号不能绕过解析和析构的栈界限() {
         LogicErrorCode::LimitExceeded
     );
 }
+
+#[test]
+fn 语法预算允许边界嵌套并合计括号前缀与函数深度() {
+    let prefix = "dsl 1 semantics 1; bind variable v = \"00000000-0000-4000-8000-000000002001\"; let v: boolean = ";
+    for expression in [
+        format!("{}true{}", "(".repeat(63), ")".repeat(63)),
+        format!("!{}true{}", "(".repeat(62), ")".repeat(62)),
+        format!("all({}true{})", "(".repeat(62), ")".repeat(62)),
+    ] {
+        assert!(parse_logic_text(&format!("{prefix}{expression};"), &[]).is_ok());
+    }
+    for expression in [
+        format!("{}true{}", "(".repeat(64), ")".repeat(64)),
+        format!("!all({}true{})", "(".repeat(62), ")".repeat(62)),
+    ] {
+        let error = parse_logic_text(&format!("{prefix}{expression};"), &[]).unwrap_err();
+        assert_eq!(error.error.code, LogicErrorCode::LimitExceeded);
+    }
+}
+
+#[test]
+fn 负号只接数字字面量且函数不能放宽参数种类() {
+    let prefix = "dsl 1 semantics 1; bind variable v = \"00000000-0000-4000-8000-000000002001\"; let v: number = ";
+    for expression in [
+        "-(1)",
+        "-length(\"文\")",
+        "number(1)",
+        "coalesce(1)",
+        "length([])",
+    ] {
+        let error = parse_logic_text(&format!("{prefix}{expression};"), &[]).unwrap_err();
+        assert_eq!(error.error.code, LogicErrorCode::InvalidSyntax);
+    }
+}

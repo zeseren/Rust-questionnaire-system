@@ -496,3 +496,22 @@ release 对照均使用 stable + LLVM，仅切换 profile 配置：
 - 真实 Edge：普通与流程填写都在发送请求前拦截 U+0085；普通填写的进度保持 0/1；U+FEFF 能完成填写和提交，流程确认载荷正常传递，每份只发出一次提交，无页面异常。临时核对程序和数据均位于忽略的 `target/`。
 
 本轮没有重做完整编辑器、报表、权限并发、性能或移动端矩阵；相关既有证据仍见第 17 节及 DSL 阶段记录。
+
+## 20. 成熟 crate 接入与后端依赖升级（2026-10-08）
+
+完成[后端 crate 评估](backend-crate-assessment.md)中授权的三处替换：
+
+- 路由模块使用 `utoipa-axum 0.3.0` 的 `OpenApiRouter` / `routes!`，路径和方法以 handler 注解为唯一登记来源；删除独立 `ApiDoc` 列表。文档在路由组装时生成，保留 OpenAPI 3.1.0、Cookie 安全方案与原错误响应。治理问卷列表改用 `AdminSurveyPage`，避免与发布者 `SurveyPage` 的不同结构共用组件名。
+- Cookie 解析和构造使用 `cookie 0.18.2`；继续遍历所有 Cookie 头，拒绝重复 session 和非法十六进制值，不做百分号解码。会话摘要存储、密码阻塞任务与事务内撤销继续沿用。
+- Rust 文本入口使用 `pest` / `pest_derive 2.9.2`，文法集中在 `logic_text.pest`，运算优先级交给 `PrattParser`。先以无递归词法规则检查文本、词元、标识符与嵌套预算，构造 AST 时逐步限制深度和节点；随后复用严格身份绑定、类型、依赖和流程编译。数字原文、Unicode 标量列号、负号范围和错误分类保留，TypeScript 实现继续通过共享样例验证。
+
+依赖与根锁文件同步升级：utoipa 5.5.0 → 6.0.0、Argon2 0.5.3 → 0.6.0、直接 sha2 0.10.9 → 0.11.0、SeaORM / migration 2.0.2 → 2.0.4、Tokio 1.53.1 → 1.53.2；Session 随机值直接使用 `getrandom 0.4.3`，Argon2 0.6 自行生成每次哈希的随机盐。其余兼容依赖由 `cargo update` 更新；Axum 0.8.9、SQLx 0.9.0、Serde 数字原文功能和项目 MSRV 1.94 保留。元数据中没有声明高于 1.94 的依赖 MSRV，本轮实际编译工具链为 stable 1.99.0，未单独安装最低版本工具链。
+
+验证结果：
+
+- stable + LLVM：`cargo fmt --all -- --check`、`cargo test --locked --workspace`（**34/34**：domain 20、logic 5、flow 5、logic_text 4）、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo build --locked -p questionnaire-api` 全部通过。
+- 共享文本案例 **23 条**，新增负号间注释、科学记数法原文、布尔名称显式引用、中文和补充平面字符、Unicode 错误列及关键字词边界；独立 Rust 回归补充允许的嵌套边界、混合前缀/函数超限与函数参数约束。前端 `pnpm run test:regression` **19/19** 通过。
+- 真实 PostgreSQL 18.1 与 API：对照实施前的 OpenAPI，28 个路径、31 个操作及其查询参数、安全方案、响应状态码集合一致；全部组件引用可解析，两类问卷列表指向各自正确 Schema，**31 个操作均实际成功执行**。
+- 共 **64 次 HTTP 核对**：注册、密码错误、登录轮换、重复 session（单头与多头）、非法值、无关 Cookie 片段、改密撤销多设备、禁用撤销、退出、Secure 和清除属性；数据库存储检查确认 Argon2id PHC 与 Session SHA-256 摘要。六题型问卷创建、保存、预览、配置、发布重放、匿名幂等提交、冲突、详情/统计/CSV、复制删除、关闭恢复归档、管理员治理与审计通过；同时核对 400/403/404/405/413 的统一错误结构及 no-store/nosniff。
+
+临时核对程序、日志及专用数据库位于忽略的 `target/`，没有新增项目测试框架、生产脚本、数据库迁移或历史格式兼容分支。本轮未重做浏览器、权限并发、性能压测、release 或 Cranelift 验证；相关历史证据仍按原阶段记录解读，不据此宣称性能提升。

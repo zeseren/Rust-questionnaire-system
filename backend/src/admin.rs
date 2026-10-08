@@ -9,7 +9,7 @@ use crate::{
     http::{ApiJson, ApiPath, ApiQuery, Pagination},
     repository,
 };
-use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
+use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter,
@@ -17,18 +17,16 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-pub(crate) fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/admin/users", get(users))
-        .route("/api/admin/users/{id}", axum::routing::patch(change_user))
-        .route("/api/admin/surveys", get(surveys))
-        .route(
-            "/api/admin/surveys/{id}",
-            get(survey_detail).patch(change_survey),
-        )
-        .route("/api/admin/audits", get(audits))
+pub(crate) fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(users))
+        .routes(routes!(change_user))
+        .routes(routes!(surveys))
+        .routes(routes!(survey_detail, change_survey))
+        .routes(routes!(audits))
 }
 
 fn require_admin(user: &AuthUser) -> AppResult<()> {
@@ -193,7 +191,7 @@ impl SurveyItem {
     }
 }
 #[derive(Serialize, ToSchema)]
-struct SurveyPage {
+struct AdminSurveyPage {
     items: Vec<SurveyItem>,
     total: u64,
 }
@@ -203,12 +201,12 @@ struct GovernanceDetail {
     published_document: Option<Document>,
 }
 
-#[utoipa::path(get, path="/api/admin/surveys", params(("page"=Option<u64>,Query),("page_size"=Option<u64>,Query)), responses((status=200,body=SurveyPage),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse)), security(("cookieAuth"=[])))]
+#[utoipa::path(get, path="/api/admin/surveys", params(("page"=Option<u64>,Query),("page_size"=Option<u64>,Query)), responses((status=200,body=AdminSurveyPage),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse)), security(("cookieAuth"=[])))]
 async fn surveys(
     State(state): State<AppState>,
     actor: AuthUser,
     ApiQuery(query): ApiQuery<ListQuery>,
-) -> AppResult<Json<SurveyPage>> {
+) -> AppResult<Json<AdminSurveyPage>> {
     require_admin(&actor)?;
     let (offset, limit) = query.pagination.bounds()?;
     let total = survey::Entity::find().count(&state.db).await?;
@@ -222,7 +220,7 @@ async fn surveys(
         .into_iter()
         .map(SurveyItem::from_model)
         .collect::<AppResult<_>>()?;
-    Ok(Json(SurveyPage { items, total }))
+    Ok(Json(AdminSurveyPage { items, total }))
 }
 
 #[utoipa::path(get, path="/api/admin/surveys/{id}", params(("id"=Uuid,Path)), responses((status=200,body=GovernanceDetail),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse),(status=404,body=ErrorResponse)), security(("cookieAuth"=[])))]
@@ -344,20 +342,3 @@ async fn audits(
         .collect();
     Ok(Json(AuditPage { items, total }))
 }
-
-#[derive(utoipa::OpenApi)]
-#[openapi(
-    paths(users, change_user, surveys, survey_detail, change_survey, audits),
-    components(schemas(
-        UserItem,
-        UserPage,
-        ChangeUser,
-        SurveyItem,
-        SurveyPage,
-        GovernanceDetail,
-        ChangeSurvey,
-        AuditItem,
-        AuditPage
-    ))
-)]
-pub(crate) struct ApiDoc;

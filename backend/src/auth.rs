@@ -3,18 +3,15 @@
 
 use argon2::{
     Argon2,
-    password_hash::{
-        Error as PasswordError, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
-        rand_core::{OsRng, RngCore},
-    },
+    password_hash::{Error as PasswordError, PasswordHasher, PasswordVerifier, phc::PasswordHash},
 };
 use axum::{
-    Json, Router,
+    Json,
     extract::{FromRequestParts, State},
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
-    routing::{get, post, put},
 };
 use chrono::{Duration, Utc};
+use cookie::{Cookie, SameSite};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
     FromQueryResult, IntoActiveModel, QueryFilter, QuerySelect, QueryTrait, Set, SqlErr,
@@ -23,6 +20,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -109,13 +107,13 @@ impl From<AuthUser> for UserProfile {
     }
 }
 
-pub(crate) fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/auth/register", post(register))
-        .route("/api/auth/login", post(login))
-        .route("/api/auth/logout", post(logout))
-        .route("/api/auth/me", get(me))
-        .route("/api/auth/password", put(change_password))
+pub(crate) fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(register))
+        .routes(routes!(login))
+        .routes(routes!(logout))
+        .routes(routes!(me))
+        .routes(routes!(change_password))
 }
 
 /// 注册普通账号。注册本身不建立登录会话。
@@ -391,16 +389,11 @@ fn invalid_credentials() -> AppError {
 
 async fn hash_password(password: String) -> AppResult<String> {
     tokio::task::spawn_blocking(move || {
-        let mut salt = [0_u8; 16];
-        OsRng
-            .try_fill_bytes(&mut salt)
+        // Argon2id v19 自动生成随机盐；随机源失败仍通过统一错误出口返回。
+        let hash: PasswordHash = Argon2::default()
+            .hash_password(password.as_bytes())
             .map_err(|error| AppError::internal(error))?;
-        let salt = SaltString::encode_b64(&salt).map_err(|error| AppError::internal(error))?;
-        // Argon2 默认算法为 Argon2id v19，随机盐随 PHC 字符串一起保存。
-        Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
-            .map(|hash| hash.to_string())
-            .map_err(|error| AppError::internal(error))
+        Ok(hash.to_string())
     })
     .await
     .map_err(|error| AppError::internal(error))?
@@ -411,7 +404,7 @@ async fn verify_password(password: String, encoded_hash: String) -> AppResult<bo
         let hash = PasswordHash::new(&encoded_hash).map_err(|error| AppError::internal(error))?;
         match Argon2::default().verify_password(password.as_bytes(), &hash) {
             Ok(()) => Ok(true),
-            Err(PasswordError::Password) => Ok(false),
+            Err(PasswordError::PasswordInvalid) => Ok(false),
             Err(error) => Err(AppError::internal(error)),
         }
     })
@@ -421,9 +414,7 @@ async fn verify_password(password: String, encoded_hash: String) -> AppResult<bo
 
 fn new_session_token() -> AppResult<String> {
     let mut bytes = [0_u8; 32];
-    OsRng
-        .try_fill_bytes(&mut bytes)
-        .map_err(|error| AppError::internal(error))?;
+    getrandom::fill(&mut bytes).map_err(|error| AppError::internal(error))?;
     Ok(hex::encode(bytes))
 }
 
@@ -435,13 +426,14 @@ pub(crate) fn hash_secret(token: &str) -> String {
 fn session_token(headers: &HeaderMap) -> Option<&str> {
     let mut found = None;
     for header in headers.get_all(header::COOKIE) {
-        for cookie in header.to_str().ok()?.split(';') {
-            let Some((name, value)) = cookie.trim().split_once('=') else {
+        for cookie in Cookie::split_parse(header.to_str().ok()?) {
+            let Ok(cookie) = cookie else {
                 continue;
             };
-            if name != "session" {
+            if cookie.name() != "session" {
                 continue;
             }
+            let value = cookie.value_raw()?;
             // 重复同名 Cookie 的含义不明确，不以其中任意一个作为登录身份。
             if found.is_some()
                 || value.len() != 64
@@ -456,11 +448,14 @@ fn session_token(headers: &HeaderMap) -> Option<&str> {
 }
 
 fn session_cookie(token: &str, max_age: i64, secure: bool) -> AppResult<HeaderValue> {
-    let secure = if secure { "; Secure" } else { "" };
-    HeaderValue::from_str(&format!(
-        "session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}{secure}"
-    ))
-    .map_err(|error| AppError::internal(error))
+    let cookie = Cookie::build(("session", token))
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .path("/")
+        .max_age(cookie::time::Duration::seconds(max_age))
+        .secure(secure)
+        .build();
+    HeaderValue::from_str(&cookie.to_string()).map_err(|error| AppError::internal(error))
 }
 
 async fn revoke_session(db: &DatabaseConnection, token: Option<&str>) -> AppResult<()> {
@@ -481,10 +476,3 @@ async fn revoke_session(db: &DatabaseConnection, token: Option<&str>) -> AppResu
     tx.commit().await?;
     Ok(())
 }
-
-#[derive(utoipa::OpenApi)]
-#[openapi(
-    paths(register, login, logout, me, change_password),
-    components(schemas(RegisterRequest, LoginRequest, ChangePasswordRequest, UserProfile))
-)]
-pub(crate) struct ApiDoc;

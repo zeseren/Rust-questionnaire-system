@@ -1,7 +1,16 @@
-//! 文本先绑定身份再生成统一 AST；限制解析资源，不绕过既有类型和流程编译。
+//! 文本文法交给 pest；先限制解析资源，再绑定身份并复用统一 AST 与语义编译。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::LazyLock,
+};
 
+use pest::{
+    Parser,
+    error::InputLocation,
+    iterators::{Pair, Pairs},
+    pratt_parser::{Assoc, Op, PrattParser},
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -10,6 +19,26 @@ use crate::domain::{Question, QuestionKind};
 use crate::flow::{FlowBranch, FlowDefinition, FlowNode, FlowOutcome};
 use crate::logic::{LogicError, LogicErrorCode, LogicValueType, check_raw_budget, error};
 use crate::logic_document::{ComputedVariable, DocumentLogic, QuestionRule};
+
+#[derive(pest_derive::Parser)]
+#[grammar = "src/logic_text.pest"]
+struct Grammar;
+
+static PRECEDENCE: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
+    use Rule::*;
+    PrattParser::new()
+        .op(Op::infix(logical_or, Assoc::Left))
+        .op(Op::infix(logical_and, Assoc::Left))
+        .op(Op::infix(equal, Assoc::Left)
+            | Op::infix(not_equal, Assoc::Left)
+            | Op::infix(less, Assoc::Left)
+            | Op::infix(less_equal, Assoc::Left)
+            | Op::infix(greater, Assoc::Left)
+            | Op::infix(greater_equal, Assoc::Left))
+        .op(Op::infix(add, Assoc::Left) | Op::infix(subtract, Assoc::Left))
+        .op(Op::infix(multiply, Assoc::Left) | Op::infix(divide, Assoc::Left))
+        .op(Op::prefix(negation))
+});
 
 /// 文本错误携带源位置，语义错误同时保留原 AST 路径。
 #[derive(Debug, thiserror::Error, Serialize)]
@@ -34,20 +63,85 @@ fn located(source: &str, offset: usize, error: LogicError) -> LogicTextError {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Word,
-    Number,
-    String,
-    Symbol,
-    End,
+fn failure(source: &str, offset: usize, code: LogicErrorCode) -> LogicTextError {
+    located(source, offset, error(code, "$", None))
 }
 
-#[derive(Clone, Copy)]
-struct Token<'a> {
-    raw: &'a str,
-    kind: Kind,
-    offset: usize,
+fn parse(source: &str, rule: Rule) -> Result<Pairs<'_, Rule>, LogicTextError> {
+    Grammar::parse(rule, source).map_err(|error| {
+        let offset = match error.location {
+            InputLocation::Pos(offset) | InputLocation::Span((offset, _)) => offset,
+        };
+        // pest 的原始诊断包含输入片段；对外只保留位置与统一分类。
+        failure(source, offset, LogicErrorCode::InvalidSyntax)
+    })
+}
+
+fn next<'a>(pairs: &mut Pairs<'a, Rule>) -> Pair<'a, Rule> {
+    pairs.next().expect("匹配成功的文法必须包含此字段")
+}
+
+fn string(source: &str, pair: &Pair<'_, Rule>) -> Result<String, LogicTextError> {
+    let fail = || {
+        failure(
+            source,
+            pair.as_span().start(),
+            LogicErrorCode::InvalidSyntax,
+        )
+    };
+    let value: String = serde_json::from_str(pair.as_str()).map_err(|_| fail())?;
+    if value.contains('\0') {
+        return Err(fail());
+    }
+    Ok(value)
+}
+
+fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
+    if source.len() > 1_048_576 {
+        return Err(failure(source, 0, LogicErrorCode::LimitExceeded));
+    }
+    let lexicon = next(&mut parse(source, Rule::lexicon)?);
+    // 每层记录尚未结束的前缀运算；括号、函数与 ! 共用递归深度预算。
+    let mut prefixes = vec![0_usize];
+    let mut depth = 1;
+    for (index, token) in lexicon.into_inner().enumerate() {
+        if token.as_rule() == Rule::EOI {
+            break;
+        }
+        let offset = token.as_span().start();
+        if index >= 65_536 || (token.as_rule() == Rule::identifier && token.as_str().len() > 64) {
+            return Err(failure(source, offset, LogicErrorCode::LimitExceeded));
+        }
+        if token.as_rule() == Rule::string {
+            string(source, &token)?;
+            continue;
+        }
+        if token.as_rule() != Rule::symbol {
+            continue;
+        }
+        match token.as_str() {
+            "!" => {
+                *prefixes.last_mut().expect("始终保留表达式外层") += 1;
+                depth += 1;
+            }
+            "(" => {
+                prefixes.push(0);
+                depth += 1;
+            }
+            ")" if prefixes.len() > 1 => {
+                depth -= 1 + prefixes.pop().expect("已检查存在内层");
+            }
+            "&&" | "||" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "/" | ","
+            | ";" | "->" | "}" => {
+                depth -= std::mem::take(prefixes.last_mut().expect("始终保留表达式外层"));
+            }
+            _ => {}
+        }
+        if depth > 64 {
+            return Err(failure(source, offset, LogicErrorCode::LimitExceeded));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,401 +158,286 @@ struct Binding {
     id: Uuid,
 }
 
-fn tokens(source: &str) -> Result<Vec<Token<'_>>, LogicTextError> {
-    let fail = |offset, code| located(source, offset, error(code, "$", None));
-    if source.len() > 1_048_576 {
-        return Err(fail(0, LogicErrorCode::LimitExceeded));
-    }
-    let bytes = source.as_bytes();
-    let mut result = Vec::new();
-    let mut offset = 0;
-    while offset < bytes.len() {
-        if matches!(bytes[offset], b' ' | b'\t' | b'\r' | b'\n') {
-            offset += 1;
-            continue;
-        }
-        if source[offset..].starts_with("//") {
-            offset += source[offset..].find('\n').unwrap_or(bytes.len() - offset);
-            continue;
-        }
-        let start = offset;
-        let kind = match bytes[offset] {
-            b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                offset += 1;
-                while bytes
-                    .get(offset)
-                    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
-                {
-                    offset += 1;
-                }
-                if offset - start > 64 {
-                    return Err(fail(start, LogicErrorCode::LimitExceeded));
-                }
-                Kind::Word
-            }
-            b'0'..=b'9' => {
-                offset += 1;
-                if bytes[start] != b'0' {
-                    while bytes.get(offset).is_some_and(u8::is_ascii_digit) {
-                        offset += 1;
-                    }
-                }
-                if bytes.get(offset) == Some(&b'.')
-                    && bytes.get(offset + 1).is_some_and(u8::is_ascii_digit)
-                {
-                    offset += 2;
-                    while bytes.get(offset).is_some_and(u8::is_ascii_digit) {
-                        offset += 1;
-                    }
-                }
-                if matches!(bytes.get(offset), Some(b'e' | b'E')) {
-                    let mut end = offset + 1;
-                    if matches!(bytes.get(end), Some(b'+' | b'-')) {
-                        end += 1;
-                    }
-                    if bytes.get(end).is_some_and(u8::is_ascii_digit) {
-                        offset = end + 1;
-                        while bytes.get(offset).is_some_and(u8::is_ascii_digit) {
-                            offset += 1;
-                        }
-                    }
-                }
-                Kind::Number
-            }
-            b'"' => {
-                offset += 1;
-                while offset < bytes.len() && bytes[offset] != b'"' {
-                    if bytes[offset] == b'\\' {
-                        offset += 1;
-                    }
-                    offset += 1;
-                }
-                if offset >= bytes.len() {
-                    return Err(fail(start, LogicErrorCode::InvalidSyntax));
-                }
-                offset += 1;
-                if serde_json::from_str::<String>(&source[start..offset]).is_err() {
-                    return Err(fail(start, LogicErrorCode::InvalidSyntax));
-                }
-                Kind::String
-            }
-            _ => {
-                if ["->", "&&", "||", "==", "!=", "<=", ">="]
-                    .iter()
-                    .any(|op| source[offset..].starts_with(op))
-                {
-                    offset += 2;
-                } else if b"{}()[],;:=!<>+*/-".contains(&bytes[offset]) {
-                    offset += 1;
-                } else {
-                    return Err(fail(offset, LogicErrorCode::InvalidSyntax));
-                }
-                Kind::Symbol
-            }
-        };
-        result.push(Token {
-            raw: &source[start..offset],
-            kind,
-            offset: start,
-        });
-        if result.len() > 65_536 {
-            return Err(fail(start, LogicErrorCode::LimitExceeded));
-        }
-    }
-    result.push(Token {
-        raw: "",
-        kind: Kind::End,
-        offset,
-    });
-    Ok(result)
-}
-
-struct Parser<'a> {
+struct Compiler<'a> {
     source: &'a str,
-    tokens: Vec<Token<'a>>,
-    position: usize,
     bindings: BTreeMap<&'a str, Binding>,
     locations: Vec<(String, usize)>,
 }
 
-fn binary(raw: &str) -> Option<(u8, &'static str, &'static str)> {
-    Some(match raw {
-        "||" => (1, "any", ""),
-        "&&" => (2, "all", ""),
-        "==" => (3, "compare", "eq"),
-        "!=" => (3, "compare", "ne"),
-        "<" => (3, "compare", "lt"),
-        "<=" => (3, "compare", "le"),
-        ">" => (3, "compare", "gt"),
-        ">=" => (3, "compare", "ge"),
-        "+" => (4, "arithmetic", "add"),
-        "-" => (4, "arithmetic", "subtract"),
-        "*" => (5, "arithmetic", "multiply"),
-        "/" => (5, "arithmetic", "divide"),
-        _ => return None,
-    })
-}
+impl<'a> Compiler<'a> {
+    fn failure(&self, pair: &Pair<'_, Rule>, code: LogicErrorCode) -> LogicTextError {
+        failure(self.source, pair.as_span().start(), code)
+    }
 
-impl<'a> Parser<'a> {
-    fn token(&self) -> Token<'a> {
-        self.tokens[self.position]
-    }
-    fn take(&mut self) -> Token<'a> {
-        let token = self.token();
-        if token.kind != Kind::End {
-            self.position += 1;
+    fn atom(&self, pair: Pair<'a, Rule>) -> Result<Pair<'a, Rule>, LogicTextError> {
+        if pair.as_rule() != Rule::expression {
+            return Err(self.failure(&pair, LogicErrorCode::InvalidSyntax));
         }
-        token
-    }
-    fn failure(&self, code: LogicErrorCode, token: Token<'_>) -> LogicTextError {
-        located(self.source, token.offset, error(code, "$", None))
-    }
-    fn accept(&mut self, raw: &str) -> bool {
-        if self.token().raw != raw {
-            return false;
+        let mut parts = pair.into_inner();
+        let atom = next(&mut parts);
+        if let Some(extra) = parts.next() {
+            return Err(self.failure(&extra, LogicErrorCode::InvalidSyntax));
         }
-        self.take();
-        true
+        Ok(atom)
     }
-    fn expect(&mut self, raw: &str) -> Result<(), LogicTextError> {
-        if self.accept(raw) {
-            Ok(())
+
+    fn reference(&self, pair: Pair<'a, Rule>, category: Category) -> Result<Uuid, LogicTextError> {
+        let pair = if pair.as_rule() == Rule::expression {
+            self.atom(pair)?
         } else {
-            Err(self.failure(LogicErrorCode::InvalidSyntax, self.token()))
+            pair
+        };
+        // true / false 仍可作为显式引用函数中的别名，表达式位置则是布尔常量。
+        if !matches!(pair.as_rule(), Rule::identifier | Rule::boolean) {
+            return Err(self.failure(&pair, LogicErrorCode::InvalidSyntax));
         }
-    }
-    fn word(&mut self) -> Result<&'a str, LogicTextError> {
-        let token = self.take();
-        if token.kind == Kind::Word {
-            Ok(token.raw)
-        } else {
-            Err(self.failure(LogicErrorCode::InvalidSyntax, token))
-        }
-    }
-    fn string(&mut self) -> Result<String, LogicTextError> {
-        let token = self.take();
-        if token.kind != Kind::String {
-            return Err(self.failure(LogicErrorCode::InvalidSyntax, token));
-        }
-        let value: String = serde_json::from_str(token.raw)
-            .map_err(|_| self.failure(LogicErrorCode::InvalidSyntax, token))?;
-        if value.contains('\0') {
-            return Err(self.failure(LogicErrorCode::InvalidSyntax, token));
-        }
-        Ok(value)
-    }
-    fn reference(&mut self, category: Category) -> Result<Uuid, LogicTextError> {
-        let token = self.token();
-        let alias = self.word()?;
         self.bindings
-            .get(alias)
+            .get(pair.as_str())
             .filter(|binding| binding.category == category)
             .map(|binding| binding.id)
-            .ok_or_else(|| self.failure(LogicErrorCode::InvalidReference, token))
+            .ok_or_else(|| self.failure(&pair, LogicErrorCode::InvalidReference))
     }
-    fn references(&mut self, category: Category) -> Result<Vec<Uuid>, LogicTextError> {
-        self.expect("[")?;
-        let mut ids = Vec::new();
-        if !self.accept("]") {
-            loop {
-                ids.push(self.reference(category)?);
-                if !self.accept(",") {
-                    break;
-                }
+
+    fn references(
+        &self,
+        pair: Pair<'a, Rule>,
+        category: Category,
+    ) -> Result<Vec<Uuid>, LogicTextError> {
+        if pair.as_rule() != Rule::references {
+            return Err(self.failure(&pair, LogicErrorCode::InvalidSyntax));
+        }
+        pair.into_inner()
+            .map(|pair| self.reference(pair, category))
+            .collect()
+    }
+
+    fn checked(&self, value: Value, offset: usize) -> Result<Value, LogicTextError> {
+        // 每次构造即检查，长左结合链不会先形成超深 AST 再等待最终验证。
+        check_raw_budget(Some(&value), 1, &mut 0)
+            .map_err(|error| located(self.source, offset, error))?;
+        Ok(value)
+    }
+
+    fn expression(&self, pair: Pair<'a, Rule>) -> Result<Value, LogicTextError> {
+        if pair.as_rule() != Rule::expression {
+            return Err(self.failure(&pair, LogicErrorCode::InvalidSyntax));
+        }
+        PRECEDENCE
+            .map_primary(|pair| self.primary(pair))
+            .map_prefix(|op, value| {
+                self.checked(
+                    json!({"op":"not", "expression":value?}),
+                    op.as_span().start(),
+                )
+            })
+            .map_infix(|left, op, right| {
+                let left = left?;
+                let right = right?;
+                let value = match op.as_rule() {
+                    Rule::logical_or | Rule::logical_and => {
+                        let name = if op.as_rule() == Rule::logical_or {
+                            "any"
+                        } else {
+                            "all"
+                        };
+                        json!({"op":name, "expressions":[left,right]})
+                    }
+                    Rule::equal
+                    | Rule::not_equal
+                    | Rule::less
+                    | Rule::less_equal
+                    | Rule::greater
+                    | Rule::greater_equal => {
+                        let comparison = match op.as_rule() {
+                            Rule::equal => "eq",
+                            Rule::not_equal => "ne",
+                            Rule::less => "lt",
+                            Rule::less_equal => "le",
+                            Rule::greater => "gt",
+                            _ => "ge",
+                        };
+                        json!({"op":"compare", "comparison":comparison, "left":left, "right":right})
+                    }
+                    _ => {
+                        let operator = match op.as_rule() {
+                            Rule::add => "add",
+                            Rule::subtract => "subtract",
+                            Rule::multiply => "multiply",
+                            _ => "divide",
+                        };
+                        json!({"op":"arithmetic", "operator":operator, "left":left, "right":right})
+                    }
+                };
+                self.checked(value, op.as_span().start())
+            })
+            .parse(pair.into_inner())
+    }
+
+    fn primary(&self, pair: Pair<'a, Rule>) -> Result<Value, LogicTextError> {
+        let offset = pair.as_span().start();
+        let value = match pair.as_rule() {
+            Rule::number => json!({"op":"number", "value":pair.as_str()}),
+            Rule::negative_number => {
+                let number = next(&mut pair.into_inner());
+                json!({"op":"number", "value":format!("-{}", number.as_str())})
             }
-            self.expect("]")?;
-        }
-        Ok(ids)
-    }
-    fn expression(&mut self, min: u8, depth: usize) -> Result<Value, LogicTextError> {
-        if depth > 64 {
-            return Err(self.failure(LogicErrorCode::LimitExceeded, self.token()));
-        }
-        let mut left = self.primary(depth)?;
-        self.check_expression(&left)?;
-        while let Some((precedence, op, kind)) = binary(self.token().raw) {
-            if precedence < min {
-                break;
+            Rule::string => json!({"op":"text", "value":string(self.source, &pair)?}),
+            Rule::boolean => json!({"op":"boolean", "value":pair.as_str() == "true"}),
+            Rule::identifier => {
+                json!({"op":"variable", "variable_id":self.reference(pair, Category::Variable)?})
             }
-            self.take();
-            let right = self.expression(precedence + 1, depth + 1)?;
-            left = if matches!(op, "all" | "any") {
-                json!({"op":op, "expressions":[left,right]})
-            } else if op == "compare" {
-                json!({"op":op, "comparison":kind, "left":left,"right":right})
-            } else {
-                json!({"op":op, "operator":kind, "left":left,"right":right})
-            };
-            self.check_expression(&left)?;
-        }
-        Ok(left)
+            Rule::group => return self.expression(next(&mut pair.into_inner())),
+            Rule::call => return self.call(pair),
+            _ => return Err(self.failure(&pair, LogicErrorCode::InvalidSyntax)),
+        };
+        self.checked(value, offset)
     }
-    fn check_expression(&self, value: &Value) -> Result<(), LogicTextError> {
-        // 长中缀链也会加深 AST，必须在构造时拦截，避免超深值的析构耗尽栈。
-        check_raw_budget(Some(value), 1, &mut 0)
-            .map_err(|error| located(self.source, self.token().offset, error))
-    }
-    fn primary(&mut self, depth: usize) -> Result<Value, LogicTextError> {
-        if self.accept("(") {
-            let expression = self.expression(0, depth + 1)?;
-            self.expect(")")?;
-            return Ok(expression);
+
+    fn call(&self, pair: Pair<'a, Rule>) -> Result<Value, LogicTextError> {
+        let offset = pair.as_span().start();
+        let end = pair.as_span().end() - 1;
+        let mut parts = pair.into_inner();
+        let name = next(&mut parts);
+        let op = name.as_str();
+        let arguments: Vec<_> = parts.collect();
+        let arity = match op {
+            "answer" | "answered" | "variable" | "number" | "length" => Some(1),
+            "selected" | "contains_any" | "contains_all" | "coalesce" => Some(2),
+            "all" | "any" => None,
+            _ => return Err(self.failure(&name, LogicErrorCode::InvalidSyntax)),
+        };
+        if arity.is_some_and(|arity| arguments.len() != arity) {
+            return Err(failure(self.source, end, LogicErrorCode::InvalidSyntax));
         }
-        if self.accept("!") {
-            return Ok(json!({"op":"not", "expression":self.expression(6, depth + 1)?}));
-        }
-        if self.accept("-") {
-            let token = self.take();
-            if token.kind != Kind::Number {
-                return Err(self.failure(LogicErrorCode::InvalidSyntax, token));
-            }
-            return Ok(json!({"op":"number", "value":format!("-{}", token.raw)}));
-        }
-        let token = self.take();
-        if token.kind == Kind::Number {
-            return Ok(json!({"op":"number", "value":token.raw}));
-        }
-        if token.kind == Kind::String {
-            self.position -= 1;
-            return Ok(json!({"op":"text", "value":self.string()?}));
-        }
-        if matches!(token.raw, "true" | "false") {
-            return Ok(json!({"op":"boolean", "value":token.raw == "true"}));
-        }
-        if token.kind != Kind::Word {
-            return Err(self.failure(LogicErrorCode::InvalidSyntax, token));
-        }
-        if !self.accept("(") {
-            let binding = self
-                .bindings
-                .get(token.raw)
-                .filter(|b| b.category == Category::Variable)
-                .ok_or_else(|| self.failure(LogicErrorCode::InvalidReference, token))?;
-            return Ok(json!({"op":"variable", "variable_id":binding.id}));
-        }
-        let op = token.raw;
-        let result = match op {
+        let argument = |index: usize| arguments[index].clone();
+        let value = match op {
             "answer" | "answered" => {
-                json!({"op":op,"question_id":self.reference(Category::Question)?})
+                json!({"op":op,"question_id":self.reference(argument(0), Category::Question)?})
             }
-            "variable" => json!({"op":op,"variable_id":self.reference(Category::Variable)?}),
-            "number" => json!({"op":op,"value":self.string()?}),
-            "selected" | "contains_any" | "contains_all" => {
-                let question_id = self.reference(Category::Question)?;
-                self.expect(",")?;
-                if op == "selected" {
-                    json!({"op":op,"question_id":question_id,"option_id":self.reference(Category::Option)?})
-                } else {
-                    json!({"op":op,"question_id":question_id,"option_ids":self.references(Category::Option)?})
+            "variable" => {
+                json!({"op":op,"variable_id":self.reference(argument(0), Category::Variable)?})
+            }
+            "number" => {
+                let text = self.atom(argument(0))?;
+                if text.as_rule() != Rule::string {
+                    return Err(self.failure(&text, LogicErrorCode::InvalidSyntax));
                 }
+                json!({"op":op,"value":string(self.source, &text)?})
             }
+            "selected" => json!({
+                "op":op,
+                "question_id":self.reference(argument(0), Category::Question)?,
+                "option_id":self.reference(argument(1), Category::Option)?
+            }),
+            "contains_any" | "contains_all" => json!({
+                "op":op,
+                "question_id":self.reference(argument(0), Category::Question)?,
+                "option_ids":self.references(argument(1), Category::Option)?
+            }),
             "all" | "any" => {
                 let mut expressions = Vec::new();
-                if self.token().raw != ")" {
-                    loop {
-                        expressions.push(self.expression(0, depth + 1)?);
-                        if !self.accept(",") {
-                            break;
-                        }
-                    }
+                let mut count = 1;
+                for argument in arguments {
+                    let value = self.expression(argument)?;
+                    check_raw_budget(Some(&value), 2, &mut count)
+                        .map_err(|error| located(self.source, offset, error))?;
+                    expressions.push(value);
                 }
                 json!({"op":op,"expressions":expressions})
             }
-            "coalesce" | "length" => {
-                let value = self.expression(0, depth + 1)?;
-                if op == "coalesce" {
-                    self.expect(",")?;
-                    json!({"op":op,"value":value,"fallback":self.expression(0, depth + 1)?})
-                } else {
-                    json!({"op":op,"value":value})
-                }
+            "coalesce" => {
+                json!({"op":op,"value":self.expression(argument(0))?,"fallback":self.expression(argument(1))?})
             }
-            _ => return Err(self.failure(LogicErrorCode::InvalidSyntax, token)),
+            _ => json!({"op":op,"value":self.expression(argument(0))?}),
         };
-        self.expect(")")?;
-        Ok(result)
+        self.checked(value, offset)
     }
-    fn parse(mut self, questions: &[Question]) -> Result<DocumentLogic, LogicTextError> {
-        self.expect("dsl")?;
-        let dsl = self.take();
-        self.expect("semantics")?;
-        let semantics = self.take();
-        self.expect(";")?;
-        if dsl.kind != Kind::Number || semantics.kind != Kind::Number {
-            return Err(self.failure(LogicErrorCode::InvalidSyntax, dsl));
-        }
+
+    fn compile(
+        mut self,
+        program: Pair<'a, Rule>,
+        questions: &[Question],
+    ) -> Result<DocumentLogic, LogicTextError> {
+        let mut declarations = program.into_inner();
+        let header = next(&mut declarations);
+        let first_offset = header.as_span().start();
+        let mut header = header.into_inner();
+        next(&mut header);
+        let dsl = next(&mut header);
+        next(&mut header);
+        let semantics = next(&mut header);
         let mut logic = DocumentLogic {
             dsl_version: dsl
-                .raw
+                .as_str()
                 .parse()
-                .map_err(|_| self.failure(LogicErrorCode::InvalidSyntax, dsl))?,
+                .map_err(|_| self.failure(&dsl, LogicErrorCode::InvalidSyntax))?,
             semantics_version: semantics
-                .raw
+                .as_str()
                 .parse()
-                .map_err(|_| self.failure(LogicErrorCode::InvalidSyntax, semantics))?,
+                .map_err(|_| self.failure(&semantics, LogicErrorCode::InvalidSyntax))?,
             variables: Vec::new(),
             rules: Vec::new(),
             flow: None,
         };
         let mut bound_ids = BTreeSet::new();
-        while self.accept("bind") {
-            let token = self.token();
-            let category = match self.word()? {
-                "question" => Category::Question,
-                "option" => Category::Option,
-                "variable" => Category::Variable,
-                "node" => Category::Node,
-                _ => return Err(self.failure(LogicErrorCode::InvalidSyntax, token)),
-            };
-            let alias = self.word()?;
-            self.expect("=")?;
-            let raw = self.string()?;
-            self.expect(";")?;
-            let id = Uuid::parse_str(&raw)
-                .map_err(|_| self.failure(LogicErrorCode::InvalidReference, token))?;
-            if id.is_nil()
-                || id.to_string() != raw
-                || self.bindings.contains_key(alias)
-                || !bound_ids.insert(id)
-            {
-                return Err(self.failure(LogicErrorCode::InvalidReference, token));
-            }
-            self.bindings.insert(alias, Binding { category, id });
-        }
         let mut definitions = BTreeSet::new();
         let mut nodes = Vec::new();
         let mut entry = None;
-        while self.token().kind != Kind::End {
-            let token = self.take();
-            match token.raw {
-                "let" => {
-                    let id = self.reference(Category::Variable)?;
-                    if !definitions.insert(id) {
-                        return Err(self.failure(LogicErrorCode::InvalidReference, token));
+        for declaration in declarations {
+            let kind = declaration.as_rule();
+            let offset = declaration.as_span().start();
+            let mut fields = declaration.into_inner();
+            match kind {
+                Rule::binding => {
+                    next(&mut fields);
+                    let category = next(&mut fields);
+                    let location = category.as_span().start();
+                    let category = match category.as_str() {
+                        "question" => Category::Question,
+                        "option" => Category::Option,
+                        "variable" => Category::Variable,
+                        _ => Category::Node,
+                    };
+                    let alias = next(&mut fields);
+                    let raw = string(self.source, &next(&mut fields))?;
+                    let fail = || failure(self.source, location, LogicErrorCode::InvalidReference);
+                    let id = crate::identity::parse(&raw).ok_or_else(fail)?;
+                    if self.bindings.contains_key(alias.as_str()) || !bound_ids.insert(id) {
+                        return Err(fail());
                     }
-                    self.expect(":")?;
-                    let value_type = match self.word()? {
+                    self.bindings
+                        .insert(alias.as_str(), Binding { category, id });
+                }
+                Rule::variable_definition => {
+                    next(&mut fields);
+                    let id = self.reference(next(&mut fields), Category::Variable)?;
+                    if !definitions.insert(id) {
+                        return Err(failure(
+                            self.source,
+                            offset,
+                            LogicErrorCode::InvalidReference,
+                        ));
+                    }
+                    let value_type = match next(&mut fields).as_str() {
                         "boolean" => LogicValueType::Boolean,
                         "number" => LogicValueType::Number,
                         "text" => LogicValueType::Text,
                         "choice" => LogicValueType::Choice,
-                        "choices" => LogicValueType::Choices,
-                        _ => return Err(self.failure(LogicErrorCode::InvalidSyntax, token)),
+                        _ => LogicValueType::Choices,
                     };
-                    self.expect("=")?;
                     self.locations.push((
                         format!("$.logic.variables[{}]", logic.variables.len()),
-                        token.offset,
+                        offset,
                     ));
                     logic.variables.push(ComputedVariable {
                         id,
                         value_type,
-                        expression: self.expression(0, 1)?,
+                        expression: self.expression(next(&mut fields))?,
                     });
-                    self.expect(";")?;
                 }
-                "visible" | "required" | "validate" => {
-                    let question_id = self.reference(Category::Question)?;
+                Rule::question_rule => {
+                    let rule_kind = next(&mut fields);
+                    let question_id = self.reference(next(&mut fields), Category::Question)?;
                     let index = if let Some(index) = logic
                         .rules
                         .iter()
@@ -474,102 +453,104 @@ impl<'a> Parser<'a> {
                         });
                         logic.rules.len() - 1
                     };
-                    let (slot, key) = match token.raw {
+                    let (slot, key) = match rule_kind.as_str() {
                         "visible" => (&mut logic.rules[index].visible_if, "visible_if"),
                         "required" => (&mut logic.rules[index].required_if, "required_if"),
                         _ => (&mut logic.rules[index].validate, "validate"),
                     };
                     if slot.is_some() {
-                        return Err(self.failure(LogicErrorCode::InvalidSyntax, token));
+                        return Err(failure(self.source, offset, LogicErrorCode::InvalidSyntax));
                     }
                     self.locations
-                        .push((format!("$.logic.rules[{index}].{key}"), token.offset));
-                    self.expect("=")?;
-                    *slot = Some(self.expression(0, 1)?);
-                    self.expect(";")?;
+                        .push((format!("$.logic.rules[{index}].{key}"), offset));
+                    *slot = Some(self.expression(next(&mut fields))?);
                 }
-                "entry" => {
+                Rule::entry => {
                     if entry.is_some() {
-                        return Err(self.failure(LogicErrorCode::InvalidSyntax, token));
+                        return Err(failure(self.source, offset, LogicErrorCode::InvalidSyntax));
                     }
-                    entry = Some(self.reference(Category::Node)?);
-                    self.expect(";")?;
-                    self.locations.push(("$.logic.flow".into(), token.offset));
+                    next(&mut fields);
+                    entry = Some(self.reference(next(&mut fields), Category::Node)?);
+                    self.locations.push(("$.logic.flow".into(), offset));
                 }
-                "page" | "branch" | "end" => {
-                    let id = self.reference(Category::Node)?;
+                Rule::page | Rule::branch | Rule::end => {
+                    next(&mut fields);
+                    let id = self.reference(next(&mut fields), Category::Node)?;
                     if !definitions.insert(id) {
-                        return Err(self.failure(LogicErrorCode::InvalidReference, token));
+                        return Err(failure(
+                            self.source,
+                            offset,
+                            LogicErrorCode::InvalidReference,
+                        ));
                     }
                     self.locations
-                        .push((format!("$.logic.flow.nodes[{}]", nodes.len()), token.offset));
-                    nodes.push(match token.raw {
-                        "page" => {
-                            let question_ids = self.references(Category::Question)?;
-                            self.expect("->")?;
-                            let next = self.reference(Category::Node)?;
-                            self.expect(";")?;
-                            FlowNode::Page {
-                                id,
-                                question_ids,
-                                next,
-                            }
-                        }
-                        "end" => {
-                            self.expect("=")?;
-                            let outcome = match self.word()? {
-                                "complete" => FlowOutcome::Complete,
-                                "screen_out" => FlowOutcome::ScreenOut,
-                                _ => return Err(self.failure(LogicErrorCode::InvalidSyntax, token)),
-                            };
-                            self.expect(";")?;
-                            FlowNode::End { id, outcome }
-                        }
+                        .push((format!("$.logic.flow.nodes[{}]", nodes.len()), offset));
+                    let node = match kind {
+                        Rule::page => FlowNode::Page {
+                            id,
+                            question_ids: self.references(next(&mut fields), Category::Question)?,
+                            next: self.reference(next(&mut fields), Category::Node)?,
+                        },
+                        Rule::end => FlowNode::End {
+                            id,
+                            outcome: if next(&mut fields).as_str() == "complete" {
+                                FlowOutcome::Complete
+                            } else {
+                                FlowOutcome::ScreenOut
+                            },
+                        },
                         _ => {
-                            self.expect("{")?;
                             let mut branches = Vec::new();
-                            while self.accept("when") {
-                                let when = self.expression(0, 1)?;
-                                self.expect("->")?;
-                                let target = self.reference(Category::Node)?;
-                                self.expect(";")?;
-                                branches.push(FlowBranch { when, target });
-                            }
-                            self.expect("else")?;
-                            self.expect("->")?;
-                            let otherwise = self.reference(Category::Node)?;
-                            self.expect(";")?;
-                            self.expect("}")?;
+                            let otherwise = loop {
+                                let clause = next(&mut fields);
+                                let kind = clause.as_rule();
+                                let mut clause = clause.into_inner();
+                                next(&mut clause);
+                                if kind == Rule::otherwise {
+                                    break self.reference(next(&mut clause), Category::Node)?;
+                                }
+                                branches.push(FlowBranch {
+                                    when: self.expression(next(&mut clause))?,
+                                    target: self.reference(next(&mut clause), Category::Node)?,
+                                });
+                            };
                             FlowNode::Branch {
                                 id,
                                 branches,
                                 otherwise,
                             }
                         }
-                    });
+                    };
+                    nodes.push(node);
                 }
-                _ => return Err(self.failure(LogicErrorCode::InvalidSyntax, token)),
+                Rule::EOI => {}
+                _ => unreachable!("声明必须来自已匹配的文法"),
             }
         }
         if !nodes.is_empty() || entry.is_some() {
-            let entry =
-                entry.ok_or_else(|| self.failure(LogicErrorCode::InvalidFlow, self.token()))?;
+            let entry = entry.ok_or_else(|| {
+                failure(self.source, self.source.len(), LogicErrorCode::InvalidFlow)
+            })?;
             logic.flow = Some(FlowDefinition { entry, nodes });
         }
         for binding in self.bindings.values() {
             let valid = match binding.category {
-                Category::Question => questions.iter().any(|q| q.id == binding.id),
-                Category::Option => questions.iter().any(|q| match &q.kind {
+                Category::Question => questions.iter().any(|question| question.id == binding.id),
+                Category::Option => questions.iter().any(|question| match &question.kind {
                     QuestionKind::SingleChoice { options }
                     | QuestionKind::MultipleChoice { options, .. } => {
-                        options.iter().any(|o| o.id == binding.id)
+                        options.iter().any(|option| option.id == binding.id)
                     }
                     _ => false,
                 }),
                 _ => definitions.contains(&binding.id),
             };
             if !valid {
-                return Err(self.failure(LogicErrorCode::InvalidReference, self.tokens[0]));
+                return Err(failure(
+                    self.source,
+                    first_offset,
+                    LogicErrorCode::InvalidReference,
+                ));
             }
         }
         logic.compile(questions).map_err(|error| {
@@ -581,14 +562,13 @@ impl<'a> Parser<'a> {
                 .map_or(0, |(_, offset)| *offset);
             located(self.source, offset, error)
         })?;
-        // 已通过支持版本检查；统一数值等价的 1、1.0、1e0 表示。
         logic.dsl_version = 1.into();
         logic.semantics_version = 1.into();
         Ok(logic)
     }
 }
 
-/// 解析绑定、表达式和流程，并通过原文档编译器检查后返回统一规则包。
+/// 通过 pest 文法生成统一规则包，再执行身份绑定、类型与流程编译。
 ///
 /// # Errors
 /// 语法、引用、资源或语义无效时返回带行列及 AST 路径的诊断。
@@ -596,12 +576,12 @@ pub fn parse_logic_text(
     source: &str,
     questions: &[Question],
 ) -> Result<DocumentLogic, LogicTextError> {
-    Parser {
+    check_text_budget(source)?;
+    let program = next(&mut parse(source, Rule::program)?);
+    Compiler {
         source,
-        tokens: tokens(source)?,
-        position: 0,
         bindings: BTreeMap::new(),
         locations: Vec::new(),
     }
-    .parse(questions)
+    .compile(program, questions)
 }

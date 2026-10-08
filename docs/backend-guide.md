@@ -213,7 +213,8 @@ main.rs: main
 | [`domain.rs`](../backend/src/domain.rs) | `Document`、`QuestionKind`、`validate_answers` | 不依赖网络和数据库的题面/答案规则 |
 | [`identity.rs`](../backend/src/identity.rs) | `parse`、`deserialize`、`deserialize_vec` | 非零、小写连字符配置 UUID 的统一解析边界 |
 | [`logic.rs`](../backend/src/logic.rs)、[`logic_document.rs`](../backend/src/logic_document.rs) | `compile_expression`、`DocumentLogic::compile` | 表达式类型、变量依赖、题目规则、容量和引用重写 |
-| [`flow.rs`](../backend/src/flow.rs)、[`logic_text.rs`](../backend/src/logic_text.rs) | `FlowSession`、`FlowEvaluator`、`parse_logic_text` | 前向流程、改答清理、提交重建；文本编译到相同 AST |
+| [`flow.rs`](../backend/src/flow.rs) | `FlowSession`、`FlowEvaluator` | 前向流程、改答清理与提交路径重建 |
+| [`logic_text.rs`](../backend/src/logic_text.rs)、[`logic_text.pest`](../backend/src/logic_text.pest) | `parse_logic_text`、`Grammar`、`PRECEDENCE` | pest 文法与 Pratt 优先级；资源预检、身份绑定后编译到统一 AST |
 | [`repository.rs`](../backend/src/repository.rs)、[`entities.rs`](../backend/src/entities.rs) | `owned_survey`、`lock_user`、`lock_survey`、各 `Model` | 共用归属过滤与锁；数据库字段映射 |
 | [`reports.rs`](../backend/src/reports.rs) | `statistics`、`response_snapshot`、`summarize_question`、`encode_csv` | 同一版本与时间过滤；一次结果快照生成报表和导出 |
 | [`auth.rs`](../backend/src/auth.rs)、[`admin.rs`](../backend/src/admin.rs) | `authenticate`、`change_password`、`change_user`、`change_survey` | Session 失效与账号资格变化；治理操作和审计原子落库 |
@@ -289,7 +290,8 @@ SeaORM 做大部分查询和写入；`reports::response_snapshot` 使用参数�
 - `anonymous` 不解析 Cookie 来关联填写者，`respondent_id` 为空；不使用设备指纹、地理位置来判定身份，也不承诺自然人限次或严格一人一票。
 - `login_once` 内部保留账号关联以实现同账号跨版本一次，因此不能称为“完全匿名”。发布者的答卷详情、列表、统计和导出不含该账号字段。
 - 问卷链接可被转发，不是保密访问控制。应用管理员只有治理权限，不能以管理员身份读取他人答卷；数据库账号、备份运维权限则能接触数据，不能与应用角色混为一谈。
-- 密码用 Argon2id；随机 Session 秘密和提交秘密用 SHA-256。快速摘要适用于高熵秘密，不能拿来替代密码哈希。改密在同一事务删除该账号全部 Session，当前窗口和其他设备均需重新登录；禁用账号也撤销其 Session。
+- 密码用 Argon2id，在 `spawn_blocking` 内调用 Argon2 0.6 的 `hash_password`，由库生成随机盐并保存完整 PHC 字符串。Session 用 `getrandom::fill` 生成 32 字节随机秘密；Session 秘密和提交秘密用 SHA-256 摘要。快速摘要适用于高熵秘密，不能拿来替代密码哈希。改密在同一事务删除该账号全部 Session，当前窗口和其他设备均需重新登录；禁用账号也撤销其 Session。
+- `Cookie::split_parse` 遍历全部 Cookie 头，保留重复 session 拒绝、64 位十六进制校验和不做百分号解码的策略；不用会覆盖同名项的 CookieJar。`Cookie::build` 生成 HttpOnly、SameSite=Lax、Path=/、Max-Age，按配置设置 Secure；退出和改密生成 Max-Age=0 的清除 Cookie。
 
 ### 4.2 文本、缺失与数字
 
@@ -311,7 +313,9 @@ SeaORM 做大部分查询和写入；`reports::response_snapshot` 使用参数�
 
 带规则版本使用该历史版本的 `FlowEvaluator` 重建适用性；详情中的 `question_states` 区分 `answered`、`unanswered`、`skipped`。统计满足 `applicable_count = answered_count + unanswered_count`，且适用数加 `skipped_count` 等于答卷总数；选择题分母仍为已答数。规则版本 CSV 在每题后增加独立的状态列，无规则历史版本保留原 CSV 格式。提交同样重建路径，拒绝路径外答案；原有幂等指纹和重放顺序不变。完整阶段边界见 [DSL 实施计划](survey-dsl-plan.md)。
 
-文本入口为 `domain::parse_logic_text(source, questions)`，实现位于私有模块 `logic_text.rs`。入口先检查词元/嵌套预算、别名类别和 UUID，再生成 `DocumentLogic` 并调用同一文档编译器；返回值已通过类型、依赖与流程检查。`LogicTextError` 保留行列、稳定错误分类和语义 AST 路径。HTTP 仍接收文档 JSON AST，网页 TypeScript 解析文本后发送 AST，服务端重新编译验证；没有第二套文本执行路径，也没有新增数据库表或 HTTP 端点。文本回归位于独立的 `backend/tests/logic_text.rs`，与前端读取同一份 `fixtures/survey-logic/texts.json`。
+文本入口为 `domain::parse_logic_text(source, questions)`，实现位于私有模块 `logic_text.rs`，文法集中在 `logic_text.pest`。先以无递归词法入口检查 1 MiB 源文本、65,536 词元、64 字符标识符，以及括号、函数与布尔前缀共用的 64 层解析预算，再由 pest 匹配完整文法；`PrattParser` 负责优先级与左结合。生成 AST 时逐步检查节点和深度预算，数字保留原文，负号只接受数字字面量。
+
+随后检查别名类别和规范 UUID，生成 `DocumentLogic` 并调用同一文档编译器；返回值已通过类型、依赖与流程检查。`LogicTextError` 保留 Unicode 标量行列、稳定错误分类和语义 AST 路径，不回显 pest 原始输入诊断。HTTP 仍接收文档 JSON AST，网页 TypeScript 解析文本后发送 AST，服务端重新编译验证；没有新增数据库表或文本 HTTP 端点。文本回归位于独立的 `backend/tests/logic_text.rs`，与前端读取同一份 `fixtures/survey-logic/texts.json`。
 
 时间过滤使用 RFC3339，必须带 `Z` 或时区偏移；区间为 **`[from, to)`**：包含开始、不包含结束，两个值同时存在时必须 `from < to`。PostgreSQL 存储精度为微秒；过滤边界不能含非零的微秒以下精度，不会静默截断。客户端统一发送最多六位小数即可，额外全零尾位不改变时刻。不要把服务器本地时区或无时区日期字符串当作输入约定。
 
@@ -339,7 +343,7 @@ Invoke-RestMethod -Uri "$Base/api/surveys/$SurveyId/statistics?version_id=$Versi
 
 ## 5. 全部路由组与精确接口入口
 
-精确字段、请求体、响应体、查询参数、错误码见启动服务后的 [OpenAPI JSON](http://localhost:3000/api/openapi.json)。它由 `lib.rs::openapi` 合并各业务模块的 `ApiDoc` 生成；仓库没有 Swagger 网页。此处只给路由导航，不手工重复全部 schema。更改端口或部署 origin 后，相应调整链接。
+精确字段、请求体、响应体、查询参数、错误码见启动服务后的 [OpenAPI JSON](http://localhost:3000/api/openapi.json)。业务模块使用 `OpenApiRouter<AppState>` 和 `routes!`，从 handler 的同一份 `#[utoipa::path]` 登记路由与文档；`lib.rs::router()` 合并后用 `split_for_parts()` 生成文档，并加入 session Cookie 安全方案。文档只在组装时生成；仓库没有 Swagger 网页。发布者与管理员的列表分别使用 `SurveyPage`、`AdminSurveyPage`，避免组件名称冲突。此处只给路由导航，不手工重复全部 schema。更改端口或部署 origin 后，相应调整链接。
 
 ### 基础与认证
 

@@ -3,10 +3,9 @@
 use std::collections::BTreeMap;
 
 use axum::{
-    Json, Router,
+    Json,
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::{get, post},
 };
 use chrono::{DateTime, Utc};
 use sea_orm::{
@@ -16,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::{Uuid, Variant, Version};
 
 use crate::{
@@ -89,10 +89,10 @@ struct NormalizedPayload<'a> {
     answers: &'a BTreeMap<Uuid, Value>,
 }
 
-pub(crate) fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/public/surveys/{id}", get(public_survey))
-        .route("/api/public/surveys/{id}/responses", post(submit))
+pub(crate) fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(public_survey))
+        .routes(routes!(submit))
 }
 
 /// 读取当前可填写题面。
@@ -390,16 +390,3 @@ fn idempotency_conflict() -> AppError {
         "此提交标识已用于不同载荷，请使用原版本与原答案重试",
     )
 }
-
-#[derive(utoipa::OpenApi)]
-#[openapi(
-    paths(public_survey, submit),
-    components(schemas(
-        PublicSurvey,
-        PrivacyNotice,
-        SubmitRequest,
-        SubmissionReceipt,
-        SubmissionStatus
-    ))
-)]
-pub(crate) struct ApiDoc;

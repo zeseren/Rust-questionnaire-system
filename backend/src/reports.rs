@@ -8,11 +8,10 @@ use std::{
 };
 
 use axum::{
-    Json, Router,
+    Json,
     extract::State,
     http::{HeaderValue, header},
     response::{IntoResponse, Response},
-    routing::get,
 };
 use chrono::{DateTime, FixedOffset, NaiveDate, SecondsFormat, Utc};
 use sea_orm::{
@@ -24,6 +23,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -193,38 +193,13 @@ struct StatisticsResponse {
     questions: Vec<QuestionStatistics>,
 }
 
-pub(crate) fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/surveys/{id}/responses", get(list_responses))
-        .route(
-            "/api/surveys/{id}/responses/{receipt_id}",
-            get(response_detail),
-        )
-        .route("/api/surveys/{id}/statistics", get(statistics))
-        .route("/api/surveys/{id}/export.csv", get(export_csv))
+pub(crate) fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(list_responses))
+        .routes(routes!(response_detail))
+        .routes(routes!(statistics))
+        .routes(routes!(export_csv))
 }
-
-#[derive(utoipa::OpenApi)]
-#[openapi(
-    paths(list_responses, response_detail, statistics, export_csv),
-    components(schemas(
-        ReportFilter,
-        ResponseListQuery,
-        ReportSelection,
-        ResponseSummary,
-        ResponsePage,
-        ResponseDetail,
-        DailyCount,
-        OptionFrequency,
-        RatingFrequency,
-        TextResponse,
-        QuestionStatisticsData,
-        QuestionStatistics,
-        StatisticsResponse,
-        ErrorResponse
-    ))
-)]
-pub(crate) struct ApiDoc;
 
 /// 分页查看本人问卷答卷
 ///

@@ -35,13 +35,11 @@ use axum::{
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 use std::{sync::Arc, time::Duration};
-use utoipa::{
-    OpenApi,
-    openapi::{
-        self,
-        security::{ApiKey, ApiKeyValue, SecurityScheme},
-    },
+use utoipa::openapi::{
+    Components,
+    security::{ApiKey, ApiKeyValue, SecurityScheme},
 };
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -121,14 +119,28 @@ pub async fn run() -> anyhow::Result<()> {
 }
 
 fn router(state: AppState) -> Router {
-    Router::new()
+    let (router, mut doc) = OpenApiRouter::new()
         .merge(auth::router())
         .merge(surveys::router())
         .merge(submissions::router())
         .merge(reports::router())
         .merge(admin::router())
-        .route("/health", get(health))
-        .route("/api/openapi.json", get(openapi))
+        .routes(routes!(health))
+        .split_for_parts();
+    doc.info.title = "问卷调查系统 API".to_owned();
+    doc.info.description = Some("所有写请求必须携带 Origin（等于 PUBLIC_ORIGIN）和 X-CSRF-Protection: 1。认证使用 HttpOnly session Cookie。JSON 时间为 RFC3339，时间范围左闭右开；文本为普通文本，前端必须转义渲染。".to_owned());
+    doc.components
+        .get_or_insert_with(Components::new)
+        .add_security_scheme(
+            "cookieAuth",
+            SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new("session"))),
+        );
+    // 路由与文档共用 handler 注解，文档仅在组装时生成。
+    router
+        .route(
+            "/api/openapi.json",
+            get(move || std::future::ready(Json(doc.clone()))),
+        )
         .fallback(|| async { AppError::not_found() })
         .method_not_allowed_fallback(|| async {
             AppError::new(
@@ -155,31 +167,6 @@ async fn health(State(state): State<AppState>) -> AppResult<Json<serde_json::Val
         )
     })?;
     Ok(Json(serde_json::json!({"status":"ready"})))
-}
-
-#[derive(OpenApi)]
-#[openapi(
-    paths(health),
-    components(schemas(error::ErrorResponse, error::ErrorDetail))
-)]
-struct ApiDoc;
-
-async fn openapi() -> Json<openapi::OpenApi> {
-    let mut doc = ApiDoc::openapi();
-    doc.merge(auth::ApiDoc::openapi());
-    doc.merge(surveys::ApiDoc::openapi());
-    doc.merge(submissions::ApiDoc::openapi());
-    doc.merge(reports::ApiDoc::openapi());
-    doc.merge(admin::ApiDoc::openapi());
-    doc.info.title = "问卷调查系统 API".to_owned();
-    doc.info.description = Some("所有写请求必须携带 Origin（等于 PUBLIC_ORIGIN）和 X-CSRF-Protection: 1。认证使用 HttpOnly session Cookie。JSON 时间为 RFC3339，时间范围左闭右开；文本为普通文本，前端必须转义渲染。".to_owned());
-    doc.components
-        .get_or_insert_with(openapi::Components::new)
-        .add_security_scheme(
-            "cookieAuth",
-            SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new("session"))),
-        );
-    Json(doc)
 }
 
 async fn shutdown() {

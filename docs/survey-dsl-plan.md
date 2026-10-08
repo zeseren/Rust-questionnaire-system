@@ -287,6 +287,8 @@ Rust 门禁：stable + LLVM 的 `cargo fmt --all -- --check`、`cargo test --loc
 
 Rust `logic_text.rs` 和 TypeScript `logic-text.ts` 独立实现词法、带优先级的表达式解析、别名绑定及文档声明解析，最终都调用既有文档编译器。Rust API 经 `domain` 导出；没有新依赖、数据库迁移或文本 HTTP 端点。TypeScript 另提供格式化入口，生成确定性别名；往返保留 AST 身份、数字原文和表达式分组，自定义别名与注释不进入持久模型。
 
+2026-10-08 更新：上述手写解析器是本阶段初次实现的记录。Rust 现已使用 `pest` / `pest_derive 2.9.2`，文法位于 `logic_text.pest`，优先级由 `PrattParser` 处理；仍先做资源预检、在 AST 构造时限制容量，并复用身份绑定和文档编译。TypeScript 实现与共享语义契约继续沿用；当前替换与验证结果见[后端 crate 评估](backend-crate-assessment.md)。
+
 语法错误保留行列；语义错误保留 AST 路径，并定位对应声明。文本编辑与模型应用分开，未应用文本计入离开提醒并阻止保存，不会静默丢弃错误文本。解析深度与构造中的 AST 深度分别受限，长左结合中缀链在构造阶段即拒绝，避免 Rust 析构深树耗尽栈。
 
 ### 实际验证

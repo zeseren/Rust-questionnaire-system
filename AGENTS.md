@@ -18,13 +18,14 @@ Strict three layers: HTTP boundary → business use case → data access → Pos
 
 - `main.rs` only calls `questionnaire_api::run()` (`lib.rs`). `run()` is the composition root: dotenv → tracing (`RUST_LOG`, default `questionnaire_api=info`) → `Config::from_env()` → sea-orm pool (max 10 conns) → `migration::Migrator::up` **on every boot** → argv subcommand (`serve` default | `migrate` | `create-admin`) → `TcpListener` → `axum::serve(...).with_graceful_shutdown(ctrl_c)`.
 - One shared `AppState { db: DatabaseConnection, config: Arc<Config>, limits: Arc<Limits> }` (`lib.rs`), attached once via `.with_state(state)`.
-- Every feature module exposes `pub(crate) fn router() -> Router<AppState>` plus a utoipa `ApiDoc`; `lib.rs::router()` merges `auth`, `surveys`, `submissions`, `reports`, `admin`, then adds `/health`, `/api/openapi.json`, 404/405 fallbacks, `DefaultBodyLimit::max(domain::MAX_SUBMISSION_BYTES)`, and the `security::guard` middleware. OpenAPI is served as JSON at `/api/openapi.json` (no Swagger UI).
+- 各业务模块暴露 `pub(crate) fn router() -> OpenApiRouter<AppState>`，通过 `utoipa_axum::routes!` 从 handler 的 `#[utoipa::path]` 同时登记路由与文档，不另写 `ApiDoc` 列表。`lib.rs::router()` 合并五个业务模块及 `/health`，用 `split_for_parts()` 取得路由和文档；文档只在组装时生成，`/api/openapi.json` 返回其副本。随后配置 404/405、`DefaultBodyLimit::max(domain::MAX_SUBMISSION_BYTES)`、`security::guard` 与共享状态；不提供 Swagger UI。不同结构的 DTO 使用不同 Schema 名称，尤其是发布者 `SurveyPage` 与治理 `AdminSurveyPage`。
 - Handlers are thin: extract (`State` → `AuthUser` → `HeaderMap` → `ApiPath`/`ApiQuery`/`ApiJson`), call a business fn that takes `&AppState` + owner id, return `AppResult<Json<T>>` or `AppResult<(StatusCode, Json<T>)>`. Handler lives next to its business fn in the same file; only cross-module data-access rules go in `repository.rs`.
 - `domain.rs` is pure (no HTTP, no DB): `Document`, `Question`, `QuestionKind`, `Answer`, `validate_draft`, `validate_publish`, `validate_answers`, `renew_ids`, 发布期提交预算（`estimated_submission_bytes` / `ensure_submission_budget`，与 HTTP body limit 共用 `MAX_SUBMISSION_BYTES`）, plus number canonicalization. `ValidationError { question_id: Option<Uuid>, message }` surfaces as HTTP 422.
 - Persistence: SeaORM entities in `entities.rs` (tables `users`, `sessions`, `surveys`, `versions`, `responses`, `audits`) + shared ownership/lock helpers in `repository.rs`. Write paths open `state.db.begin()`, lock publisher `user` (Share / NoKeyUpdate) **then** `survey` (Update), mutate, `tx.commit()`. Read-only list/statistics paths use `RepeatableRead` + `ReadOnly`.
 - Schema: `backend/src/schema.sql` is the only DDL artifact — raw PostgreSQL, embedded with `include_str!` and executed by the single migration in `migration.rs`. Add schema changes there, not in a second place.
 - Errors: one struct `AppError { status, code: &'static str, message, question_id, error_id }` (`error.rs`); body `{"error":{"code":"...","message":"...","question_id":null}}`; `From<DbErr|sqlx::Error|serde_json::Error>` → 500 without leaking ORM text. `internal()` generates a 16-hex `error_id` (also returned as `X-Error-Id`) and logs `error_id` / `error_kind` / `location` via `#[track_caller]`; alias `AppResult<T>`.
 - Security: cookie-only sessions (opaque 32-byte hex token; DB stores hex SHA-256 in `sessions.id_hash`), Argon2id passwords executed in `spawn_blocking`. `security::guard` requires `Origin` exactly equal to `PUBLIC_ORIGIN` **and** `X-CSRF-Protection: 1` for every non-GET/HEAD/OPTIONS request, enforces two fixed-window rate limits (`/api/auth/` writes; public response POSTs), and sets `Cache-Control: no-store` + `X-Content-Type-Options: nosniff`. No CORS layer, by design.
+- Cookie 由 `cookie::Cookie::split_parse` / `Cookie::build` 解析与构造；遍历所有 Cookie 头并拒绝重复 session，不通过 CookieJar 覆盖同名项，也不做百分号解码。Argon2 0.6 自动生成每次哈希的随机盐；Session 的 32 字节随机值来自 `getrandom::fill`。
 
 Request trace example — `POST /api/surveys/{id}/publish`: `surveys::publish` → `publish_survey(&state, owner_id, id)` → `repository::lock_owned_survey` (user Share → survey Update, ownership check) → `repository::expire_survey` → `ensure_revision` (409 on stale draft revision) → `Document::validate_publish()` + `ensure_submission_budget` (422 when the worst-case fill exceeds `MAX_SUBMISSION_BYTES`) → idempotent replay: if the draft equals the current version, return 200 with it; otherwise insert `versions` row (`number = max + 1`) + update `surveys.current_version_id` → `tx.commit()` → 201.
 
@@ -53,7 +54,8 @@ Module map (useful reading order):
 | `logic.rs` | 类型化表达式编译与求值、三值逻辑、数值及资源预算 |
 | `logic_document.rs` | 变量依赖排序、题目规则、身份引用重写 |
 | `flow.rs` | 前向流程编译、会话、改答清理与提交路径重建 |
-| `logic_text.rs` | 文本解析为统一 AST，再调用文档编译器 |
+| `logic_text.rs` | 解析资源预检、pest Pratt 优先级、身份绑定与统一 AST 构造，再调用文档编译器 |
+| `logic_text.pest` | 无递归词法入口及完整 DSL 文法；语法匹配与业务语义分开 |
 | `entities.rs` | 6 SeaORM entity modules |
 | `repository.rs` | ownership lookups + row locking rules |
 | `migration.rs` + `schema.sql` | migration entry + authoritative DDL |
@@ -139,7 +141,7 @@ Two paths over the same profiles. Stable + LLVM is always the default; Cranelift
 
 - Rust stable **≥ 1.94**, edition 2024 (verified locally on 1.98.1). No `rust-toolchain.toml`; stable stays the default active toolchain. Nightly is installed only for the opt-in Cranelift path — see "Toolchain and profile: pick per need".
 - Cargo workspace, single member `backend`; dependencies live in `backend/Cargo.toml` (no workspace dependency inheritance, no `[features]`, `[dev-dependencies]` or `[lints]` sections). `publish = false`. Build-tuning `[profile.*]` sections are the only exception and live in the **root** `Cargo.toml`, never in `backend/Cargo.toml`.
-- Key pinned versions: axum 0.8.9, sea-orm / sea-orm-migration 2.0.2, sqlx 0.9.0, tokio 1.53.1, utoipa 5.5.0.
+- 当前核心锁定版本：axum 0.8.9、sea-orm / sea-orm-migration 2.0.4、sqlx 0.9.0、tokio 1.53.2、utoipa 6.0.0 / utoipa-axum 0.3.0、cookie 0.18.2、pest / pest_derive 2.9.2、argon2 0.6.0、sha2 0.11.0；准确依赖图以根 `Cargo.lock` 为准。
 - PostgreSQL 18 is the runtime baseline; there is no SQLite/in-memory mode and no Redis/queue. Compose only supplies the DB — the API always runs via `cargo run`. TLS termination, reverse proxy and container images are explicitly out of scope.
 - Configuration is env-only: `.env` is loaded by `dotenvy` from the repo root (process env wins; a missing `.env` is fine).
 

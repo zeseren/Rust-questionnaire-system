@@ -1,0 +1,65 @@
+//! 文本文法只生成解析树；身份、类型与资源预算由同一领域入口检查。
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }
+
+// 先使用无递归的词法入口检查容量与嵌套，再进入完整文法。
+lexicon = { SOI ~ token* ~ EOI }
+token = _{ identifier | number | string | symbol }
+identifier_continue = _{ ASCII_ALPHANUMERIC | "_" }
+identifier = @{ (ASCII_ALPHA | "_") ~ identifier_continue* }
+number = @{ ("0" | '1'..'9' ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT+)? ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+string = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
+symbol = @{ "->" | "&&" | "||" | "==" | "!=" | "<=" | ">=" | "{" | "}" | "(" | ")" | "[" | "]" | "," | ";" | ":" | "=" | "!" | "<" | ">" | "+" | "*" | "/" | "-" }
+
+program = { SOI ~ header ~ binding* ~ statement* ~ EOI }
+header = { kw_dsl ~ number ~ kw_semantics ~ number ~ ";" }
+binding = { kw_bind ~ category ~ identifier ~ "=" ~ string ~ ";" }
+category = @{ ("question" | "option" | "variable" | "node") ~ !identifier_continue }
+statement = _{ variable_definition | question_rule | entry | page | branch | end }
+variable_definition = { kw_let ~ identifier ~ ":" ~ value_type ~ "=" ~ expression ~ ";" }
+value_type = @{ ("boolean" | "number" | "text" | "choices" | "choice") ~ !identifier_continue }
+question_rule = { rule_kind ~ identifier ~ "=" ~ expression ~ ";" }
+rule_kind = @{ ("visible" | "required" | "validate") ~ !identifier_continue }
+entry = { kw_entry ~ identifier ~ ";" }
+page = { kw_page ~ identifier ~ references ~ "->" ~ identifier ~ ";" }
+branch = { kw_branch ~ identifier ~ "{" ~ branch_case* ~ otherwise ~ "}" }
+branch_case = { kw_when ~ expression ~ "->" ~ identifier ~ ";" }
+otherwise = { kw_else ~ "->" ~ identifier ~ ";" }
+end = { kw_end ~ identifier ~ "=" ~ outcome ~ ";" }
+outcome = @{ ("complete" | "screen_out") ~ !identifier_continue }
+references = { "[" ~ (identifier ~ ("," ~ identifier)*)? ~ "]" }
+
+expression = { negation* ~ primary ~ (infix ~ negation* ~ primary)* }
+primary = _{ negative_number | number | string | boolean | call | identifier | group }
+negative_number = { "-" ~ number }
+boolean = @{ ("true" | "false") ~ !identifier_continue }
+call = { identifier ~ "(" ~ (argument ~ ("," ~ argument)*)? ~ ")" }
+argument = _{ references | expression }
+group = { "(" ~ expression ~ ")" }
+infix = _{ logical_or | logical_and | equal | not_equal | less_equal | greater_equal | less | greater | add | subtract | multiply | divide }
+negation = { "!" }
+logical_or = { "||" }
+logical_and = { "&&" }
+equal = { "==" }
+not_equal = { "!=" }
+less_equal = { "<=" }
+greater_equal = { ">=" }
+less = { "<" }
+greater = { ">" }
+add = { "+" }
+subtract = @{ "-" ~ !">" }
+multiply = { "*" }
+divide = { "/" }
+
+// 关键字必须有词边界，不能将 dsl1 或 letvalue 拆成合法声明。
+kw_dsl = @{ "dsl" ~ !identifier_continue }
+kw_semantics = @{ "semantics" ~ !identifier_continue }
+kw_bind = @{ "bind" ~ !identifier_continue }
+kw_let = @{ "let" ~ !identifier_continue }
+kw_entry = @{ "entry" ~ !identifier_continue }
+kw_page = @{ "page" ~ !identifier_continue }
+kw_branch = @{ "branch" ~ !identifier_continue }
+kw_when = @{ "when" ~ !identifier_continue }
+kw_else = @{ "else" ~ !identifier_continue }
+kw_end = @{ "end" ~ !identifier_continue }

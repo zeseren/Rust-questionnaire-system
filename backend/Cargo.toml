@@ -7,22 +7,27 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-argon2 = { version = "0.5", features = ["std"] }
+argon2 = "0.6"
 axum = { version = "0.8", features = ["macros"] }
 chrono = { version = "0.4", features = ["serde"] }
+cookie = "0.18"
 csv = "1"
 dotenvy = "0.15"
+getrandom = "0.4"
 hex = "0.4"
-sea-orm = { version = "~2.0.2", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-chrono", "with-uuid"] }
-sea-orm-migration = { version = "~2.0.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+pest = "2.9"
+pest_derive = "2.9"
+sea-orm = { version = "~2.0.4", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-chrono", "with-uuid"] }
+sea-orm-migration = { version = "~2.0.4", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
-sha2 = "0.10"
+sha2 = "0.11"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "uuid", "json"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
-utoipa = { version = "5", features = ["uuid", "chrono"] }
+utoipa = { version = "6", features = ["uuid", "chrono"] }
+utoipa-axum = "0.3"
 uuid = { version = "1", features = ["v4", "serde"] }
