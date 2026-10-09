@@ -1,6 +1,6 @@
 <!-- 草稿修订号独立保存，回收设置的响应不能掩盖其他窗口的编辑冲突。 -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, shallowRef } from 'vue'
 import { onBeforeRouteLeave, RouterLink, useRoute, useRouter } from 'vue-router'
 import { api, ApiError, copy, encode, message } from '../api'
 import { dateTime, localInput, questionNames, shareLink, statusNames, toTimestamp } from '../format'
@@ -20,6 +20,12 @@ import ErrorNotice from '../components/ErrorNotice.vue'
 import LoadingState from '../components/LoadingState.vue'
 import QuestionEditor from '../components/QuestionEditor.vue'
 import LogicEditor from '../components/LogicEditor.vue'
+import DraftPreview from '../components/DraftPreview.vue'
+import SurveyTemplatePicker from '../components/SurveyTemplatePicker.vue'
+import { createSurveyTemplate } from '../survey-templates'
+import type { SurveyTemplateId } from '../survey-templates'
+import { editorDisabledKey } from '../editor-context'
+import '../editor.css'
 import { compileDocumentLogic } from '../document-logic'
 import { LogicError } from '../logic'
 const route = useRoute()
@@ -40,6 +46,11 @@ const deadline = ref('')
 const editorForm = ref<HTMLFormElement>()
 const action = ref<'publish' | 'close' | 'resume' | 'archive' | 'delete' | null>(null)
 const textPending = ref(false)
+const workspace = ref<'questions' | 'logic' | 'preview' | 'settings'>('questions')
+const logicEditor = ref<InstanceType<typeof LogicEditor>>()
+const editorKey = ref(0)
+const templateDialog = ref(false)
+const selectedTemplate = ref<SurveyTemplateId | null>('feedback')
 const dirty = computed(() => !!draft.value && encode(draft.value) !== saved.value)
 const settingsDirty = computed(
   () =>
@@ -53,6 +64,7 @@ const changed = computed(
     (survey.value?.status !== 'archived' && settingsDirty.value),
 )
 const locked = computed(() => busy.value || survey.value?.status === 'archived')
+provide(editorDisabledKey, locked)
 const actionNames = {
   publish: '发布问卷',
   close: '关闭回收',
@@ -74,14 +86,16 @@ async function handleError(reason: unknown) {
     conflict.value = reason.code === 'revision_conflict'
     if (reason.question_id) {
       fieldError.value = { id: reason.question_id, message: reason.message }
+      workspace.value = 'questions'
       await nextTick()
       document.getElementById(`question-${reason.question_id}`)?.focus()
     }
   }
   if (reason instanceof LogicError) {
     error.value = `${reason.message}（${reason.path}）`
+    workspace.value = 'logic'
     await nextTick()
-    document.getElementById('logic-editor')?.focus()
+    await logicEditor.value?.locate()
   }
 }
 async function load() {
@@ -97,6 +111,8 @@ async function load() {
     revision.value = result.revision
     mode.value = result.mode ?? 'anonymous'
     deadline.value = localInput(result.deadline)
+    editorKey.value++
+    textPending.value = false
   } catch (reason) {
     await handleError(reason)
   } finally {
@@ -111,7 +127,20 @@ async function save() {
     error.value = '请先应用文本规则，或恢复当前规则文本，再保存草稿。'
     return
   }
-  if (!draft.value || !survey.value || locked.value || !editorForm.value?.reportValidity()) return
+  if (!draft.value || !survey.value || locked.value || !editorForm.value) return
+  if (!editorForm.value.checkValidity()) {
+    const invalid = Array.from(editorForm.value.elements).find(
+      (element) => 'validity' in element && !(element as HTMLInputElement).validity.valid,
+    )
+    workspace.value = invalid?.closest('#question-design')
+      ? 'questions'
+      : invalid?.closest('#logic-editor')
+        ? 'logic'
+        : 'settings'
+    await nextTick()
+    editorForm.value.reportValidity()
+    return
+  }
   busy.value = true
   error.value = ''
   conflict.value = false
@@ -219,11 +248,35 @@ async function duplicate() {
 async function add(type: Question['type']) {
   if (!draft.value || draft.value.questions.length >= 100) return
   const question = newQuestion(type)
+  workspace.value = 'questions'
   draft.value.questions.push(question)
   const page = draft.value.logic?.flow?.nodes.filter((node) => node.type === 'page').at(-1)
   if (page?.type === 'page') page.question_ids.push(question.id)
   await nextTick()
   document.getElementById(`question-${question.id}`)?.focus()
+}
+async function locateQuestion(questionId: string) {
+  workspace.value = 'questions'
+  await nextTick()
+  document.getElementById(`question-${questionId}`)?.focus()
+}
+async function editRule(questionId: string) {
+  if (locked.value || textPending.value) return
+  workspace.value = 'logic'
+  await nextTick()
+  await logicEditor.value?.addRule(questionId)
+}
+function applyTemplate() {
+  if (locked.value || !selectedTemplate.value || textPending.value) return
+  const replacement = createSurveyTemplate(selectedTemplate.value)
+  if (draft.value?.title) replacement.title = draft.value.title
+  draft.value = replacement
+  editorKey.value++
+  fieldError.value = null
+  error.value = ''
+  templateDialog.value = false
+  workspace.value = 'questions'
+  notice.show('模板已应用，可以修改题目并试填规则。保存后生效。')
 }
 function move(index: number, direction: number) {
   if (!draft.value) return
@@ -266,7 +319,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
 </script>
 <template>
   <LoadingState v-if="loading" />
-  <div v-else>
+  <div v-else class="survey-editor">
     <div class="page-heading editor-heading">
       <div>
         <p class="eyebrow">问卷编辑</p>
@@ -280,7 +333,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
         <RouterLink class="button" :to="`/surveys/${id}/preview`" target="_blank" rel="noopener">
           预览已保存草稿
         </RouterLink>
-        <button class="button" :disabled="locked || !changed" @click="save">
+        <button class="button" :disabled="locked || !changed || textPending" @click="save">
           {{ busy ? '正在处理…' : '保存修改' }}
         </button>
         <button class="button button-primary" :disabled="locked || changed" @click="preparePublish">
@@ -300,67 +353,148 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
     <div v-if="survey?.status === 'archived'" class="notice">
       这份问卷已归档，可以查看答卷或复制为新问卷。
     </div>
-    <div v-if="survey && draft" class="editor-layout">
-      <form id="editor-form" ref="editorForm" class="editor-main" @submit.prevent="save">
+    <nav v-if="survey && draft" class="workspace-nav" aria-label="问卷编辑工作区">
+      <div class="workspace-tabs" role="group" aria-label="编辑步骤">
+        <button
+          type="button"
+          :aria-pressed="workspace === 'questions'"
+          @click="workspace = 'questions'"
+        >
+          <Icon name="document" />
+          <span>题目设计</span>
+          <span class="workspace-count">{{ draft.questions.length }}</span>
+        </button>
+        <button type="button" :aria-pressed="workspace === 'logic'" @click="workspace = 'logic'">
+          <Icon name="grid" />
+          <span>规则与跳题</span>
+          <span v-if="draft.logic" class="workspace-indicator"></span>
+        </button>
+        <button
+          type="button"
+          :aria-pressed="workspace === 'preview'"
+          @click="workspace = 'preview'"
+        >
+          <Icon name="play" />
+          <span>试填预览</span>
+        </button>
+        <button
+          type="button"
+          :aria-pressed="workspace === 'settings'"
+          @click="workspace = 'settings'"
+        >
+          <Icon name="settings" />
+          <span>回收设置</span>
+        </button>
+      </div>
+      <button
+        type="button"
+        class="text-button"
+        :disabled="locked || textPending"
+        @click="templateDialog = true"
+      >
+        <Icon name="spark" />
+        从模板开始
+      </button>
+    </nav>
+    <div v-if="textPending" class="notice">
+      <div class="grow">有尚未应用的文本规则，应用后才能保存或发布。</div>
+      <button class="button" @click="workspace = 'logic'">回到文本规则</button>
+    </div>
+    <div
+      v-if="survey && draft"
+      class="editor-layout"
+      :class="{ 'is-wide': workspace !== 'questions', 'is-settings': workspace === 'settings' }"
+    >
+      <form
+        v-show="workspace === 'questions' || workspace === 'logic'"
+        id="editor-form"
+        ref="editorForm"
+        class="editor-main"
+        novalidate
+        @submit.prevent="save"
+      >
         <fieldset :disabled="locked">
-          <section class="panel form-stack">
-            <label class="field">
-              问卷标题
-              <input
-                v-model="draft.title"
-                class="document-title-input"
-                placeholder="为问卷起一个清晰的标题"
-              />
-            </label>
-            <label class="field">
-              调查说明
-              <textarea v-model="draft.description" placeholder="介绍背景、填写方式或预计用时" />
-            </label>
-            <label class="field">
-              数据收集目的
-              <span class="hint">发布前必填，填写者将在作答前看到这段说明。</span>
-              <textarea v-model="draft.purpose" placeholder="为什么收集这些信息？将如何使用？" />
-            </label>
-            <label class="field">
-              提交结束语
-              <input v-model="draft.thank_you" placeholder="感谢你的认真回答。" />
-            </label>
-          </section>
-          <QuestionEditor
-            v-for="(question, index) in draft.questions"
-            :key="question.id"
-            :model-value="question"
-            :index="index"
-            :total="draft.questions.length"
-            :disabled="locked"
-            :error="fieldError?.id === question.id ? fieldError.message : undefined"
-            @update:model-value="draft.questions[index] = $event"
-            @move="move(index, $event)"
-            @duplicate="draft.questions.splice(index + 1, 0, duplicateQuestion(question, draft))"
-            @remove="draft.questions.splice(index, 1)"
-          />
-          <div v-if="!draft.questions.length" class="empty-state mt">
-            <Icon name="document" />
-            <h3>添加你的第一个问题</h3>
-            <p>单选、多选、文本、数字与评分，选择适合的提问方式。</p>
+          <div v-show="workspace === 'questions'" id="question-design">
+            <section class="panel form-stack">
+              <div class="actions between">
+                <h2>问卷信息</h2>
+                <span class="hint">先把想了解的事说清楚</span>
+              </div>
+              <label class="field">
+                问卷标题
+                <input
+                  v-model="draft.title"
+                  class="document-title-input"
+                  placeholder="为问卷起一个清晰的标题"
+                />
+              </label>
+              <label class="field">
+                调查说明
+                <textarea v-model="draft.description" placeholder="介绍背景、填写方式或预计用时" />
+              </label>
+              <label class="field">
+                数据收集目的
+                <span class="hint">发布前必填，填写者将在作答前看到这段说明。</span>
+                <textarea v-model="draft.purpose" placeholder="为什么收集这些信息？将如何使用？" />
+              </label>
+              <label class="field">
+                提交结束语
+                <input v-model="draft.thank_you" placeholder="感谢你的认真回答。" />
+              </label>
+            </section>
+            <QuestionEditor
+              v-for="(question, index) in draft.questions"
+              :key="question.id"
+              :model-value="question"
+              :index="index"
+              :total="draft.questions.length"
+              :disabled="locked"
+              :has-rule="!!draft.logic?.rules.some((rule) => rule.question_id === question.id)"
+              :rule-disabled="textPending"
+              :error="fieldError?.id === question.id ? fieldError.message : undefined"
+              @update:model-value="draft.questions[index] = $event"
+              @move="move(index, $event)"
+              @duplicate="draft.questions.splice(index + 1, 0, duplicateQuestion(question, draft))"
+              @remove="draft.questions.splice(index, 1)"
+              @rule="editRule(question.id)"
+            />
+            <div v-if="!draft.questions.length" class="empty-state mt">
+              <Icon name="document" />
+              <h3>添加你的第一个问题</h3>
+              <p>单选、多选、文本、数字与评分，选择适合的提问方式。</p>
+              <button
+                type="button"
+                class="button"
+                :disabled="locked"
+                @click="templateDialog = true"
+              >
+                使用含规则的问卷模板
+              </button>
+            </div>
+            <button
+              type="button"
+              class="add-question"
+              :disabled="locked || draft.questions.length >= 100"
+              @click="add('single_choice')"
+            >
+              ＋ 添加题目
+            </button>
           </div>
-          <button
-            type="button"
-            class="add-question"
-            :disabled="locked || draft.questions.length >= 100"
-            @click="add('single_choice')"
-          >
-            ＋ 添加题目
-          </button>
-          <LogicEditor
-            v-model="draft.logic"
-            :questions="draft.questions"
-            @pending="textPending = $event"
-          />
+          <div v-show="workspace === 'logic'">
+            <LogicEditor
+              :key="editorKey"
+              ref="logicEditor"
+              v-model="draft.logic"
+              :questions="draft.questions"
+              :disabled="locked"
+              @pending="textPending = $event"
+            />
+          </div>
         </fieldset>
       </form>
-      <aside class="editor-aside">
-        <section class="panel">
+      <DraftPreview v-if="workspace === 'preview'" :document="draft" :text-pending="textPending" />
+      <aside v-show="workspace === 'questions' || workspace === 'settings'" class="editor-aside">
+        <section v-show="workspace === 'questions'" class="panel">
           <div class="panel-header">
             <h2>添加题目</h2>
             <span class="hint">{{ draft.questions.length }} / 100</span>
@@ -387,8 +521,29 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
               {{ label }}
             </button>
           </div>
+          <div v-if="draft.questions.length" class="question-outline">
+            <h3>题目大纲</h3>
+            <nav aria-label="定位题目">
+              <button
+                v-for="(question, index) in draft.questions"
+                :key="question.id"
+                type="button"
+                @click="locateQuestion(question.id)"
+              >
+                <span>{{ String(index + 1).padStart(2, '0') }}</span>
+                <span class="truncate">{{ question.title || '未命名题目' }}</span>
+                <span
+                  v-if="draft.logic?.rules.some((rule) => rule.question_id === question.id)"
+                  class="outline-rule"
+                  title="已配置规则"
+                >
+                  ·
+                </span>
+              </button>
+            </nav>
+          </div>
         </section>
-        <section class="panel collection-panel">
+        <section v-show="workspace === 'settings'" class="panel collection-panel">
           <div class="panel-header"><h2>回收设置</h2></div>
           <div class="form-stack">
             <label class="field">
@@ -489,6 +644,27 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
       </aside>
     </div>
   </div>
+  <Modal v-if="templateDialog" title="选择一个问卷起点" wide @close="templateDialog = false">
+    <p class="subtle mb">模板包含可直接试填的题目和规则，应用后可以自由修改。</p>
+    <SurveyTemplatePicker v-model="selectedTemplate" :allow-blank="false" :disabled="locked" />
+    <p class="hint mt">
+      {{
+        draft?.questions.length
+          ? '应用将替换当前题目、规则与问卷说明，保留问卷标题。保存后生效。'
+          : '应用后可在“规则与跳题”查看配置，在“试填预览”体验效果。'
+      }}
+    </p>
+    <div class="actions end mt">
+      <button class="button" @click="templateDialog = false">取消</button>
+      <button
+        class="button button-primary"
+        :disabled="locked || !selectedTemplate || textPending"
+        @click="applyTemplate"
+      >
+        {{ draft?.questions.length ? '替换并应用模板' : '应用模板' }}
+      </button>
+    </div>
+  </Modal>
   <Modal v-if="action" :title="actionNames[action]" :dismissible="!busy" @close="action = null">
     <p class="subtle mb">{{ descriptions[action] }}</p>
     <p v-if="action === 'publish'" class="notice">

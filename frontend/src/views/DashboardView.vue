@@ -12,6 +12,10 @@ import Modal from '../components/Modal.vue'
 import ErrorNotice from '../components/ErrorNotice.vue'
 import LoadingState from '../components/LoadingState.vue'
 import Pagination from '../components/Pagination.vue'
+import SurveyTemplatePicker from '../components/SurveyTemplatePicker.vue'
+import { createSurveyTemplate, surveyTemplates } from '../survey-templates'
+import type { SurveyTemplateId } from '../survey-templates'
+import '../editor.css'
 const route = useRoute()
 const router = useRouter()
 const notice = useNotice()
@@ -23,6 +27,12 @@ const title = ref('')
 const view = ref<'grid' | 'list'>('list')
 const creating = ref(false)
 const newTitle = ref('')
+const selectedTemplate = ref<SurveyTemplateId | null>(null)
+watch(selectedTemplate, (current, previous) => {
+  const previousTitle = surveyTemplates.find((template) => template.id === previous)?.title ?? ''
+  if (!newTitle.value || newTitle.value === previousTitle)
+    newTitle.value = surveyTemplates.find((template) => template.id === current)?.title ?? ''
+})
 const busy = ref(false)
 const actionError = ref('')
 const statuses: Status[] = ['unpublished', 'collecting', 'closed', 'archived']
@@ -62,6 +72,7 @@ function refresh() {
 function openCreate() {
   actionError.value = ''
   newTitle.value = ''
+  selectedTemplate.value = null
   creating.value = true
 }
 async function create() {
@@ -70,13 +81,7 @@ async function create() {
   actionError.value = ''
   try {
     const survey = await api<SurveyDetail>('/api/surveys', 'POST', {
-      document: {
-        title: newTitle.value.trim(),
-        description: '',
-        purpose: '',
-        thank_you: '感谢你的认真回答。',
-        questions: [],
-      },
+      document: { ...createSurveyTemplate(selectedTemplate.value), title: newTitle.value.trim() },
     })
     creating.value = false
     notice.show('问卷草稿已创建。')
@@ -302,9 +307,11 @@ async function duplicate(id: string) {
       />
     </template>
   </section>
-  <Modal v-if="creating" title="新建问卷" :dismissible="!busy" @close="creating = false">
+  <Modal v-if="creating" title="新建问卷" wide :dismissible="!busy" @close="creating = false">
     <form class="form-stack" @submit.prevent="create">
       <ErrorNotice :message="actionError" />
+      <p class="subtle">从空白开始，或选择一个已配好规则的模板。</p>
+      <SurveyTemplatePicker v-model="selectedTemplate" :disabled="busy" />
       <label class="field">
         问卷标题
         <input
@@ -315,7 +322,13 @@ async function duplicate(id: string) {
           :disabled="busy"
         />
       </label>
-      <p class="hint">创建后可添加题目、填写调查说明并选择回收方式。</p>
+      <p class="hint">
+        {{
+          selectedTemplate
+            ? '创建后可以修改模板，在规则工作区调整条件与流程。'
+            : '创建后可添加题目、配置规则并选择回收方式。'
+        }}
+      </p>
       <div class="actions end">
         <button type="button" class="button" :disabled="busy" @click="creating = false">
           取消

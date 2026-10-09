@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "test:regression": "node --test tests/answers.test.mjs tests/logic.test.mjs tests/document-logic.test.mjs tests/flow.test.mjs tests/flow-inputs.test.mjs tests/logic-text.test.mjs",
+    "test:regression": "node --test tests/answers.test.mjs tests/logic.test.mjs tests/document-logic.test.mjs tests/flow.test.mjs tests/flow-inputs.test.mjs tests/logic-text.test.mjs tests/editor.test.mjs",
     "format": "prettier --write src vite.config.ts index.html package.json tsconfig.json .prettierrc.json",
     "format:check": "prettier --check src vite.config.ts index.html package.json tsconfig.json .prettierrc.json",
     "typecheck": "vue-tsc --noEmit",
@@ -17,6 +17,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "6.20.3",
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/lint": "6.9.7",
+    "@codemirror/search": "6.7.2",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.14",
+    "@lezer/highlight": "1.2.5",
+    "element-plus": "2.14.7",
     "lossless-json": "4.3.0",
     "pinia": "3.0.4",
     "vue": "3.5.42",

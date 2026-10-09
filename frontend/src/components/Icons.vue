@@ -125,6 +125,12 @@
       <symbol id="i-edit" viewBox="0 0 24 24">
         <path d="m14 4 6 6M4 20l5-1L21 7l-4-4L5 15l-1 5Z" />
       </symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8V4Z" /></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24">
+        <path d="M4 7h16M4 17h16" />
+        <circle cx="9" cy="7" r="3" fill="var(--surface)" />
+        <circle cx="15" cy="17" r="3" fill="var(--surface)" />
+      </symbol>
     </defs>
   </svg>
 </template>

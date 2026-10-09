@@ -5,8 +5,15 @@ import { questionNames } from '../format'
 import type { Question } from '../types'
 import Icon from './Icon.vue'
 const question = defineModel<Question>({ required: true })
-defineProps<{ index: number; total: number; disabled?: boolean; error?: string }>()
-defineEmits<{ move: [direction: number]; duplicate: []; remove: [] }>()
+defineProps<{
+  index: number
+  total: number
+  disabled?: boolean
+  error?: string
+  hasRule?: boolean
+  ruleDisabled?: boolean
+}>()
+defineEmits<{ move: [direction: number]; duplicate: []; remove: []; rule: [] }>()
 function changeType(event: Event) {
   const type = (event.target as HTMLSelectElement).value as Question['type']
   const before = question.value
@@ -219,6 +226,20 @@ function bound(name: 'min' | 'max', event: Event) {
           </label>
         </div>
       </template>
+      <div class="question-logic-footer">
+        <span class="hint">
+          {{ hasRule ? '此题已配置条件规则' : '可以按前面的回答设置显示与必填' }}
+        </span>
+        <button
+          type="button"
+          class="text-button accent"
+          :disabled="ruleDisabled"
+          @click="$emit('rule')"
+        >
+          <Icon name="grid" />
+          {{ hasRule ? '编辑规则' : '设置规则' }}
+        </button>
+      </div>
     </fieldset>
   </article>
 </template>

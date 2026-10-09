@@ -3,6 +3,7 @@
 import { computed } from 'vue'
 import type { Question } from '../types'
 import type { ComputedVariable } from '../document-logic'
+import SearchSelect from './SearchSelect.vue'
 const props = withDefaults(
   defineProps<{
     modelValue: unknown
@@ -63,9 +64,25 @@ const options = computed(() =>
 function update(key: string, value: unknown) {
   emit('update:modelValue', { ...node.value, [key]: value })
 }
+const referenceQuestions = computed(() =>
+  ['selected', 'contains_any', 'contains_all'].includes(String(node.value.op))
+    ? props.questions.filter((question) => 'options' in question)
+    : props.questions,
+)
+function changeQuestion(id: string) {
+  const question = props.questions.find((question) => question.id === id)
+  const fields =
+    node.value.op === 'selected'
+      ? { option_id: question && 'options' in question ? (question.options[0]?.id ?? '') : '' }
+      : node.value.op === 'contains_any' || node.value.op === 'contains_all'
+        ? { option_ids: [] }
+        : {}
+  emit('update:modelValue', { ...node.value, question_id: id, ...fields })
+}
 function switchOp(op: string) {
   const literal = { op: 'boolean', value: true }
   const number = { op: 'number', value: '0' }
+  const selectedQuestion = props.questions.find((question) => 'options' in question)
   const question_id = props.questions[0]?.id ?? ''
   let fields: Record<string, unknown>
   switch (op) {
@@ -83,11 +100,17 @@ function switchOp(op: string) {
       fields = { question_id }
       break
     case 'selected':
-      fields = { question_id, option_id: '' }
+      fields = {
+        question_id: selectedQuestion?.id ?? '',
+        option_id:
+          selectedQuestion && 'options' in selectedQuestion
+            ? (selectedQuestion.options[0]?.id ?? '')
+            : '',
+      }
       break
     case 'contains_any':
     case 'contains_all':
-      fields = { question_id, option_ids: [] }
+      fields = { question_id: selectedQuestion?.id ?? '', option_ids: [] }
       break
     case 'variable':
       fields = { variable_id: props.variables[0]?.id ?? '' }
@@ -155,31 +178,28 @@ function toggleOption(id: string) {
     </label>
     <label v-if="'question_id' in node" class="field">
       引用题目
-      <select
-        aria-label="引用题目"
-        :value="node.question_id"
-        @change="update('question_id', ($event.target as HTMLSelectElement).value)"
-      >
-        <option v-if="!question" :value="node.question_id">请选择题目（当前引用不存在）</option>
-        <option v-for="(q, i) in questions" :key="q.id" :value="q.id">
-          {{ i + 1 }}. {{ q.title || '未命名题目' }}
-        </option>
-      </select>
+      <SearchSelect
+        :model-value="String(node.question_id ?? '')"
+        label="引用题目"
+        :options="
+          referenceQuestions.map((question) => ({
+            value: question.id,
+            label: `${questions.findIndex((item) => item.id === question.id) + 1}. ${question.title || '未命名题目'}`,
+          }))
+        "
+        @update:model-value="changeQuestion"
+      />
     </label>
     <label v-if="node.op === 'selected'" class="field">
       选项
-      <select
-        aria-label="选项"
-        :value="node.option_id"
-        @change="update('option_id', ($event.target as HTMLSelectElement).value)"
-      >
-        <option v-if="!options.some((o) => o.id === node.option_id)" :value="node.option_id">
-          请选择选项（当前引用不存在）
-        </option>
-        <option v-for="option in options" :key="option.id" :value="option.id">
-          {{ option.label }}
-        </option>
-      </select>
+      <SearchSelect
+        :model-value="String(node.option_id ?? '')"
+        label="引用选项"
+        :options="
+          options.map((option) => ({ value: option.id, label: option.label || '未命名选项' }))
+        "
+        @update:model-value="update('option_id', $event)"
+      />
     </label>
     <div v-if="node.op === 'contains_any' || node.op === 'contains_all'" class="form-stack">
       <label v-for="option in options" :key="option.id">
@@ -204,17 +224,17 @@ function toggleOption(id: string) {
     </div>
     <label v-if="node.op === 'variable'" class="field">
       引用变量
-      <select
-        :value="node.variable_id"
-        @change="update('variable_id', ($event.target as HTMLSelectElement).value)"
-      >
-        <option v-if="!variables.some((v) => v.id === node.variable_id)" :value="node.variable_id">
-          请选择变量（当前引用不存在）
-        </option>
-        <option v-for="(variable, i) in variables" :key="variable.id" :value="variable.id">
-          变量 {{ i + 1 }} · {{ variable.value_type }}
-        </option>
-      </select>
+      <SearchSelect
+        :model-value="String(node.variable_id ?? '')"
+        label="引用变量"
+        :options="
+          variables.map((variable, index) => ({
+            value: variable.id,
+            label: `变量 ${index + 1} · ${variable.value_type}`,
+          }))
+        "
+        @update:model-value="update('variable_id', $event)"
+      />
     </label>
     <label v-if="node.op === 'compare'" class="field">
       比较方式
