@@ -482,7 +482,7 @@
         ]
       }
     },
-    "old": {
+    "plain": {
       "title": "流程回归",
       "description": "",
       "purpose": "验证流程契约",
@@ -2800,8 +2800,8 @@
       ]
     },
     {
-      "name": "旧文档六题型规范化仍采用同一单页契约",
-      "document": "old",
+      "name": "无规则问卷的六题型遵守单页填写契约",
+      "document": "plain",
       "steps": [
         {
           "expected": {

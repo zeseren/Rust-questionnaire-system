@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { decode } from '../src/json.ts'
-import { compileDocumentLogic, duplicateSurveyDocument } from '../src/document-logic.ts'
+import { compileDocumentLogic } from '../src/document-logic.ts'
 import { LogicError } from '../src/logic.ts'
 import { duplicateQuestion } from '../src/documents.ts'
 
@@ -29,31 +29,6 @@ test('文档共享样例保持变量排序和间接依赖规则一致', () => {
     }
     assert.deepEqual(actual, fixture.expected, fixture.name)
   }
-})
-
-test('整卷复制重写题目选项变量身份并保留旧文档格式', () => {
-  const old = {
-    title: '复制回归',
-    description: '',
-    purpose: '回归',
-    thank_you: '',
-    questions: expressions.questions,
-  }
-  assert.equal(Object.hasOwn(duplicateSurveyDocument(old), 'logic'), false)
-  const source = { ...old, logic: documents.cases[0].logic }
-  const before = JSON.stringify(source)
-  const copy = duplicateSurveyDocument(source)
-  assert.equal(JSON.stringify(source), before)
-  const copied = JSON.stringify(copy)
-  const ids = [
-    ...source.questions.flatMap((question) => [
-      question.id,
-      ...(question.options ?? []).map((option) => option.id),
-    ]),
-    ...source.logic.variables.map((variable) => variable.id),
-  ]
-  for (const id of ids) assert.ok(!copied.includes(id), `复制不能遗留来源身份：${id}`)
-  assert.doesNotThrow(() => compileDocumentLogic(copy.logic, copy.questions))
 })
 
 test('文档总预算不能被拆成多个合法小表达式绕过', () => {

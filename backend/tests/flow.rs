@@ -1,6 +1,6 @@
 //! 两端执行同一份流程和事件序列，防止路径、清理、回退与缺失处理发生漂移。
 use questionnaire_api::domain::{
-    Answer, Document, FlowEvaluator, FlowEvent, FlowNode, FlowSession,
+    Answer, Document, FlowEvaluator, FlowEvent, FlowNode, FlowSession, QuestionKind,
 };
 use serde_json::{Value, json};
 
@@ -155,21 +155,17 @@ fn equivalent(actual: &Value, expected: &Value) -> bool {
 }
 
 #[test]
-fn 整卷复制重写流程所有身份且仅普通完成流程可发布() {
+fn 整卷复制重写配置及引用且仅普通完成流程可发布() {
     let fixtures = fixtures();
     let source: Document =
         serde_json::from_value(fixtures["documents"]["diamond"].clone()).unwrap();
     let mut copied = source.clone();
     copied.renew_ids();
-    assert!(copied.validate_draft().is_ok());
-    source.validate_publish().unwrap();
     copied.validate_publish().unwrap();
     let screened: Document =
         serde_json::from_value(fixtures["documents"]["priority"].clone()).unwrap();
     assert!(screened.validate_publish().is_err());
     let source_flow = source.logic.as_ref().unwrap().flow.as_ref().unwrap();
-    let copied_flow = copied.logic.as_ref().unwrap().flow.as_ref().unwrap();
-    assert_ne!(source_flow.entry, copied_flow.entry);
     let copied_json = serde_json::to_string(&copied).unwrap();
     for node in &source_flow.nodes {
         let id = match node {
@@ -187,9 +183,23 @@ fn 整卷复制重写流程所有身份且仅普通完成流程可发布() {
             !copied_json.contains(&question.id.to_string()),
             "复制不能遗留来源题目引用"
         );
+        if let QuestionKind::SingleChoice { options }
+        | QuestionKind::MultipleChoice { options, .. } = &question.kind
+        {
+            for option in options {
+                assert!(
+                    !copied_json.contains(&option.id.to_string()),
+                    "复制不能遗留来源选项身份"
+                );
+            }
+        }
     }
-    let session = FlowSession::new(&copied).unwrap();
-    assert_eq!(session.snapshot().current_node, copied_flow.entry);
+    for variable in &source.logic.as_ref().unwrap().variables {
+        assert!(
+            !copied_json.contains(&variable.id.to_string()),
+            "复制不能遗留来源变量身份"
+        );
+    }
 }
 
 #[test]

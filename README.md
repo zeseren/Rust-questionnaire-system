@@ -189,17 +189,25 @@ try {
 
 ## 7. 开发检查
 
-从仓库根目录执行：
+检查按本次改动选择，没有统一的提交门禁。同一份代码已经通过的检查直接复用；commit、改分支和纯文档整理不触发重跑。测试保护当前业务契约与已确认缺陷，不按文件或函数数量补覆盖。
 
-```powershell
-cargo fmt --all -- --check
-cargo test --locked --workspace
-cargo clippy --locked --workspace --all-targets -- -D warnings
-```
+| 改动范围 | 对应检查 |
+|---|---|
+| 文档、注释、纯样式 | 审阅差异；样式按需核对受影响页面 |
+| 前端纯逻辑或测试 | 在 `frontend/` 运行相关文件，例如 `pnpm run test:regression tests/editor.test.mjs` |
+| Vue 组件或类型 | 按需运行 `pnpm run typecheck`；交互变化核对相关页面 |
+| 前端依赖、打包或懒加载 | `pnpm run build` 已含类型检查，无需再跑 typecheck |
+| Rust 领域逻辑或测试 | 从根目录运行相关目标，例如 `cargo test --locked -p questionnaire-api --test domain` |
+| HTTP、权限或 SQL 行为 | 核对受影响的真实服务路径 |
+| 共享 DSL 契约 | 运行受影响的两端测试，避免预览与服务端语义分离 |
 
-领域回归测试位于 [`backend/tests/domain.rs`](backend/tests/domain.rs)，DSL 表达式与文档编译回归位于 [`backend/tests/logic.rs`](backend/tests/logic.rs)，流程与改答清理回归位于 [`backend/tests/flow.rs`](backend/tests/flow.rs)，文本解析回归位于 [`backend/tests/logic_text.rs`](backend/tests/logic_text.rs)，均不启动数据库；它们不能替代事务、权限和并发提交的真实服务验证。运行过的 HTTP、数据库及备份恢复场景见 [实施与验证记录](docs/requirements-analysis.md#11-后端实施与验证记录)。
+只有影响确实跨越多个模块、无法合理缩小时，才使用所属端的完整测试：Rust 为 `cargo test --locked --workspace`，前端为 `pnpm run test:regression`。仅修改测试不附带生产构建、Clippy 或服务联调。Rust 检查使用 stable + LLVM；静态检查有需要时选择 `cargo clippy --locked --workspace --all-targets -- -D warnings`。格式化只处理改动文件，例如 `rustfmt --edition 2024 backend/tests/domain.rs` 或在 `frontend/` 使用 `pnpm exec prettier --write tests/editor.test.mjs`。
 
-前端在 `frontend/` 执行 `pnpm run build` 检查类型并构建，`pnpm run format` 整理源码，`pnpm run format:check` 检查格式。`pnpm run test:regression` 使用 Node 内置测试运行器执行 `frontend/tests/` 中的数字精度、表达式、文档规则、流程和文本回归，不添加测试依赖。两端 DSL 测试读取同一目录下的[表达式样例](fixtures/survey-logic/expressions.json)、[文档样例](fixtures/survey-logic/documents.json)、[流程样例](fixtures/survey-logic/flows.json)、[最终提交样例](fixtures/survey-logic/submissions.json)与[文本样例](fixtures/survey-logic/texts.json)。没有引入前端自动化测试框架；实际浏览器联调范围记录在 [前端实施与验证记录](docs/requirements-analysis.md#12-前端-mvp-实施与验证记录)和 [DSL 验收记录](docs/survey-dsl-plan.md#阶段-56-实施与验收记录)，不将静态原型视为业务验收。
+Rust 的四个测试目标位于 `backend/tests/`：`domain` 约束题型、规范化与实际提交预算，`logic` 约束表达式与变量依赖，`flow` 约束路径、身份复制和最终提交，`logic_text` 约束文本解析。它们不启动数据库。
+
+前端使用 Node 内置运行器自动发现 `frontend/tests/`，命令后传文件路径即可缩小范围，无需维护脚本内的文件清单。两端独立实现共用 [fixtures/survey-logic](fixtures/survey-logic) 中的人工期望；流程行为集中在共享样例，编辑器测试只补配置转换与同步等自身行为。没有新增测试框架或自动提交钩子。
+
+历史验证结果见 [需求与验证记录](docs/requirements-analysis.md)，其中的全量命令和通过数量是当时的实施记录，不是后续修改必须重复的清单。
 
 DSL 与流程引擎的[基础实施计划](docs/survey-dsl-plan.md)已完成：Rust 与 TypeScript 独立实现表达式、文档编译、流程和文本解析，共用语义样例；网页支持可视化规则/分支编辑、文本 DSL、分步预览与填写。服务端重建有效路径，支持原提交载荷的幂等重放，并在详情/统计/CSV 中区分跳过和未答。真实浏览器与 PostgreSQL 已验证分支改答清理和丢失回执后的原载荷重试。筛选结束的持久化策略、重复组和子流程仍按计划留待后续，无规则问卷保持单页行为。当前尚无正式发布版本，后续开发不承担历史答卷或旧格式兼容要求。
 

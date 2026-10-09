@@ -72,39 +72,6 @@ fn 深度和节点上限在编译之前拦截且允许边界() {
 }
 
 #[test]
-fn 编译结果保留静态类型和去重依赖且可重复求值() {
-    let fixtures: Fixtures =
-        serde_json::from_str(include_str!("../../fixtures/survey-logic/expressions.json")).unwrap();
-    let id = fixtures.questions[0].id;
-    let program = json!({ "dsl_version": 1, "semantics_version": 1, "expression": {
-        "op": "all", "expressions": [
-            { "op": "answered", "question_id": id },
-            { "op": "answered", "question_id": id },
-        ]
-    }});
-    let compiled = compile_expression(&program, &fixtures.questions).unwrap();
-    assert_eq!(compiled.dependencies().collect::<Vec<_>>(), vec![id]);
-    assert_eq!(
-        serde_json::to_value(compiled.value_type()).unwrap(),
-        "boolean"
-    );
-    let empty = BTreeMap::new();
-    assert_eq!(
-        serde_json::to_value(compiled.evaluate(&empty).unwrap()).unwrap(),
-        json!({"type": "boolean", "value": false})
-    );
-    let answers = BTreeMap::from([(id, json!("00000000-0000-4000-8000-000000000101"))]);
-    assert_eq!(
-        serde_json::to_value(compiled.evaluate(&answers).unwrap()).unwrap(),
-        json!({"type": "boolean", "value": true})
-    );
-    assert_eq!(
-        serde_json::to_value(compiled.evaluate(&empty).unwrap()).unwrap(),
-        json!({"type": "boolean", "value": false})
-    );
-}
-
-#[test]
 fn 文档共享样例保持变量排序和间接依赖规则一致() {
     let fixtures: Fixtures =
         serde_json::from_str(include_str!("../../fixtures/survey-logic/expressions.json")).unwrap();

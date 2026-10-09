@@ -66,7 +66,7 @@ Module map (useful reading order):
 
 ## Development Commands
 
-Run from the repo root (README uses PowerShell).
+以下命令从仓库根目录运行（PowerShell），按实际需要选择，不是每次改动或提交都要执行的清单。
 
 ```powershell
 Copy-Item .env.example .env          # then set DATABASE_URL
@@ -87,17 +87,17 @@ cargo build --release --locked -p questionnaire-api          # single codegen un
 
 ### Toolchain and profile: pick per need
 
-Two paths over the same profiles. Stable + LLVM is always the default; Cranelift is opt-in for iteration speed only, never for gates or releases.
+两条路径共用 profile。默认使用 stable + LLVM；Cranelift 仅供开发迭代，正式验证与发布仍用 stable + LLVM。是否需要验证由本次改动决定。
 
 | Need | Command | Cost / benefit |
 |---|---|---|
 | Default dev build & run | `cargo build\|run --locked -p questionnaire-api` | stable + LLVM; own code `opt-level = 0`, deps `opt-level = 3`, debuginfo kept. Use it when you need breakpoints or want to judge dependency runtime speed. |
 | Fast logic iteration | `cargo +nightly cranelift -p questionnaire-api` | alias defined in `.cargo/config.toml`; needs nightly + `rustc-codegen-cranelift-preview` (installed on this machine). Measured: one-crate incremental 8—12 s vs 17—28 s with LLVM (~2—3×); a full cold build gains nothing (dependency compilation dominates). Generated machine code is slower than LLVM — never ship it. |
 | Run / test under Cranelift | `cargo +nightly run --locked -Zcodegen-backend --config .cargo/cranelift.toml -p questionnaire-api`<br>`cargo +nightly test -Zcodegen-backend --config .cargo/cranelift.toml --locked -p questionnaire-api --test domain` | the alias only wraps `build`; `.cargo/cranelift.toml` sets `codegen-backend` for the dev and test profiles only. |
-| Gates before commit | `cargo fmt --all -- --check`, `cargo test --locked --workspace`, `cargo clippy --locked --workspace --all-targets -- -D warnings` | always stable + LLVM, the same path as release. Do not run the gates under Cranelift. |
+| Rust 检查（按改动选择） | 对应的 `cargo test --locked -p questionnaire-api --test <目标>`；格式与 Clippy 按需执行 | 仅覆盖受影响的 Rust 代码，使用 stable + LLVM；不是提交门禁，前端或文档改动不触发。 |
 | Release artifact | `cargo build --release --locked -p questionnaire-api` | `opt-level = 3` + `codegen-units = 1` + `lto = "fat"` + `strip = "symbols"` + `panic = "abort"`; ≈5 min cold, 6.87 MB here. Never build release with Cranelift. |
 
-- Never add a `rust-toolchain.toml`: stable must remain the default so the gates and release keep the LLVM path and the documented MSRV.
+- 不新增 `rust-toolchain.toml`：stable 保持默认，按需检查与发布均使用 LLVM，并遵守已声明的 MSRV。
 - The first Cranelift build in a given `target/` rebuilds the whole dependency tree (measured 222 crates, 6m07s); afterwards cargo keeps both artifact sets and switching back is instant (measured 0 crates, ~2 s). `cargo clean`, a fresh clone or a different `--target-dir` pays that cost again.
 - `TMP`/`TEMP` are pinned to the workspace-relative `target/` in `.cargo/config.toml`: with an unwritable or non-existent temp dir MSVC `cl.exe` fails with `error D8050` while compiling the C dependency `ring`.
 - No Makefile / justfile / scripts / CI — call cargo directly.
@@ -158,16 +158,18 @@ Two paths over the same profiles. Stable + LLVM is always the default; Cranelift
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | only for `create-admin` | — | process env, not in `.env.example` |
 | `POSTGRES_PASSWORD` | only for Compose | — | injected into the `db` service |
 
-- Formatting/linting uses stock rustfmt + clippy (no config files); `-D warnings` is the CI-substitute gate.
+- Rust 格式与静态检查使用默认 rustfmt / clippy；Clippy 按需运行并使用 `-D warnings`，不与测试、构建捆绑成固定提交门禁。
 - No CI workflows, Dockerfile, task runners or scripts exist. Do not assume one.
 
 ## Testing & QA
 
+- 先按 [README 第 7 节](README.md#7-开发检查)选择与改动对应的最小检查。没有统一提交门禁；同一份代码已有的通过结果直接复用，commit、改分支或整理文档不触发重跑。纯前端不跑 Rust，纯后端不跑前端；只有共享契约变更才按影响验证两端。
+- 仅调整测试时运行受影响的测试即可，不附带生产构建、Clippy 或服务联调。前端构建已包含类型检查，不再单独重复 typecheck；格式化只处理改动文件。
 - 使用内置 `cargo test`，四个独立目标：`domain` 覆盖题型、身份、规范化、文本/数字边界与提交预算；`logic` 覆盖表达式及文档依赖；`flow` 覆盖拓扑、改答清理、最终提交及配置身份；`logic_text` 覆盖文本解析。前端以 Node 内置运行器执行 `frontend/tests/`。具体通过数量和真实服务验证记录在 `docs/requirements-analysis.md`，不把历史数量当作当前测试清单。
-- 只为已确认问题和当前契约补必要回归。新测试名、断言说明与样例说明使用中文；Rust 测试放 `backend/tests/`，不得追加到业务 `.rs` 文件末尾。两端独立实现，共享语义样例，不新增历史答卷兼容专项测试。
+- 测试围绕当前业务契约与已确认缺陷；已有覆盖足够时不新增，不按文件、函数或覆盖率配额补测试，不锁定私有结构、元数据排列等实现细节。相同行为优先保留一处回归；两端独立实现仍分别读取共享语义样例。新测试名、断言说明与样例说明使用中文，Rust 测试放 `backend/tests/`；不新增历史答卷兼容专项测试。
 - 文本空白统一按 Unicode `White_Space`（Rust `str::trim`）：U+0085 是空白，U+FEFF 不是；非空白文本保留原文。配置的题目、选项、变量及流程身份与引用只接受非零、小写连字符 UUID；答案中的选项值仍由规范化入口处理。
 - 提交答案和改答事件的 `question_id` 同样必须使用规范题目身份；不能把选项答案值的宽松 UUID 解析复用到身份字段。
 - `cargo test --locked --workspace` needs **no database and no env vars**. Useful filters: `cargo test -p questionnaire-api --test domain <name_substring>`.
 - Style: build input via the existing helpers (`id`, `question`, `choices`, `document`, `answer`); assert on `Result` and `question_id`, never on message wording; parse raw JSON strings with `serde_json::from_str` when digit precision matters.
-- Scope expectation: the suite is deliberately limited to pure domain logic. Do not add DB-less tests for HTTP/ORM plumbing — those paths are verified manually against a real Postgres (`docs/requirements-analysis.md` §11.2 records what was run, §11.3 lists what was not). If you change `domain.rs`, extend `tests/domain.rs`; if you change HTTP/auth/SQL behavior, verify by running the service.
+- 自动化测试保持在纯领域逻辑与必要输入适配范围。领域行为变更优先复用相关测试，只为未覆盖的实际风险补回归。HTTP/auth/SQL 行为变更只核对受影响的真实服务路径，不增设 ORM Mock 或无数据库的接线测试；既有服务验证记录见 `docs/requirements-analysis.md`。
 - There is no coverage tooling, benchmark, mock framework or dev-dependency section; adding test-only crates requires creating `[dev-dependencies]`.

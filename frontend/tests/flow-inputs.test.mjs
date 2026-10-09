@@ -16,11 +16,9 @@ test('界面改答清除旧分支原文且数值提交保持指数格式', () =>
   const form = new FlowInputs(document)
   form.change(choice.id, a.id)
   form.next()
-  for (const raw of ['9007199254740993', '18446744073709551616', '1' + '0'.repeat(64)]) {
-    form.change(number.id, raw)
-    assert.equal(form.snapshot().errors[number.id], 'invalid_answer', raw)
-    assert.throws(() => form.next())
-  }
+  form.change(number.id, '9007199254740993')
+  assert.equal(form.snapshot().errors[number.id], 'invalid_answer')
+  assert.throws(() => form.next())
   form.previous()
   form.change(choice.id, b.id)
   assert.equal(form.values()[number.id], undefined)

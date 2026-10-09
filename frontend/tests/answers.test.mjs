@@ -60,25 +60,23 @@ function document(integer) {
   }
 }
 
-test('预览和填写均拒绝会被舍入的裸整数', () => {
+test('数字输入拒绝精度丢失及存储范围之外的裸整数', () => {
   for (const integer of [true, false]) {
-    for (const raw of ['9007199254740993', '-9007199254740993', '18446744073709551615']) {
+    for (const raw of [
+      '9007199254740993',
+      '-9007199254740993',
+      '18446744073709551615',
+      '-9223372036854775809',
+      '18446744073709551616',
+    ]) {
       const result = buildAnswers(document(integer), { [questionId]: raw })
-      assert.ok(result.errors[questionId], `应定位到失真整数所在题目：${raw}`)
+      assert.ok(result.errors[questionId], `应定位到非法整数所在题目：${raw}`)
       assert.equal(result.answers.length, 0)
     }
   }
 })
 
-test('裸整数不能越过后端的有符号下界和无符号上界', () => {
-  for (const raw of ['-9223372036854775809', '18446744073709551616']) {
-    const result = buildAnswers(document(true), { [questionId]: raw })
-    assert.ok(result.errors[questionId], `应拒绝超出整数范围的输入：${raw}`)
-    assert.equal(result.answers.length, 0)
-  }
-})
-
-test('可精确表示的大整数和既有指数写法仍可提交', () => {
+test('可精确表示的大整数和指数写法均可提交', () => {
   for (const raw of [
     '0',
     '-0',

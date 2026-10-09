@@ -1,4 +1,4 @@
-//! 流程语义共用人工预期，确保分支改答清理与旧问卷行为不漂移。
+//! 流程语义共用人工预期，确保分支改答清理、复制和最终提交保持一致。
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
@@ -111,8 +111,16 @@ test('整卷和单题复制重写流程引用且会话与外部修改隔离', ()
   const duplicated = duplicateSurveyDocument(source)
   assert.deepEqual(source, before)
   assert.doesNotThrow(() => compileDocumentLogic(duplicated.logic, duplicated.questions))
-  for (const node of source.logic.flow.nodes)
-    assert.ok(!JSON.stringify(duplicated).includes(node.id), '复制不能遗留来源节点身份')
+  const identities = [
+    ...source.questions.flatMap((question) => [
+      question.id,
+      ...(question.options ?? []).map((option) => option.id),
+    ]),
+    ...source.logic.variables.map((variable) => variable.id),
+    ...source.logic.flow.nodes.map((node) => node.id),
+  ]
+  const serialized = JSON.stringify(duplicated)
+  for (const id of identities) assert.ok(!serialized.includes(id), '复制不能遗留来源配置身份或引用')
   const question = duplicated.questions[0]
   const newQuestion = duplicateQuestion(question, duplicated)
   duplicated.questions.splice(1, 0, newQuestion)

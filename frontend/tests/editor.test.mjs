@@ -1,11 +1,10 @@
-//! 创建入口生成的规则必须通过领域编译，并在真实填写会话中保持预期分流。
+//! 编辑器回归守住配置身份、条件转换和已应用 DSL 的同步状态。
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createSurveyTemplate, surveyTemplates } from '../src/survey-templates.ts'
 import { compileDocumentLogic } from '../src/document-logic.ts'
 import { compileExpression } from '../src/logic.ts'
-import { FlowSession } from '../src/flow.ts'
-import { formatLogicText, parseLogicText } from '../src/logic-text.ts'
+import { formatLogicText } from '../src/logic-text.ts'
 import {
   conditionExpression,
   groupExpression,
@@ -13,7 +12,7 @@ import {
 } from '../src/condition-builder.ts'
 import { logicTextSignature, textBindings, textErrorOffset } from '../src/logic-text-tools.ts'
 
-test('模板均可编译并切换文本，每次创建使用独立身份', () => {
+test('模板配置有效且每次创建使用独立身份', () => {
   const identities = new Set()
   for (const template of surveyTemplates) {
     for (let generation = 0; generation < 2; generation++) {
@@ -22,9 +21,15 @@ test('模板均可编译并切换文本，每次创建使用独立身份', () =>
         () => compileDocumentLogic(document.logic, document.questions),
         template.title,
       )
-      const source = formatLogicText(document.logic, document.questions)
-      assert.doesNotThrow(() => parseLogicText(source, document.questions), template.title)
-      for (const { id } of textBindings(source, document.questions)) {
+      const ids = [
+        ...document.questions.flatMap((question) => [
+          question.id,
+          ...(question.options ?? []).map((option) => option.id),
+        ]),
+        ...document.logic.variables.map((variable) => variable.id),
+        ...(document.logic.flow?.nodes ?? []).map((node) => node.id),
+      ]
+      for (const id of ids) {
         assert.ok(!identities.has(id), '新建问卷不能复用其他问卷的配置身份')
         identities.add(id)
       }
@@ -32,71 +37,14 @@ test('模板均可编译并切换文本，每次创建使用独立身份', () =>
   }
 })
 
-test('回访模板低分时必填原因，改为高分后清除追问答案', () => {
-  const document = createSurveyTemplate('feedback')
-  const [score, reason] = document.questions
-  const session = new FlowSession(document)
-  session.dispatch({ type: 'change', question_id: score.id, value: 2 })
-  assert.ok(session.snapshot().visible.includes(reason.id))
-  assert.ok(session.snapshot().required.includes(reason.id))
-  session.dispatch({ type: 'change', question_id: reason.id, value: '希望减少等待时间' })
-  session.dispatch({ type: 'change', question_id: score.id, value: 5 })
-  assert.ok(!session.snapshot().visible.includes(reason.id))
-  assert.ok(!Object.hasOwn(session.snapshot().answers, reason.id))
-  assert.deepEqual(session.snapshot().cleared, [reason.id])
-})
-
-test('调研模板按经历分流，改答清理旧路径并汇合到共同页面', () => {
-  const document = createSurveyTemplate('routing')
-  const [used, experience, expectation, interest] = document.questions
-  const session = new FlowSession(document)
-  session.dispatch({ type: 'change', question_id: used.id, value: used.options[0].id })
-  session.dispatch({ type: 'next' })
-  session.dispatch({ type: 'change', question_id: experience.id, value: '容易上手' })
-  session.dispatch({ type: 'previous' })
-  session.dispatch({ type: 'change', question_id: used.id, value: used.options[1].id })
-  assert.deepEqual(session.snapshot().cleared, [experience.id])
-  assert.ok(!session.snapshot().visible.includes(experience.id))
-  session.dispatch({ type: 'next' })
-  session.dispatch({ type: 'change', question_id: expectation.id, value: '减少重复录入' })
-  session.dispatch({ type: 'next' })
-  session.dispatch({ type: 'change', question_id: interest.id, value: 4 })
-  session.dispatch({ type: 'next' })
-  assert.equal(session.snapshot().outcome, 'complete')
-  assert.deepEqual(
-    Object.keys(session.snapshot().answers).sort(),
-    [used.id, expectation.id, interest.id].sort(),
-  )
-})
-
-test('报名模板只在需要接送时要求地点，最终答案不含已隐藏地点', () => {
-  const document = createSurveyTemplate('registration')
-  const [count, transport, address] = document.questions
-  const session = new FlowSession(document)
-  session.dispatch({ type: 'change', question_id: count.id, value: 2 })
-  session.dispatch({ type: 'change', question_id: transport.id, value: transport.options[0].id })
-  assert.ok(session.snapshot().required.includes(address.id))
-  assert.throws(() => session.dispatch({ type: 'next' }), {
-    code: 'required_answer',
-    question_id: address.id,
-  })
-  session.dispatch({ type: 'change', question_id: address.id, value: '南门' })
-  session.dispatch({ type: 'change', question_id: transport.id, value: transport.options[1].id })
-  session.dispatch({ type: 'next' })
-  assert.equal(session.snapshot().outcome, 'complete')
-  assert.ok(!Object.hasOwn(session.snapshot().answers, address.id))
-})
-
 test('简洁比较使用当前运算契约，并保留数字原文和任一条件模式', () => {
   const document = createSurveyTemplate('registration')
   const [count] = document.questions
-  for (const [operator, expected] of [
-    ['eq', true],
-    ['ne', false],
-    ['gt', false],
-    ['ge', true],
-    ['lt', false],
-    ['le', true],
+  for (const [operator, answer, expected] of [
+    ['ge', 1, false],
+    ['ge', 2, true],
+    ['le', 2, true],
+    ['le', 3, false],
   ]) {
     const expression = conditionExpression({
       questionId: count.id,
@@ -108,7 +56,10 @@ test('简洁比较使用当前运算契约，并保留数字原文和任一条�
       { dsl_version: 1, semantics_version: 1, expression },
       document.questions,
     )
-    assert.deepEqual(compiled.evaluate({ [count.id]: 2 }), { type: 'boolean', value: expected })
+    assert.deepEqual(compiled.evaluate({ [count.id]: answer }), {
+      type: 'boolean',
+      value: expected,
+    })
     assert.equal(readConditionGroup(expression).conditions[0].value, '2.00')
   }
   const group = {

@@ -116,9 +116,9 @@ end finish = complete;
 
 阶段 1 使用 `backend/src/logic.rs`（私有模块，经 `domain` 导出领域接口）与 `frontend/src/logic.ts`。共享契约输入/期望值放在 `fixtures/survey-logic/`；独立测试放在 `backend/tests/logic.rs` 和 `frontend/tests/logic.test.mjs`。不修改数据库、发布接口、既有文档格式或填写界面来暴露尚未完成的引擎。
 
-回归样例关注真实风险：缺失取反、短路与错误传播、引用与类型错误、精度边界、Unicode 长度、资源限制；后续补分支改答清理、路径外答案、复制引用、历史版本和幂等重放。两端从同一文件读取预期，不能各自生成自己的“正确答案”。
+回归样例约束缺失与短路、引用与类型、精度、Unicode、资源限制、分支改答、路径外答案及复制引用。两端从同一文件读取人工预期，不各自生成“正确答案”，也不在模板或编辑器层重复演练引擎已有的场景。
 
-Rust 门禁：stable + LLVM 的 `cargo fmt --all -- --check`、`cargo test --locked --workspace`、`cargo clippy --locked --workspace --all-targets -- -D warnings`。前端运行独立回归测试和 `pnpm run build`。阶段 4 涉及服务端行为时按仓库要求用真实 PostgreSQL 服务验证。
+按 [README 第 7 节](../README.md#7-开发检查)选择受影响的测试或检查，提交本身不触发重跑；共享契约改动才需要对应的两端验证。涉及服务端行为时核对相关真实 PostgreSQL 路径。下文各阶段的全量命令和通过数量仅记录当时结果，不作为固定门禁。
 
 ## 资料
 

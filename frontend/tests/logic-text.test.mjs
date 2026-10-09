@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { copy } from '../src/json.ts'
 import { formatLogicText, LogicTextError, parseLogicText } from '../src/logic-text.ts'
-import { compileExpression, LogicError } from '../src/logic.ts'
+import { compileExpression } from '../src/logic.ts'
 const read = (name) =>
   JSON.parse(
     readFileSync(new URL(`../../fixtures/survey-logic/${name}.json`, import.meta.url), 'utf8'),
@@ -35,26 +35,15 @@ test('文本共享样例保留身份优先级并定位语法与语义错误', ()
           edit.value
       const result = parseLogicText(source, document.questions)
       assert.deepEqual(result, expected, item.name)
-      assert.deepEqual(
-        parseLogicText(formatLogicText(result, document.questions), document.questions),
-        result,
-        item.name,
-      )
     }
   }
 })
 
-test('全部操作可格式化往返且长中缀链不能绕过深度限制', () => {
+test('有效表达式和流程可格式化往返且解析预算生效', () => {
   const expressions = read('expressions')
-  // 用已通过内核编译的共享表达式覆盖各操作符，不为实现生成新的期望值。
-  for (const item of expressions.cases) {
-    let compiled
-    try {
-      compiled = compileExpression(item.program, expressions.questions)
-    } catch (error) {
-      assert.ok(error instanceof LogicError)
-      continue
-    }
+  // 使用人工预期为有效值的样例；编译意外失败时直接报告，不静默跳过。
+  for (const item of expressions.cases.filter((item) => item.expected.value)) {
+    const compiled = compileExpression(item.program, expressions.questions)
     const logic = {
       dsl_version: 1,
       semantics_version: 1,

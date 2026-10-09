@@ -81,7 +81,9 @@
 
 编辑器按需使用 Element Plus 2.14.7 的 `ElSelect` / `ElOption`，长题目列表支持搜索；CodeMirror 6 仅在进入文本模式时加载。两者使用 `editor.css` 适配现有 Fluent 令牌，不全局注册组件库。页面框架、原生弹窗、填写控件和轻量统计图继续沿用现有实现。题目排序通过上移/下移完成，统计文本逐批展开。API 类型为手写 DTO，后端契约变更时需同步维护。视觉约束以当前样式代码和 [Element Plus 可行性评估](element-plus-feasibility.md) 为准。
 
-源码格式化为 `pnpm run format`，格式检查为 `pnpm run format:check`，类型和生产构建为 `pnpm run build`。前端包管理器固定为 pnpm（`frontend/package.json` 的 `packageManager` 字段），锁文件为 `frontend/pnpm-lock.yaml`；不要在该目录使用 npm 或重建 `package-lock.json`。没有新增前端自动化测试框架；实际联调证据与未覆盖范围见 [实施记录](requirements-analysis.md#12-前端-mvp-实施与验证记录)。
+检查按改动选择：纯逻辑或测试调整可运行 `pnpm run test:regression tests/editor.test.mjs` 等相关文件；组件和类型调整按需运行 `pnpm run typecheck`；依赖或打包调整使用 `pnpm run build`，它已包含类型检查。纯样式按需核对页面，格式化只处理改动文件。已通过的同一份代码不因提交而重新检查，前端变更不触发 Rust 检查。完整规则见 [README 第 7 节](../README.md#7-开发检查)。
+
+前端包管理器固定为 pnpm（版本见 `frontend/package.json` 的 `packageManager`），锁文件为 `frontend/pnpm-lock.yaml`；不要使用 npm 或重建 `package-lock.json`。自动化测试沿用 Node 内置运行器；实际联调证据与未覆盖范围见 [实施记录](requirements-analysis.md#12-前端-mvp-实施与验证记录)。
 
 DSL 基础计划已完成，报表页展示适用未答与规则跳过。编辑页的“规则与跳题”以可视化配置为默认入口，分为题目规则、计算变量和页面流程。常用条件可直接选择题目、比较方式和选项，支持全部/任一条件组合；显隐与动态必填只列出前面的题目，答案约束还可引用本题。变量、嵌套计算等表达式继续使用高级配置，切换不会自动改写已有表达式。点击“定位配置”会打开对应分类并聚焦错误的变量、规则或流程节点；删除题目、选项或节点后不会静默放宽依赖。
 

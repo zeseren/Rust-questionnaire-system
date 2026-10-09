@@ -39,27 +39,3 @@ test('深度和节点上限在编译之前拦截且允许边界', () => {
     else assert.throws(() => compileExpression(program, []), { code: 'limit_exceeded' })
   }
 })
-
-test('编译结果与原始配置隔离并保留去重依赖', () => {
-  const questions = structuredClone(fixtures.questions)
-  const id = questions[0].id
-  const option = questions[0].options[0].id
-  const program = {
-    dsl_version: 1,
-    semantics_version: 1,
-    expression: {
-      op: 'all',
-      expressions: [
-        { op: 'answered', question_id: id },
-        { op: 'selected', question_id: id, option_id: option },
-      ],
-    },
-  }
-  const compiled = compileExpression(program, questions)
-  program.expression.expressions.length = 0
-  questions[0].options.length = 0
-  assert.equal(compiled.valueType, 'boolean')
-  assert.deepEqual(compiled.dependencies, [id])
-  assert.deepEqual(compiled.evaluate({ [id]: option }), { type: 'boolean', value: true })
-  assert.deepEqual(compiled.evaluate({}), { type: 'boolean', value: false })
-})

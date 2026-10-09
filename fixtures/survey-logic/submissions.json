@@ -236,8 +236,8 @@
       }
     },
     {
-      "name": "旧版大指数仍按相同数值规范化",
-      "document": "old",
+      "name": "无规则问卷的大指数按当前数值契约规范化",
+      "document": "plain",
       "answers_json": "[{\"question_id\":\"00000000-0000-4000-8000-000000000004\",\"value\":1e100}]",
       "expected": {
         "value": {
@@ -261,7 +261,7 @@
     },
     {
       "name": "裸整数精度检查仍在规范化之前",
-      "document": "old",
+      "document": "plain",
       "answers_json": "[{\"question_id\":\"00000000-0000-4000-8000-000000000004\",\"value\":9007199254740993}]",
       "expected": {
         "error": {

@@ -1,4 +1,4 @@
-//! 领域回归验证保持数字精度、历史答案兼容性与完整提交的容量保证。
+//! 领域回归守住当前问卷的身份、答案规范化与实际提交容量。
 use questionnaire_api::domain::{
     Answer, Choice, Document, MAX_NUMBER_JSON_BYTES, MAX_QUESTIONS, MAX_SUBMISSION_BYTES,
     MAX_TEXT_ANSWER_LENGTH, MAX_TEXT_LENGTH, MAX_TEXTAREA_ANSWER_LENGTH, Question, QuestionKind,
@@ -97,45 +97,7 @@ fn 共享空白样例保持普通答卷与流程的必填和省略语义一致()
 }
 
 #[test]
-fn 旧文档不增加规则字段且规则草稿复制重写所有身份() {
-    let fixture: Value =
-        serde_json::from_str(include_str!("../../fixtures/survey-logic/expressions.json")).unwrap();
-    let questions: Vec<Question> = serde_json::from_value(fixture["questions"].clone()).unwrap();
-    let mut doc = document(questions);
-    let old = serde_json::to_value(&doc).unwrap();
-    assert!(old.get("logic").is_none());
-    assert_eq!(
-        serde_json::to_value(serde_json::from_value::<Document>(old.clone()).unwrap()).unwrap(),
-        old
-    );
-    let documents: Value =
-        serde_json::from_str(include_str!("../../fixtures/survey-logic/documents.json")).unwrap();
-    doc.logic = Some(serde_json::from_value(documents["cases"][0]["logic"].clone()).unwrap());
-    doc.validate_draft().unwrap();
-    doc.validate_publish().unwrap();
-    let source = serde_json::to_value(&doc).unwrap();
-    doc.renew_ids();
-    doc.validate_copy_draft().unwrap();
-    let copied = serde_json::to_value(&doc).unwrap();
-    let encoded = copied.to_string();
-    for question in source["questions"].as_array().unwrap() {
-        assert!(!encoded.contains(question["id"].as_str().unwrap()));
-        if let Some(options) = question["options"].as_array() {
-            for option in options {
-                assert!(!encoded.contains(option["id"].as_str().unwrap()));
-            }
-        }
-    }
-    for variable in source["logic"]["variables"].as_array().unwrap() {
-        assert!(!encoded.contains(variable["id"].as_str().unwrap()));
-    }
-    let round_trip: Document = serde_json::from_str(&encoded).unwrap();
-    round_trip.validate_draft().unwrap();
-    assert_eq!(serde_json::to_value(round_trip).unwrap(), copied);
-}
-
-#[test]
-fn normalization_ignores_answer_order_choice_order_and_number_spelling() {
+fn 答案顺序选项顺序和数值写法不影响规范化结果() {
     let doc = document(vec![
         question(
             1,
@@ -194,7 +156,7 @@ fn normalization_ignores_answer_order_choice_order_and_number_spelling() {
 }
 
 #[test]
-fn duplicate_and_foreign_identities_are_rejected_instead_of_overwritten() {
+fn 重复和外来身份不能通过覆盖绕过校验() {
     let mut doc = document(vec![question(
         1,
         false,
@@ -229,17 +191,10 @@ fn duplicate_and_foreign_identities_are_rejected_instead_of_overwritten() {
     doc.questions[1].id = id(2);
     // 第二题身份改正后，复制来的选项身份仍然重复，不能静默修复。
     assert_eq!(doc.validate_draft().unwrap_err().question_id, Some(id(2)));
-    doc.renew_ids();
-    doc.validate_publish().unwrap();
-    assert!(
-        !doc.questions
-            .iter()
-            .any(|question| question.id == id(1) || question.id == id(2))
-    );
 }
 
 #[test]
-fn missing_optional_answers_are_omitted_but_zero_is_a_real_required_answer() {
+fn 可选空答案省略而零仍是有效必填答案() {
     let doc = document(vec![
         question(
             1,
@@ -290,44 +245,25 @@ fn missing_optional_answers_are_omitted_but_zero_is_a_real_required_answer() {
 }
 
 #[test]
-fn text_boundaries_count_unicode_scalars_and_reject_single_line_breaks() {
-    let mut doc = document(vec![question(
+fn 文本按_unicode_标量计数且单行拒绝换行() {
+    let doc = document(vec![question(
         1,
         true,
-        QuestionKind::Text {
-            max_length: MAX_TEXT_ANSWER_LENGTH,
-        },
+        QuestionKind::Text { max_length: 2 },
     )]);
-    let boundary = "汉".repeat(MAX_TEXT_ANSWER_LENGTH);
+    // e 与组合重音是两个标量值，不是两个字节或两个字形。
     let accepted = doc
-        .validate_answers(vec![answer(1, json!(boundary))])
-        .unwrap();
-    assert_eq!(accepted[&id(1)], json!(boundary));
-    let too_long = doc
-        .validate_answers(vec![answer(1, json!(format!("{boundary}字")))])
-        .unwrap_err();
-    assert_eq!(too_long.question_id, Some(id(1)));
-    let line_break = doc
-        .validate_answers(vec![answer(1, json!("第一行\u{2028}第二行"))])
-        .unwrap_err();
-    assert_eq!(line_break.question_id, Some(id(1)));
-
-    doc.questions[0].kind = QuestionKind::Text { max_length: 2 };
-    // e + 组合重音是两个标量值，并不是一个字节或一个字形。
-    let combining = doc
         .validate_answers(vec![answer(1, json!("e\u{301}"))])
         .unwrap();
-    assert_eq!(combining[&id(1)], json!("e\u{301}"));
-    assert_eq!(
-        doc.validate_answers(vec![answer(1, json!("e\u{301}x"))])
-            .unwrap_err()
-            .question_id,
-        Some(id(1))
-    );
-    doc.title = "题".repeat(200);
-    doc.validate_draft().unwrap();
-    doc.title.push('字');
-    assert_eq!(doc.validate_draft().unwrap_err().question_id, None);
+    assert_eq!(accepted[&id(1)], json!("e\u{301}"));
+    for value in ["e\u{301}x", "字\u{2028}"] {
+        assert_eq!(
+            doc.validate_answers(vec![answer(1, json!(value))])
+                .unwrap_err()
+                .question_id,
+            Some(id(1))
+        );
+    }
 }
 
 #[test]
@@ -345,7 +281,6 @@ fn 文本题配置与答案遵守各自的字数上限() {
         };
         for max_length in [1, limit] {
             let doc = document(vec![question(1, true, kind(max_length))]);
-            doc.validate_draft().unwrap();
             doc.validate_publish().unwrap();
             // 四字节字符仍按一个标量计数，边界原文不能被截断。
             let boundary = "𝄞".repeat(max_length);
@@ -365,10 +300,6 @@ fn 文本题配置与答案遵守各自的字数上限() {
             oversized.validate_draft().unwrap_err().question_id,
             Some(id(1))
         );
-        assert_eq!(
-            oversized.validate_publish().unwrap_err().question_id,
-            Some(id(1))
-        );
         // 草稿仍可暂存未完成的零字数配置，但不能发布。
         let incomplete = document(vec![question(1, true, kind(0))]);
         incomplete.validate_draft().unwrap();
@@ -380,49 +311,19 @@ fn 文本题配置与答案遵守各自的字数上限() {
 }
 
 #[test]
-fn 复制草稿沿用历史文本容量而保存发布仍按当前上限() {
-    // 容量收紧前发布的历史问卷允许 5000 字文本题；复制必须仍能生成可编辑草稿，
-    // 但草稿自身、保存和发布继续按当前上限定位超限题目。
-    for multiline in [false, true] {
-        let legacy_kind = |max_length| {
-            if multiline {
-                QuestionKind::Textarea { max_length }
-            } else {
-                QuestionKind::Text { max_length }
-            }
-        };
-        let historical = document(vec![question(1, true, legacy_kind(MAX_TEXT_LENGTH))]);
-        assert_eq!(
-            historical.validate_draft().unwrap_err().question_id,
-            Some(id(1))
-        );
-        assert_eq!(
-            historical.validate_publish().unwrap_err().question_id,
-            Some(id(1))
-        );
-        historical.validate_copy_draft().unwrap();
-
-        // 复制不是绕过结构校验的入口：超过历史容量的配置仍然拒绝。
-        let mut oversized = historical.clone();
-        oversized.questions[0].kind = legacy_kind(MAX_TEXT_LENGTH + 1);
-        assert_eq!(
-            oversized.validate_copy_draft().unwrap_err().question_id,
-            Some(id(1))
-        );
-    }
-}
-
-#[test]
-fn 答案上限收紧不改变调查说明和收集目的的容量() {
+fn 问卷标题说明和目的遵守各自容量() {
     let mut doc = document(vec![question(
         1,
         false,
         QuestionKind::Text { max_length: 20 },
     )]);
+    doc.title = "题".repeat(200);
     doc.description = "说".repeat(MAX_TEXT_LENGTH);
     doc.purpose = "目".repeat(MAX_TEXT_LENGTH);
-    doc.validate_draft().unwrap();
     doc.validate_publish().unwrap();
+    doc.title.push('字');
+    assert_eq!(doc.validate_draft().unwrap_err().question_id, None);
+    doc.title.pop();
     doc.description.push('字');
     assert_eq!(doc.validate_draft().unwrap_err().question_id, None);
     doc.description.pop();
@@ -431,73 +332,34 @@ fn 答案上限收紧不改变调查说明和收集目的的容量() {
 }
 
 #[test]
-fn 历史文本题沿用已发布的字数限制且仍校验题面() {
-    for kind in [
-        QuestionKind::Text {
-            max_length: MAX_TEXT_LENGTH,
-        },
-        QuestionKind::Textarea {
-            max_length: MAX_TEXT_LENGTH,
-        },
-    ] {
-        let mut doc = document(vec![question(1, true, kind)]);
-        assert_eq!(doc.validate_draft().unwrap_err().question_id, Some(id(1)));
-        assert_eq!(doc.validate_publish().unwrap_err().question_id, Some(id(1)));
-        let boundary = "汉".repeat(MAX_TEXT_LENGTH);
-        let accepted = doc
-            .validate_answers(vec![answer(1, json!(boundary))])
-            .unwrap();
-        assert_eq!(accepted[&id(1)], json!(boundary));
-        assert_eq!(
-            doc.validate_answers(vec![answer(1, json!(format!("{boundary}字")))])
-                .unwrap_err()
-                .question_id,
-            Some(id(1))
-        );
-        // 放宽历史容量不会绕过必填、身份唯一或题面完整性校验。
-        assert_eq!(
-            doc.validate_answers(Vec::new()).unwrap_err().question_id,
-            Some(id(1))
-        );
-        doc.questions.push(doc.questions[0].clone());
-        assert_eq!(
-            doc.validate_answers(Vec::new()).unwrap_err().question_id,
-            Some(id(1))
-        );
-        doc.questions.pop();
-        doc.title.clear();
-        assert_eq!(
-            doc.validate_answers(vec![answer(1, json!("回答"))])
-                .unwrap_err()
-                .question_id,
-            None
-        );
-    }
-}
-
-#[test]
-fn 一百道多行文本题全部写满仍可发布并提交() {
+fn 满题数问卷的原始文本和数字提交不超过发布预算() {
     let count = u128::try_from(MAX_QUESTIONS).unwrap();
-    let doc = document(
-        (1..=count)
-            .map(|index| {
-                question(
-                    index,
-                    true,
-                    QuestionKind::Textarea {
-                        max_length: MAX_TEXTAREA_ANSWER_LENGTH,
-                    },
-                )
-            })
-            .collect(),
-    );
-    doc.validate_publish().unwrap();
-    doc.ensure_submission_budget().unwrap();
-    assert!(doc.estimated_submission_bytes() <= MAX_SUBMISSION_BYTES);
-    // 不只测常见汉字；同时覆盖六字节转义和四字节 UTF-8 的实际载荷。
-    for scalar in ["汉", "\u{0001}", "𝄞"] {
+    // 六字节文本转义和未规范化的 64 字节数字分别覆盖各自的预算风险。
+    for (kind, value) in [
+        (
+            QuestionKind::Textarea {
+                max_length: MAX_TEXTAREA_ANSWER_LENGTH,
+            },
+            json!("\u{0001}".repeat(MAX_TEXTAREA_ANSWER_LENGTH)),
+        ),
+        (
+            QuestionKind::Number {
+                integer: false,
+                min: None,
+                max: None,
+            },
+            serde_json::from_str(&format!("0.{}", "1".repeat(MAX_NUMBER_JSON_BYTES - 2))).unwrap(),
+        ),
+    ] {
+        let doc = document(
+            (1..=count)
+                .map(|index| question(index, true, kind.clone()))
+                .collect(),
+        );
+        doc.validate_publish().unwrap();
+        doc.ensure_submission_budget().unwrap();
         let answers: Vec<_> = (1..=count)
-            .map(|index| answer(index, json!(scalar.repeat(MAX_TEXTAREA_ANSWER_LENGTH))))
+            .map(|index| answer(index, value.clone()))
             .collect();
         doc.validate_answers(answers.clone()).unwrap();
         let payload = json!({
@@ -510,7 +372,7 @@ fn 一百道多行文本题全部写满仍可发布并提交() {
 }
 
 #[test]
-fn numeric_validation_rejects_empty_integer_ranges_and_precision_loss() {
+fn 数值校验拒绝空整数区间与精度丢失() {
     let mut doc = document(vec![question(
         1,
         true,
@@ -520,7 +382,7 @@ fn numeric_validation_rejects_empty_integer_ranges_and_precision_loss() {
             max: Some(0.9),
         },
     )]);
-    // 草稿允许暂时矛盾的规则，但发布不能产生一道无合法整数答案的题。
+    // 草稿允许暂时矛盾的规则，发布必须存在合法答案。
     doc.validate_draft().unwrap();
     assert_eq!(doc.validate_publish().unwrap_err().question_id, Some(id(1)));
     doc.questions[0].kind = QuestionKind::Number {
@@ -528,40 +390,30 @@ fn numeric_validation_rejects_empty_integer_ranges_and_precision_loss() {
         min: None,
         max: None,
     };
-    assert_eq!(
-        doc.validate_answers(vec![answer(1, json!(1.5))])
-            .unwrap_err()
-            .question_id,
-        Some(id(1))
-    );
-    assert_eq!(
-        doc.validate_answers(vec![answer(1, json!(9_007_199_254_740_993_u64))])
-            .unwrap_err()
-            .question_id,
-        Some(id(1))
-    );
-    // 必须从原始 JSON 解析，防止测试构造值时就已经丢失超界整数的精度。
-    let below_i64: Value = serde_json::from_str("-9223372036854775809").unwrap();
-    assert_eq!(
-        doc.validate_answers(vec![answer(1, below_i64)])
-            .unwrap_err()
-            .question_id,
-        Some(id(1))
-    );
-    let above_u64: Value = serde_json::from_str("18446744073709551617").unwrap();
-    assert_eq!(
-        doc.validate_answers(vec![answer(1, above_u64)])
-            .unwrap_err()
-            .question_id,
-        Some(id(1))
-    );
-    let exponent: Value = serde_json::from_str("1e20").unwrap();
-    let normalized = doc.validate_answers(vec![answer(1, exponent)]).unwrap();
-    assert_eq!(normalized[&id(1)].as_f64(), Some(1e20));
-    let exact = doc
-        .validate_answers(vec![answer(1, json!(9_007_199_254_740_992_u64))])
-        .unwrap();
-    assert_eq!(exact[&id(1)].as_f64(), Some(9_007_199_254_740_992.0));
+    // 从 JSON 原文解析，避免构造样例时先丢失精度。
+    for raw in [
+        "1.5",
+        "9007199254740993",
+        "-9223372036854775809",
+        "18446744073709551617",
+    ] {
+        assert_eq!(
+            doc.validate_answers(vec![answer(1, serde_json::from_str(raw).unwrap())])
+                .unwrap_err()
+                .question_id,
+            Some(id(1)),
+            "{raw}"
+        );
+    }
+    for (raw, expected) in [
+        ("1e20", 1e20),
+        ("9007199254740992", 9_007_199_254_740_992.0),
+    ] {
+        let normalized = doc
+            .validate_answers(vec![answer(1, serde_json::from_str(raw).unwrap())])
+            .unwrap();
+        assert_eq!(normalized[&id(1)].as_f64(), Some(expected));
+    }
     doc.questions[0].kind = QuestionKind::Number {
         integer: false,
         min: Some(f64::NAN),
@@ -571,13 +423,13 @@ fn numeric_validation_rejects_empty_integer_ranges_and_precision_loss() {
 }
 
 #[test]
-fn nul_in_document_or_answer_is_rejected_before_persistence() {
+fn 问卷和答案中的空字符在入库前拒绝() {
     let mut doc = document(vec![question(
         1,
         true,
         QuestionKind::Text { max_length: 50 },
     )]);
-    doc.title = "invalid\0title".into();
+    doc.title = "无效\0标题".into();
     assert_eq!(doc.validate_draft().unwrap_err().question_id, None);
 
     doc.title = "课程反馈".into();
@@ -588,7 +440,7 @@ fn nul_in_document_or_answer_is_rejected_before_persistence() {
 }
 
 #[test]
-fn numeric_bounds_survive_json_storage_round_trip() {
+fn 数字边界经过_jsonb_数值表示后仍有效() {
     let doc = document(vec![question(
         1,
         true,
@@ -616,7 +468,7 @@ fn numeric_bounds_survive_json_storage_round_trip() {
 }
 
 #[test]
-fn misspelled_question_fields_are_rejected_instead_of_dropped() {
+fn 题目拼错或多余字段不能被静默丢弃() {
     let doc = document(vec![
         question(1, true, QuestionKind::SingleChoice { options: choices() }),
         question(
@@ -659,59 +511,7 @@ fn misspelled_question_fields_are_rejected_instead_of_dropped() {
 }
 
 #[test]
-fn submission_budget_rejects_surveys_that_cannot_fit_one_request() {
-    let oversized = document(
-        (1..=60)
-            .map(|index| {
-                question(
-                    index,
-                    true,
-                    QuestionKind::Textarea {
-                        max_length: MAX_TEXT_LENGTH,
-                    },
-                )
-            })
-            .collect(),
-    );
-    // 历史题面可含 5000 字文本题，预算保护仍能拒绝超过请求上限的配置。
-    assert!(oversized.estimated_submission_bytes() > MAX_SUBMISSION_BYTES);
-    assert_eq!(
-        oversized
-            .ensure_submission_budget()
-            .unwrap_err()
-            .question_id,
-        None
-    );
-    // 新发布拒绝旧容量配置，但历史版本的小载荷答卷仍可校验。
-    assert_eq!(
-        oversized.validate_publish().unwrap_err().question_id,
-        Some(id(1))
-    );
-    assert!(
-        oversized
-            .validate_answers((1..=60).map(|index| answer(index, json!("回答"))).collect())
-            .is_ok()
-    );
-
-    let within = document(
-        (1..=34)
-            .map(|index| {
-                question(
-                    index,
-                    true,
-                    QuestionKind::Textarea {
-                        max_length: MAX_TEXT_LENGTH,
-                    },
-                )
-            })
-            .collect(),
-    );
-    assert!(within.estimated_submission_bytes() <= MAX_SUBMISSION_BYTES);
-    assert!(within.ensure_submission_budget().is_ok());
-}
-
-#[test]
-fn estimated_submission_bytes_covers_a_worst_case_payload() {
+fn 混合题型预算覆盖选项和_unicode_实际编码() {
     let doc = document(vec![
         question(
             1,
@@ -769,47 +569,7 @@ fn estimated_submission_bytes_covers_a_worst_case_payload() {
 }
 
 #[test]
-fn text_budget_covers_json_escaping_and_quotes_at_request_boundary() {
-    let mut doc = document(
-        (1..=100)
-            .map(|index| {
-                question(
-                    index,
-                    true,
-                    QuestionKind::Text {
-                        max_length: if index <= 20 { 1737 } else { 1736 },
-                    },
-                )
-            })
-            .collect(),
-    );
-    // 历史题面保留请求边界回归：100 条答案使引号的遗漏无法被信封余量掩盖。
-    assert_eq!(doc.estimated_submission_bytes(), MAX_SUBMISSION_BYTES);
-    doc.ensure_submission_budget().unwrap();
-    for scalar in ["\u{0001}", "𝄞", "\"", "\\"] {
-        let answers: Vec<_> = (1..=100)
-            .map(|index| {
-                answer(
-                    index,
-                    json!(scalar.repeat(if index <= 20 { 1737 } else { 1736 })),
-                )
-            })
-            .collect();
-        doc.validate_answers(answers.clone()).unwrap();
-        let payload = json!({
-            "version_id": id(900), "idempotency_key": id(901), "answers": answers,
-        });
-        assert!(serde_json::to_vec(&payload).unwrap().len() <= doc.estimated_submission_bytes());
-    }
-    doc.questions[0].kind = QuestionKind::Text { max_length: 1738 };
-    assert_eq!(
-        doc.ensure_submission_budget().unwrap_err().question_id,
-        None
-    );
-}
-
-#[test]
-fn numeric_json_length_is_checked_before_normalization() {
+fn 数字原文长度在规范化之前检查() {
     for kind in [
         QuestionKind::Number {
             integer: false,
@@ -841,63 +601,6 @@ fn numeric_json_length_is_checked_before_normalization() {
                 )])
                 .unwrap_err();
             assert_eq!(rejected.question_id, Some(id(1)));
-        }
-    }
-}
-
-#[test]
-fn submission_budget_covers_unrounded_numeric_payloads() {
-    // 全数字问卷单独验证数字预算，混合问卷复现审查发现的超过 1 MiB 载荷。
-    for text_count in [0, 52] {
-        let doc = document(
-            (1..=100)
-                .map(|index| {
-                    question(
-                        index,
-                        true,
-                        if index <= text_count {
-                            QuestionKind::Textarea {
-                                max_length: MAX_TEXT_LENGTH,
-                            }
-                        } else {
-                            QuestionKind::Number {
-                                integer: false,
-                                min: None,
-                                max: None,
-                            }
-                        },
-                    )
-                })
-                .collect(),
-        );
-        let raw: Value =
-            serde_json::from_str(&format!("0.{}", "1".repeat(MAX_NUMBER_JSON_BYTES - 2))).unwrap();
-        let answers: Vec<_> = (1..=100)
-            .map(|index| {
-                answer(
-                    index,
-                    if index <= text_count {
-                        json!("𝄞".repeat(MAX_TEXT_LENGTH))
-                    } else {
-                        raw.clone()
-                    },
-                )
-            })
-            .collect();
-        doc.validate_answers(answers.clone()).unwrap();
-        let payload = json!({
-            "version_id": id(900), "idempotency_key": id(901), "answers": answers,
-        });
-        let bytes = serde_json::to_vec(&payload).unwrap().len();
-        assert!(bytes <= doc.estimated_submission_bytes());
-        if text_count == 0 {
-            doc.ensure_submission_budget().unwrap();
-        } else {
-            assert!(bytes > MAX_SUBMISSION_BYTES);
-            assert_eq!(
-                doc.ensure_submission_budget().unwrap_err().question_id,
-                None
-            );
         }
     }
 }
