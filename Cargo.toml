@@ -1,5 +1,5 @@
 [workspace]
-members = ["backend", "logic-core"]
+members = ["backend", "logic-core", "logic-wasm"]
 resolver = "3"
 
 # 编译速度调优：dev 只求反馈快，release 用单 codegen 单元 + LTO 换运行时性能。
