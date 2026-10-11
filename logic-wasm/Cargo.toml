@@ -1,0 +1,16 @@
+[package]
+name = "logic-wasm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+publish = false
+
+[lib]
+# cdylib 供 wasm-pack 产出 .wasm；rlib 让原生 cargo test 直接链接同一段边界代码。
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+questionnaire-logic = { path = "../logic-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+wasm-bindgen = "0.2"

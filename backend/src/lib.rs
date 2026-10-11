@@ -3,15 +3,10 @@
 mod admin;
 mod auth;
 mod config;
-pub mod domain;
+pub use questionnaire_logic::domain;
 mod entities;
 mod error;
-mod flow;
 mod http;
-mod identity;
-mod logic;
-mod logic_document;
-mod logic_text;
 mod migration;
 mod reports;
 mod repository;

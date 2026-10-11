@@ -1,5 +1,5 @@
 //! 两端使用同一文本和人工期望，保证别名绑定、数值原文与诊断位置一致。
-use questionnaire_api::domain::{Document, LogicErrorCode, parse_logic_text};
+use questionnaire_api::domain::{Document, LogicErrorCode, format_logic_text, parse_logic_text};
 use serde_json::{Value, json};
 
 #[test]
@@ -97,5 +97,34 @@ fn 负号只接数字字面量且函数不能放宽参数种类() {
     ] {
         let error = parse_logic_text(&format!("{prefix}{expression};"), &[]).unwrap_err();
         assert_eq!(error.error.code, LogicErrorCode::InvalidSyntax);
+    }
+}
+
+#[test]
+fn 共享格式化样例逐字节一致且二次解析等值() {
+    // 与前端同读 texts.json 的 format_cases；expected 为 TS 真实输出的字节快照。
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../fixtures/survey-logic/texts.json")).unwrap();
+    for item in fixture["format_cases"].as_array().unwrap() {
+        let name = item["name"].as_str().unwrap();
+        let questions: Vec<questionnaire_api::domain::Question> =
+            serde_json::from_value(item["questions"].clone()).unwrap();
+        let logic: questionnaire_api::domain::DocumentLogic =
+            serde_json::from_value(item["logic"].clone()).unwrap();
+        let expected = item["expected"].as_str().unwrap();
+        let formatted = format_logic_text(&logic, &questions)
+            .unwrap_or_else(|error| panic!("{name} 格式化失败: {error:?}"));
+        // 逐字节对齐 TS formatLogicText 输出。
+        assert_eq!(formatted, expected, "{name} 输出与共享期望不一致");
+        let once = parse_logic_text(&formatted, &questions)
+            .unwrap_or_else(|error| panic!("{name} 一次解析失败: {error:?}"));
+        let twice = parse_logic_text(
+            &format_logic_text(&once, &questions)
+                .unwrap_or_else(|error| panic!("{name} 二次格式化失败: {error:?}")),
+            &questions,
+        )
+        .unwrap_or_else(|error| panic!("{name} 二次解析失败: {error:?}"));
+        // DocumentLogic 已实现 PartialEq，直接比较两次解析结果。
+        assert_eq!(once, twice, "{name} 二次解析与一次解析不等值");
     }
 }

@@ -84,7 +84,7 @@ pub enum FlowNode {
 }
 
 impl FlowNode {
-    fn id(&self) -> Uuid {
+    pub(crate) fn id(&self) -> Uuid {
         match self {
             Self::Page { id, .. } | Self::Branch { id, .. } | Self::End { id, .. } => *id,
         }
@@ -117,7 +117,7 @@ impl FlowDefinition {
             .map(|branch| &branch.when)
     }
 
-    pub(crate) fn renew_ids(
+    pub fn renew_ids(
         &mut self,
         questions: &BTreeMap<Uuid, Uuid>,
         options: &BTreeMap<Uuid, Uuid>,
@@ -598,7 +598,7 @@ impl<'a> FlowEvaluator<'a> {
 
     // 只用于数据库中的已规范化答案。JSONB 会展开指数，不能再次套用原始传输字节预算
     // 或裸整数词法限制；恢复 f64 的规范表示后，仍完整重算规则、范围和路径。
-    pub(crate) fn evaluate_stored(
+    pub fn evaluate_stored(
         &self,
         mut answers: BTreeMap<Uuid, Value>,
     ) -> Result<EvaluatedResponse, LogicError> {

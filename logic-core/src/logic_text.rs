@@ -12,7 +12,7 @@ use pest::{
     pratt_parser::{Assoc, Op, PrattParser},
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{Number, Value, json};
 use uuid::Uuid;
 
 use crate::domain::{Question, QuestionKind};
@@ -584,4 +584,251 @@ pub fn parse_logic_text(
         locations: Vec::new(),
     }
     .compile(program, questions)
+}
+
+/// 二元运算符由 (op, 名称) 反查符号；与 TS 端 `binary` 表一一对应。
+fn binary_symbol(op: &str, name: &str) -> Option<&'static str> {
+    match (op, name) {
+        ("any", _) => Some("||"),
+        ("all", _) => Some("&&"),
+        ("compare", "eq") => Some("=="),
+        ("compare", "ne") => Some("!="),
+        ("compare", "lt") => Some("<"),
+        ("compare", "le") => Some("<="),
+        ("compare", "gt") => Some(">"),
+        ("compare", "ge") => Some(">="),
+        ("arithmetic", "add") => Some("+"),
+        ("arithmetic", "subtract") => Some("-"),
+        ("arithmetic", "multiply") => Some("*"),
+        ("arithmetic", "divide") => Some("/"),
+        _ => None,
+    }
+}
+
+/// 文本序列化器：别名与行缓冲按 TS `formatLogicText` 的顺序填充。
+struct Formatter {
+    aliases: BTreeMap<Uuid, String>,
+    lines: Vec<String>,
+}
+
+impl Formatter {
+    fn new(dsl_version: &Number, semantics_version: &Number) -> Self {
+        Self {
+            aliases: BTreeMap::new(),
+            lines: vec![format!("dsl {dsl_version} semantics {semantics_version};")],
+        }
+    }
+
+    fn bind(&mut self, category: &str, id: Uuid, alias: String) {
+        self.aliases.insert(id, alias.clone());
+        self.lines
+            .push(format!("bind {category} {alias} = \"{id}\";"));
+    }
+
+    /// 未知绑定返回 `invalid_reference`；与 TS 端 `ref` 闭包语义一致。
+    fn reference(&self, id: &Value) -> Result<&str, LogicError> {
+        serde_json::from_value::<Uuid>(id.clone())
+            .ok()
+            .and_then(|id| self.aliases.get(&id).map(String::as_str))
+            .ok_or_else(|| error(LogicErrorCode::InvalidReference, "$", None))
+    }
+
+    /// 递归渲染表达式节点；未知结构返回 `invalid_syntax`，运算符按 TS `binary` 表反查。
+    fn expression(&self, raw: &Value) -> Result<String, LogicError> {
+        let invalid_syntax = || error(LogicErrorCode::InvalidSyntax, "$", None);
+        let Some(fields) = raw.as_object() else {
+            return Err(invalid_syntax());
+        };
+        let field = |name: &str| fields.get(name).ok_or_else(invalid_syntax);
+        let text = |name: &str| field(name)?.as_str().ok_or_else(invalid_syntax);
+        let quoted = |name: &str| serde_json::to_string(text(name)?).map_err(|_| invalid_syntax());
+        let op = text("op")?;
+        Ok(match op {
+            "boolean" => match field("value")? {
+                Value::Bool(true) => "true".into(),
+                Value::Bool(false) => "false".into(),
+                _ => return Err(invalid_syntax()),
+            },
+            "number" => format!("number({})", quoted("value")?),
+            "text" => quoted("value")?,
+            "answer" | "answered" => {
+                format!("{}({})", op, self.reference(field("question_id")?)?)
+            }
+            "variable" => format!("variable({})", self.reference(field("variable_id")?)?),
+            "selected" => format!(
+                "selected({}, {})",
+                self.reference(field("question_id")?)?,
+                self.reference(field("option_id")?)?
+            ),
+            "contains_any" | "contains_all" => {
+                let option_ids = field("option_ids")?.as_array().ok_or_else(invalid_syntax)?;
+                let references = option_ids
+                    .iter()
+                    .map(|option_id| self.reference(option_id).map(str::to_owned))
+                    .collect::<Result<Vec<_>, _>>()?;
+                format!(
+                    "{}({}, [{}])",
+                    op,
+                    self.reference(field("question_id")?)?,
+                    references.join(", ")
+                )
+            }
+            "not" => format!("!({})", self.expression(field("expression")?)?),
+            "all" | "any" => {
+                let expressions = field("expressions")?
+                    .as_array()
+                    .ok_or_else(invalid_syntax)?;
+                let parts = expressions
+                    .iter()
+                    .map(|child| self.expression(child))
+                    .collect::<Result<Vec<_>, _>>()?;
+                format!("{}({})", op, parts.join(", "))
+            }
+            "coalesce" => format!(
+                "coalesce({}, {})",
+                self.expression(field("value")?)?,
+                self.expression(field("fallback")?)?
+            ),
+            "length" => format!("length({})", self.expression(field("value")?)?),
+            // 二元运算符按 (op, comparison/operator) 反查符号，无法反查即拒绝。
+            _ => {
+                let name = if op == "compare" {
+                    text("comparison")?
+                } else {
+                    text("operator")?
+                };
+                let operator = binary_symbol(op, name).ok_or_else(invalid_syntax)?;
+                format!(
+                    "({} {} {})",
+                    self.expression(field("left")?)?,
+                    operator,
+                    self.expression(field("right")?)?
+                )
+            }
+        })
+    }
+}
+
+/// 生成确定性的可读别名，绑定仍由 UUID 定义；常量原文与表达式分组保持不变。
+///
+/// # Errors
+/// 编译预检失败、引用未绑定或表达式结构无法反查运算符时返回带 `$` 路径的领域错误。
+pub fn format_logic_text(
+    logic: &DocumentLogic,
+    questions: &[Question],
+) -> Result<String, LogicError> {
+    logic.compile(questions)?;
+    let mut formatter = Formatter::new(&logic.dsl_version, &logic.semantics_version);
+    for (index, question) in questions.iter().enumerate() {
+        formatter.bind("question", question.id, format!("q{}", index + 1));
+        if let QuestionKind::SingleChoice { options }
+        | QuestionKind::MultipleChoice { options, .. } = &question.kind
+        {
+            for (order, option) in options.iter().enumerate() {
+                formatter.bind(
+                    "option",
+                    option.id,
+                    format!("q{}_o{}", index + 1, order + 1),
+                );
+            }
+        }
+    }
+    for (index, variable) in logic.variables.iter().enumerate() {
+        formatter.bind("variable", variable.id, format!("v{}", index + 1));
+    }
+    if let Some(flow) = &logic.flow {
+        for (index, node) in flow.nodes.iter().enumerate() {
+            formatter.bind("node", node.id(), format!("n{}", index + 1));
+        }
+    }
+    let id_value = |id: Uuid| serde_json::to_value(id).expect("UUID 序列化不会失败");
+    formatter.lines.push(String::new());
+    for variable in &logic.variables {
+        formatter.lines.push(format!(
+            "let {}: {} = {};",
+            formatter.reference(&id_value(variable.id))?,
+            serde_json::to_value(&variable.value_type)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .ok_or_else(|| error(LogicErrorCode::InvalidSyntax, "$", None))?,
+            formatter.expression(&variable.expression)?
+        ));
+    }
+    for rule in &logic.rules {
+        for (raw, keyword) in [
+            (&rule.visible_if, "visible"),
+            (&rule.required_if, "required"),
+            (&rule.validate, "validate"),
+        ] {
+            if let Some(raw) = raw {
+                formatter.lines.push(format!(
+                    "{keyword} {} = {};",
+                    formatter.reference(&id_value(rule.question_id))?,
+                    formatter.expression(raw)?
+                ));
+            }
+        }
+    }
+    if let Some(flow) = &logic.flow {
+        formatter.lines.push(format!(
+            "entry {};",
+            formatter.reference(&id_value(flow.entry))?
+        ));
+        for node in &flow.nodes {
+            match node {
+                FlowNode::Page {
+                    id,
+                    question_ids,
+                    next,
+                } => {
+                    let references = question_ids
+                        .iter()
+                        .map(|question_id| {
+                            formatter
+                                .reference(&id_value(*question_id))
+                                .map(str::to_owned)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    formatter.lines.push(format!(
+                        "page {} [{}] -> {};",
+                        formatter.reference(&id_value(*id))?,
+                        references.join(", "),
+                        formatter.reference(&id_value(*next))?
+                    ));
+                }
+                FlowNode::End { id, outcome } => formatter.lines.push(format!(
+                    "end {} = {};",
+                    formatter.reference(&id_value(*id))?,
+                    match outcome {
+                        FlowOutcome::Complete => "complete",
+                        FlowOutcome::ScreenOut => "screen_out",
+                    }
+                )),
+                FlowNode::Branch {
+                    id,
+                    branches,
+                    otherwise,
+                } => {
+                    formatter.lines.push(format!(
+                        "branch {} {{",
+                        formatter.reference(&id_value(*id))?
+                    ));
+                    for branch in branches {
+                        formatter.lines.push(format!(
+                            "  when {} -> {};",
+                            formatter.expression(&branch.when)?,
+                            formatter.reference(&id_value(branch.target))?
+                        ));
+                    }
+                    formatter.lines.push(format!(
+                        "  else -> {};",
+                        formatter.reference(&id_value(*otherwise))?
+                    ));
+                    formatter.lines.push("}".into());
+                }
+            }
+        }
+    }
+    formatter.lines.push(String::new());
+    Ok(formatter.lines.join("\n"))
 }

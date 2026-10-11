@@ -20,3 +20,7 @@ cranelift = "build --locked -Zcodegen-backend --config .cargo/cranelift.toml"
 [env]
 TMP = { value = "target", relative = true, force = true }
 TEMP = { value = "target", relative = true, force = true }
+
+# wasm32 目标：uuid v4 依赖 getrandom，切到 wasm_js 后端（浏览器 CSP 友好）才能编到 unknown-unknown。
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]

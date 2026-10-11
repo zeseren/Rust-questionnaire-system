@@ -1,0 +1,18 @@
+[package]
+name = "questionnaire-logic"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+publish = false
+
+[dependencies]
+pest = "2.9"
+pest_derive = "2.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+thiserror = "2"
+utoipa = { version = "6", features = ["uuid"] }
+uuid = { version = "1", features = ["v4", "serde", "rng-getrandom"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }

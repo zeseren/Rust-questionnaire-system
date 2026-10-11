@@ -80,3 +80,13 @@ test('有效表达式和流程可格式化往返且解析预算生效', () => {
     (error) => error instanceof LogicTextError && error.code === 'limit_exceeded',
   )
 })
+
+test('共享 format_cases 逐字节锁定格式化输出并可二次解析往返', () => {
+  for (const item of fixture.format_cases) {
+    // expected 由 TS formatLogicText 真实输出粘贴；双端必须逐字节一致。
+    assert.equal(formatLogicText(item.logic, item.questions), item.expected, item.name)
+    const once = parseLogicText(item.expected, item.questions)
+    // 一次与二次解析必须等值，保证输出无歧义。
+    assert.deepEqual(parseLogicText(formatLogicText(once, item.questions), item.questions), once, item.name)
+  }
+})

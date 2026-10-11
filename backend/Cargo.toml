@@ -15,8 +15,6 @@ csv = "1"
 dotenvy = "0.15"
 getrandom = "0.4"
 hex = "0.4"
-pest = "2.9"
-pest_derive = "2.9"
 sea-orm = { version = "~2.0.4", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-json", "with-chrono", "with-uuid"] }
 sea-orm-migration = { version = "~2.0.4", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 serde = { version = "1", features = ["derive"] }
@@ -27,6 +25,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+questionnaire-logic = { path = "../logic-core" }
 url = "2"
 utoipa = { version = "6", features = ["uuid", "chrono"] }
 utoipa-axum = "0.3"

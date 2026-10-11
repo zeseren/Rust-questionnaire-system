@@ -22,7 +22,7 @@ pub use crate::logic_document::{
     CompiledDocumentLogic, ComputedVariable, DocumentLogic, DocumentLogicValues, QuestionRule,
     RuleValues,
 };
-pub use crate::logic_text::{LogicTextError, parse_logic_text};
+pub use crate::logic_text::{LogicTextError, format_logic_text, parse_logic_text};
 
 /// 每份问卷最多允许的题目数。
 pub const MAX_QUESTIONS: usize = 100;

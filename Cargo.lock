@@ -986,9 +986,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1832,8 +1834,7 @@ dependencies = [
  "dotenvy",
  "getrandom 0.4.3",
  "hex",
- "pest",
- "pest_derive",
+ "questionnaire-logic",
  "sea-orm",
  "sea-orm-migration",
  "serde",
@@ -1847,6 +1848,20 @@ dependencies = [
  "url",
  "utoipa",
  "utoipa-axum",
+ "uuid",
+]
+
+[[package]]
+name = "questionnaire-logic"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "pest",
+ "pest_derive",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "utoipa",
  "uuid",
 ]
 
@@ -3031,7 +3046,17 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "uuid-rng-internal",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "uuid-rng-internal"
+version = "1.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e1d7ccff5e453092983b2a5ec27ebdd52745f40bef229e92051a054a37c662b"
+dependencies = [
+ "getrandom 0.4.3",
 ]
 
 [[package]]
