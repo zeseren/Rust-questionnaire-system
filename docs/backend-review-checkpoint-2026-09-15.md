@@ -14,7 +14,7 @@
 
 ## 2. 已遵循的指导与审查范围
 
-- 仓库指导：根目录 `AGENTS.md`。中文文档、单成员 Cargo workspace、既有三层边界、PostgreSQL 18、统一用户与问卷锁顺序、Cookie 与 Origin 校验等约束继续适用。
+- 仓库指导：根目录 `AGENTS.md`。中文文档、Cargo workspace 成员结构（本文成文时仅 `backend` 一个成员）、既有三层边界、PostgreSQL 18、统一用户与问卷锁顺序、Cookie 与 Origin 校验等约束继续适用。
 - 用户指定技能：`F:\rust-skills\SKILL.md`。已阅读规则索引及相关规则，重点涉及错误处理、异步锁、阻塞工作、数值转换、严格反序列化、敏感信息、内存分配与反模式。
 - 已核对入口、配置、统一错误、HTTP 提取器、安全中间件、认证、问卷生命周期、公开提交、报表、管理员治理、领域规则、DDL 与迁移，以及现有领域测试。
 - 已对照 `docs/requirements-analysis.md` 的业务规则及后端验证记录、`docs/backend-guide.md` 的接口约定。

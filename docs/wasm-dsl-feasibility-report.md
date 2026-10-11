@@ -44,7 +44,7 @@
 
 ## 3. crate 复用的结构可行性
 
-现有 workspace 单成员 `backend`(包名 `questionnaire-api`);DSL 六文件与 axum/sea-orm/tokio
+现有 workspace 只有 `backend` 一个成员(包名 `questionnaire-api`);DSL 六文件与 axum/sea-orm/tokio
 同 crate,无法直接编译到 wasm —— 必须抽出共享 crate,这是「复用 crate」要求的核心改动。
 
 拆分形态(先前尝试已验证到编译接线):

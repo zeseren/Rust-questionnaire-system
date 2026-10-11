@@ -26,7 +26,7 @@
 | Node.js / pnpm | 推荐 Node.js **24.12 或更新版本**，也支持 22.18+ 的 22.x；准确范围见 `frontend/package.json`。前端依赖一律用 pnpm 安装，版本由 `frontend/package.json` 的 `packageManager` 字段固定，锁文件为 `frontend/pnpm-lock.yaml`（npm 只用于首次安装 pnpm，`package-lock.json` 已删除） |
 | PowerShell | Windows PowerShell 5.1 或 PowerShell 7；中文请求示例显式发送 UTF-8 字节 |
 
-根目录是单成员 Cargo workspace，成员目录为 `backend`，包名为 `questionnaire-api`。当前锁定的核心依赖为 Axum 0.8.9、SeaORM / sea-orm-migration 2.0.4、SQLx 0.9.0、Tokio 1.53.2；准确版本以 [Cargo.lock](Cargo.lock) 为准，命令加 `--locked` 避免无意更新依赖。PostgreSQL 18 是本项目的运行基线，并非对所有旧大版本作兼容保证。
+根目录是三个成员的 Cargo workspace：`backend`（包名 `questionnaire-api`）是 HTTP API 与业务用例；`logic-core`（包名 `questionnaire-logic`）是前后端共用的纯领域 DSL 核心（表达式、文档规则、流程与 pest 文本文法），无 HTTP/DB 依赖、可编到 wasm32；`logic-wasm`（包名 `logic-wasm`）把该核心以 JSON 字符串信封编成 wasm 供前端调用。当前锁定的核心依赖为 Axum 0.8.9、SeaORM / sea-orm-migration 2.0.4、SQLx 0.9.0、Tokio 1.53.2；准确版本以 [Cargo.lock](Cargo.lock) 为准，命令加 `--locked` 避免无意更新依赖。PostgreSQL 18 是本项目的运行基线，并非对所有旧大版本作兼容保证。
 
 路由与 OpenAPI 通过 utoipa 6.0.0 / utoipa-axum 0.3.0 统一登记，Cookie 解析与构造使用 cookie 0.18.2，Rust DSL 文法与运算优先级使用 pest / pest_derive 2.9.2。领域语义、事务与会话撤销规则由项目实现，替换范围和验证记录见[后端 crate 评估](docs/backend-crate-assessment.md)。
 
@@ -200,16 +200,17 @@ try {
 | Rust 领域逻辑或测试 | 从根目录运行相关目标，例如 `cargo test --locked -p questionnaire-api --test domain` |
 | HTTP、权限或 SQL 行为 | 核对受影响的真实服务路径 |
 | 共享 DSL 契约 | 运行受影响的两端测试，避免预览与服务端语义分离 |
+| wasm 产物重建（`logic-core/` 或 `logic-wasm/`） | 在 `frontend/` 运行 `pnpm run wasm:build` 重建并同步产物（需 Rust 工具链 + `wasm32-unknown-unknown` target + wasm-pack 0.15），再跑受影响的两端测试；只改前端时无需 Rust，直接用 `frontend/src/wasm/pkg/` 里入库的产物 |
 
 只有影响确实跨越多个模块、无法合理缩小时，才使用所属端的完整测试：Rust 为 `cargo test --locked --workspace`，前端为 `pnpm run test:regression`。仅修改测试不附带生产构建、Clippy 或服务联调。Rust 检查使用 stable + LLVM；静态检查有需要时选择 `cargo clippy --locked --workspace --all-targets -- -D warnings`。格式化只处理改动文件，例如 `rustfmt --edition 2024 backend/tests/domain.rs` 或在 `frontend/` 使用 `pnpm exec prettier --write tests/editor.test.mjs`。
 
 Rust 的四个测试目标位于 `backend/tests/`：`domain` 约束题型、规范化与实际提交预算，`logic` 约束表达式与变量依赖，`flow` 约束路径、身份复制和最终提交，`logic_text` 约束文本解析。它们不启动数据库。
 
-前端使用 Node 内置运行器自动发现 `frontend/tests/`，命令后传文件路径即可缩小范围，无需维护脚本内的文件清单。两端独立实现共用 [fixtures/survey-logic](fixtures/survey-logic) 中的人工期望；流程行为集中在共享样例，编辑器测试只补配置转换与同步等自身行为。没有新增测试框架或自动提交钩子。
+前端使用 Node 内置运行器自动发现 `frontend/tests/`，命令后传文件路径即可缩小范围，无需维护脚本内的文件清单。后端测试与前端（经 wasm 引擎）共用 [fixtures/survey-logic](fixtures/survey-logic) 中的人工期望，两侧各读一次：DSL 语义只有 `logic-core` 一份实现，共享样例用于确认边界两端一致；流程行为集中在共享样例，编辑器测试只补配置转换与同步等自身行为。`logic-wasm/tests/smoke.rs` 在原生目标覆盖同一 JSON 信封边界，随 `cargo test --locked --workspace` 一起执行。没有新增测试框架或自动提交钩子。
 
 历史验证结果见 [需求与验证记录](docs/requirements-analysis.md)，其中的全量命令和通过数量是当时的实施记录，不是后续修改必须重复的清单。
 
-DSL 与流程引擎的[基础实施计划](docs/survey-dsl-plan.md)已完成：Rust 与 TypeScript 独立实现表达式、文档编译、流程和文本解析，共用语义样例；网页支持可视化规则/分支编辑、文本 DSL、分步预览与填写。服务端重建有效路径，支持原提交载荷的幂等重放，并在详情/统计/CSV 中区分跳过和未答。真实浏览器与 PostgreSQL 已验证分支改答清理和丢失回执后的原载荷重试。筛选结束的持久化策略、重复组和子流程仍按计划留待后续，无规则问卷保持单页行为。当前尚无正式发布版本，后续开发不承担历史答卷或旧格式兼容要求。
+DSL 与流程引擎的[基础实施计划](docs/survey-dsl-plan.md)已完成，并已在 2026-10-12 统一为 wasm 单实现：表达式、文档编译、流程与文本解析只有 `logic-core` 一份代码，`logic-wasm` 以 JSON 信封导出，`frontend/src/wasm/pkg/` 的产物入库，前端不再有 TS 镜像实现。网页支持可视化规则/分支编辑、文本 DSL、分步预览与填写。服务端重建有效路径，支持原提交载荷的幂等重放，并在详情/统计/CSV 中区分跳过和未答。真实浏览器与 PostgreSQL 已验证分支改答清理和丢失回执后的原载荷重试。筛选结束的持久化策略、重复组和子流程仍按计划留待后续，无规则问卷保持单页行为。当前尚无正式发布版本，后续开发不承担历史答卷或旧格式兼容要求。
 
 两端的[输入契约回归](fixtures/survey-logic/input-contracts.json)固定 Unicode 空白和配置 UUID 的接受集：U+0085 是空白，U+FEFF 是内容；配置 UUID 必须非零、小写、带连字符。对应代码与局部去重的复核结论见 [DSL 评审](docs/survey-dsl-review.md)。
 

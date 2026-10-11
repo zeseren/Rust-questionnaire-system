@@ -1,6 +1,11 @@
 # WASM 统一前后端 DSL 解析 — 实施计划
 
-> 状态：已采纳重启的执行计划（2026-10-11）。可行性报告 `docs/wasm-dsl-feasibility-report.md`
+> 状态：**已实施完成**（2026-10-12，分支 `wasm-dsl-unification`，HEAD `feb1230`）。Phase 0–5 全部落地，
+> 验证记录见 `docs/requirements-analysis.md` §24；下文保留立项时的计划原文作为历史记录（含各阶段的原始
+> 验证口径与预期），不再逐条改写，只在阶段标题后标注完成状态。文中的旧命令与旧路径（如
+> `wasm-pack build logic-wasm --target bundler --release`、`backend/src/logic*.rs`）是立项时的快照，
+> 不要照抄：当前结构、命令与用法以 §24、`README.md`、`docs/backend-guide.md`、`docs/frontend-guide.md`
+> 为准。可行性报告 `docs/wasm-dsl-feasibility-report.md`
 > 已核实条件成熟并采纳本计划作为执行清单；行数、版本等事实基线以报告核实结果为准。曾在本
 > 分支开工（crate 拆分进行到一半）后按决定回滚，回滚点：`dsl-survey-editor` 分支 `48eab76`。
 
@@ -83,7 +88,7 @@ flowchart LR
 
 ## 3. 阶段计划
 
-### Phase 0 — 工具链（已完成，重启时跳过）
+### Phase 0 — 工具链（已完成，重启时跳过） ✅
 
 - `rustup target add wasm32-unknown-unknown`：2026-10-11 已装（本机原仅 x86_64-msvc），回滚不
   影响 rustup 组件；可行性报告已复核 `rustup target list --installed` 含该 target。
@@ -91,7 +96,7 @@ flowchart LR
   已复核 `wasm-pack --version`。
 - 验证：`cargo build -p questionnaire-api` 不受影响——随 Phase 1 接线一并执行。
 
-### Phase 1 — 抽出 `questionnaire-logic` crate（1–2 天）
+### Phase 1 — 抽出 `questionnaire-logic` crate（1–2 天） ✅
 
 - 新成员 `logic-core/`：移入上列六文件 + `logic_text.pest`。依赖裁剪为：`serde`、
   `serde_json(arbitrary_precision)`、`pest`/`pest_derive`、`uuid`、`thiserror`、`utoipa`
@@ -110,7 +115,7 @@ flowchart LR
 - 本机 lock 图已核实（2026-10-11，与报告 §4 同源）：`uuid 1.27.0` 依赖块含 `getrandom 0.4.3`、
   `js-sys`、`wasm-bindgen`——wasm 兼容路径已在依赖图中，`wasm_js` feature 路线可用。
 
-### Phase 2 — 移植 `formatLogicText` 到 Rust（1 天）
+### Phase 2 — 移植 `formatLogicText` 到 Rust（1 天） ✅
 
 - 按 `frontend/src/logic-text.ts` 的别名生成与输出格式逐条移植为
   `format_logic_text(&DocumentLogic, &[Question]) -> String`。
@@ -119,7 +124,7 @@ flowchart LR
   `parse(format(parse(x))) ≡ parse(x)`。
 - **验证**：双端对 `format_cases` 逐字节相等；现有 texts.json 用例不回归。
 
-### Phase 3 — `logic-wasm` crate 与构建（1–2 天）
+### Phase 3 — `logic-wasm` crate 与构建（1–2 天） ✅
 
 - 新成员 `logic-wasm/`，`crate-type = ["cdylib"]`，依赖 `questionnaire-logic` + `wasm-bindgen`。
   导出（全部同步函数，信封格式 `{"ok":…} | {"error":…}`）：
@@ -138,7 +143,7 @@ flowchart LR
 - **验证**：Node 冒烟脚本 `initSync(readFileSync(...))` 后跑一个 fixtures 文本用例；报告
   `.wasm` 体积（预期 300–600 KB，wasm-pack 默认过 wasm-opt）与典型解析耗时（预期 <1ms）。
 
-### Phase 4 — 前端接入与镜像删除（2 天）
+### Phase 4 — 前端接入与镜像删除（2 天） ✅
 
 - 新增 `frontend/src/wasm/index.ts`：动态 import + 初始化（Vite 环境走 bundler 胶水默认导出，
   node 测试走 `initSync`；已核实 Vite 8.3.0 与 Node 22 原生跑 .ts）；提供与现有签名兼容的
@@ -158,10 +163,10 @@ flowchart LR
   `/s/:id`（含 logic 问卷的改答、分支、提交）与编辑器文本模式（防抖诊断、格式化、往返、
   保存预检）。
 
-### Phase 5 — 文档与规范同步（半天）
+### Phase 5 — 文档与规范同步（半天） ✅
 
 - `AGENTS.md`：workspace 成员、模块表、wasm 构建命令、前端约定（产物入库与重建）、
-  「单成员 workspace」表述更新。
+  「workspace 仅 `backend` 一个成员」的过时表述更新。
 - `docs/backend-guide.md`（crate 拆分）、`docs/frontend-guide.md`（包装 API、重建流程）、
   `README.md` §7（检查选择表加 wasm 重建行）、`docs/requirements-analysis.md` 追加本阶段
   验证记录。

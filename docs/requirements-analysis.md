@@ -553,3 +553,30 @@ release 对照均使用 stable + LLVM，仅切换 profile 配置：
 - 历史容量双轨删除（P1#2）：删除 `Document::validate_copy_draft` 及 `validate_draft_with_text_limits` / `validate_publish_with_text_limits` 两个参数化私有函数，`validate_draft` / `validate_publish` 内联固定 200/1000 当前上限；`validate_answers` 与 `FlowEvaluator::new`、`copy_survey` 统一改用当前草稿/发布校验。`renew_ids` 保留（身份重写是当前行为，非兼容逻辑）。无正式发布版本存在，超当前上限的来源文档本就无法保存或发布，复制校验仅剩纵深防御作用。
 
 验证：`pnpm run test:regression` 22 项通过（新增「在节点后插入页面会回接所有指向原后继的出口」，修复前该用例失败）；`pnpm run build` 通过。仓库根 `cargo test --locked --workspace` 全绿，`cargo fmt --all -- --check` 与 `cargo clippy --locked --workspace --all-targets -- -D warnings` 通过。`backend-guide.md` 的容量与复制描述同步更新；本节与 §15 等既有历史记录不改。
+
+## 24. WASM 统一 DSL 落地记录（2026-10-12）
+
+实施分支：`wasm-dsl-unification`（HEAD `feb1230`），按[实施计划](wasm-dsl-unification-plan.md)的 Phase 0–5 执行，其 Phase 5（文档与规范同步）即本节。目标是前后端共用同一份 DSL 语义、删除 TS 镜像实现，并消除 `formatLogicText` 只存在于 TS 的单边漂移。
+
+结构与接线：
+
+- workspace 变为三个成员。`backend`（`questionnaire-api`）只留 HTTP 与业务；新增 `logic-core`（`questionnaire-logic`），移入 DSL 六文件（`domain.rs`、`identity.rs`、`logic.rs`、`logic_document.rs`、`logic_text.rs` + `logic_text.pest`、`flow.rs`），依赖裁到 `serde` / `serde_json`（`arbitrary_precision`）/ `pest` / `pest_derive` / `uuid` / `thiserror` / `utoipa`，无 HTTP、数据库与文件系统依赖；新增 `logic-wasm`，`crate-type = ["cdylib", "rlib"]`，只负责 JSON 字符串信封边界。
+- 后端接线保持零改动形态：`backend/src/lib.rs` 删去六个 `mod`，改为 `pub use questionnaire_logic::domain;`，`questionnaire_api::domain::*` 路径与 `backend/tests` 四个目标不变；`backend/Cargo.toml` 增加 `questionnaire-logic = { path = "../logic-core" }`。
+- `format_logic_text` 按原 TS `formatLogicText` 逐分支移植进 `logic-core`，成为唯一实现。
+- 前端新增 `frontend/src/wasm/index.ts` 包装：Vite 走 wasm-pack 的 bundler 胶水，`node --test` 走 `logic_wasm_bg.js` + `readFileSync` 手动实例化；信封错误还原成既有 `LogicError` / `LogicTextError`，数字经 `json.ts` 的 lossless 编解码与 `encodeAnswers` 保留最短词法原文。删除 `logic-text.ts`、`document-logic.ts`、`flow.ts`、`flow-compiler.ts` 与 `logic.ts` 的编译求值内核（净删约 1 500 行），新增 `flow-tools.ts` 承接被删除的流程拓扑工具（插入节点并回接前驱出口）；错误类、类型定义与 `logic-text-tools.ts` 等 UI 工具保留。
+- `frontend/src/wasm/pkg/` 入库 wasm-pack bundler 产物五件套（`logic_wasm.js`、`logic_wasm_bg.js`、`logic_wasm_bg.wasm`、两份类型声明）；重建入口为 `frontend/` 的 `pnpm run wasm:build`，不装 Rust 工具链的前端开发者直接用入库产物。
+
+验证：
+
+- Rust：`cargo test --locked --workspace` **36 项通过**（`backend/tests` 四目标 + `logic-wasm/tests/smoke.rs`；其中一条用例仅在 `target_arch = "wasm32"` 下编译运行）；`cargo build -p questionnaire-logic --target wasm32-unknown-unknown` 作为纯度闸门通过，uuid v4 的 `getrandom` 切到 `wasm_js` 后端。
+- 前端：`pnpm run test:regression`（node --test）**23 项通过**，`pnpm run typecheck`（vue-tsc）与 `pnpm run build` 通过。
+- wasm 边界：一次性 Node 冒烟（`readFileSync` + 手动实例化 `.wasm`）跑 fixtures 文本用例，`parse` / `format` 与人工期望逐字节一致，`FlowSession` 信封正常；脚本未入库，回归由 `frontend/tests/` 走同一包装覆盖。
+- 共享契约：`fixtures/survey-logic/` 语义样例不变，双端测试继续同读；`texts.json` 新增 `format_cases`（5 条人工期望：questions + logic 输入与期望文本），`backend/tests/logic_text.rs` 与 `frontend/tests/logic-text.test.mjs` 各读一次并逐字节比对，同时断言 `parse(format(parse(x))) ≡ parse(x)`。
+
+口径变化与已知取舍：
+
+- 测试口径从「双实现对照」变为「单实现双端回归」：语义只有 `logic-core` 一份实现，共享样例的职责变成确认边界两端一致，而不再是两个实现互相印证。
+- wasm-pack 0.15 的 wasm-opt 调用未带 `--enable-bulk-memory-opt`（binaryen 133 默认关闭该特性，而 wasm-bindgen 产物含 `memory.copy`），因此构建脚本用 `--no-opt`，不引入显式 binaryen 步骤；实测优化差异仅 0.03%，代价与收益不成比例。产物未压缩，`logic_wasm_bg.wasm` 为 1 013 355 字节（约 990 KiB）。
+- `FlowSession` 用 `Box<Document>` 持有文档并把借用延伸为 `'static`（字段声明顺序保证 Drop 时先拆会话再释放文档），不使用 `Box::leak`，避免每次创建会话永久泄漏一份文档。
+
+本轮未重做浏览器手工冒烟、性能压测与 release 构建；既有服务与浏览器验证记录仍按原阶段解读，不据此宣称整体验收通过。本节与 §15、§23 等既有历史记录不改。

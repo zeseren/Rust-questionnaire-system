@@ -747,7 +747,7 @@ pub fn format_logic_text(
         formatter.lines.push(format!(
             "let {}: {} = {};",
             formatter.reference(&id_value(variable.id))?,
-            serde_json::to_value(&variable.value_type)
+            serde_json::to_value(variable.value_type)
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_string))
                 .ok_or_else(|| error(LogicErrorCode::InvalidSyntax, "$", None))?,

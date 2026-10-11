@@ -1,6 +1,6 @@
 # 后端使用与代码阅读指南
 
-本文从“发送一个请求”出发介绍已有实现，不要求你先读完 Rust 教材。先按 [README](../README.md) 准备数据库、`.env` 并启动服务。这里的命令仍从**仓库根目录**运行；包在 `backend` 目录，包名是 `questionnaire-api`。
+本文从“发送一个请求”出发介绍已有实现，不要求你先读完 Rust 教材。先按 [README](../README.md) 准备数据库、`.env` 并启动服务。这里的命令仍从**仓库根目录**运行；HTTP 包在 `backend` 目录，包名是 `questionnaire-api`，DSL 领域语义在 `logic-core` 目录，包名是 `questionnaire-logic`（后端经 `pub use questionnaire_logic::domain;` 使用，见 2.1）。
 
 本文的命令是操作说明，不是运行证明；不据此宣称全部验收通过或达到某个性能指标。已验证范围以 [需求分析中的实施状态](requirements-analysis.md) 为准；该文档第 11.2 节记录过一次已在临时实例上完成的备份恢复演练，但它不代表你的环境已经核对。
 
@@ -189,6 +189,8 @@ Import-Csv -LiteralPath $CsvPath -Encoding UTF8 | Select-Object receipt_id, vers
 
 实际结构不是一套空的多层框架：每个业务模块把 HTTP handler 与它调用的具体业务函数放在同一文件，只有共用的数据访问规则放进 `repository.rs`。
 
+workspace 有三个成员：`backend/`（`questionnaire-api`，HTTP 与业务）、`logic-core/`（`questionnaire-logic`，纯领域 DSL 核心）、`logic-wasm/`（`logic-wasm`，把核心导成 wasm 给前端）。后端不自己持有 DSL 实现：`backend/src/lib.rs` 用 `pub use questionnaire_logic::domain;` 接入，因此下文与业务代码里的 `questionnaire_api::domain::*`（`Document`、`QuestionKind`、`FlowEvaluator` 等）路径、可见性和调用方式都不变；DSL 的六个文件住在 `logic-core/src/`，`backend/src/` 只剩 HTTP 与业务模块。
+
 ```text
 main.rs: main
   └─ lib.rs: run → 配置、连接池、迁移、router、HTTP 监听
@@ -197,7 +199,7 @@ main.rs: main
                  ├─ http.rs: ApiPath / ApiJson 解析输入
                  ├─ auth.rs: AuthUser 提取有效账号
                  └─ surveys.rs: save_survey_draft（业务函数）
-                      ├─ domain.rs: validate_draft
+                      ├─ domain（logic-core/src/domain.rs）: validate_draft
                       ├─ repository.rs: lock_owned_survey / expire_survey
                       └─ entities.rs: survey::ActiveModel → PostgreSQL 事务
 ```
@@ -210,11 +212,12 @@ main.rs: main
 | [`http.rs`](../backend/src/http.rs)、[`error.rs`](../backend/src/error.rs) | `ApiJson`、`ApiPath`、`ApiQuery`、`Pagination`、`AppError` | 字符串/JSON 只在边界解析；错误统一成 HTTP JSON |
 | [`surveys.rs`](../backend/src/surveys.rs) | `save_draft` → `save_survey_draft`；`publish` → `publish_survey` | handler 不做数据库拼装；业务函数检查归属、修订、状态并提交事务 |
 | [`submissions.rs`](../backend/src/submissions.rs) | `submit` → `submit_response` → `lock_public_survey` | 模式判断、行锁、重验 Session、幂等、版本匹配、原子写入 |
-| [`domain.rs`](../backend/src/domain.rs) | `Document`、`QuestionKind`、`validate_answers` | 不依赖网络和数据库的题面/答案规则 |
-| [`identity.rs`](../backend/src/identity.rs) | `parse`、`deserialize`、`deserialize_vec` | 非零、小写连字符配置 UUID 的统一解析边界 |
-| [`logic.rs`](../backend/src/logic.rs)、[`logic_document.rs`](../backend/src/logic_document.rs) | `compile_expression`、`DocumentLogic::compile` | 表达式类型、变量依赖、题目规则、容量和引用重写 |
-| [`flow.rs`](../backend/src/flow.rs) | `FlowSession`、`FlowEvaluator` | 前向流程、改答清理与提交路径重建 |
-| [`logic_text.rs`](../backend/src/logic_text.rs)、[`logic_text.pest`](../backend/src/logic_text.pest) | `parse_logic_text`、`Grammar`、`PRECEDENCE` | pest 文法与 Pratt 优先级；资源预检、身份绑定后编译到统一 AST |
+| [`domain`（`logic-core/src/domain.rs`）](../logic-core/src/domain.rs) | `Document`、`QuestionKind`、`validate_answers` | 不依赖网络和数据库的题面/答案规则；经 `lib.rs` 的 `pub use questionnaire_logic::domain;` 再导出 |
+| [`identity.rs`](../logic-core/src/identity.rs) | `parse`、`deserialize`、`deserialize_vec` | 非零、小写连字符配置 UUID 的统一解析边界 |
+| [`logic.rs`](../logic-core/src/logic.rs)、[`logic_document.rs`](../logic-core/src/logic_document.rs) | `compile_expression`、`DocumentLogic::compile` | 表达式类型、变量依赖、题目规则、容量和引用重写 |
+| [`flow.rs`](../logic-core/src/flow.rs) | `FlowSession`、`FlowEvaluator` | 前向流程、改答清理与提交路径重建 |
+| [`logic_text.rs`](../logic-core/src/logic_text.rs)、[`logic_text.pest`](../logic-core/src/logic_text.pest) | `parse_logic_text`、`format_logic_text`、`Grammar`、`PRECEDENCE` | pest 文法与 Pratt 优先级；资源预检、身份绑定后编译到统一 AST；文本格式化唯一实现 |
+| [`logic-wasm/src/lib.rs`](../logic-wasm/src/lib.rs) | `parse_logic_text`、`format_logic_text`、`compile_document_logic`、`FlowSession` | wasm 边界：入参出参都是 JSON 字符串，信封 `{"ok":…}` / `{"error":…}`，错误字段与领域错误一一对应 |
 | [`repository.rs`](../backend/src/repository.rs)、[`entities.rs`](../backend/src/entities.rs) | `owned_survey`、`lock_user`、`lock_survey`、各 `Model` | 共用归属过滤与锁；数据库字段映射 |
 | [`reports.rs`](../backend/src/reports.rs) | `statistics`、`response_snapshot`、`summarize_question`、`encode_csv` | 同一版本与时间过滤；一次结果快照生成报表和导出 |
 | [`auth.rs`](../backend/src/auth.rs)、[`admin.rs`](../backend/src/admin.rs) | `authenticate`、`change_password`、`change_user`、`change_survey` | Session 失效与账号资格变化；治理操作和审计原子落库 |
@@ -300,7 +303,7 @@ SeaORM 做大部分查询和写入；`reports::response_snapshot` 使用参数�
 - `null`、空白文本、空多选视为缺失：可选题不存这一键，必填题拒绝。**合法数值 `0` 不等于缺失。** 单行文本拒绝换行，多行文本允许换行。
 - 空白按 Unicode `White_Space`（Rust `str::trim`），前端普通填写、流程填写与进度计数使用相同规则：U+0085 视为空白；U+FEFF 是内容，不视为空白。非空白文本仍保留首尾原文。
 - 配置中的题目、选项、变量、规则题目、流程入口/节点/出口/页面归属与 AST 引用均使用非零、小写连字符 UUID。Rust 配置 DTO 在反序列化时拒绝其他写法，经 HTTP 返回 `400 invalid_json`；AST 引用错误由编译器报告。答案的选项值仍接受可解析 UUID 并按现有选项规范化；这不是历史格式兼容分支。
-- 提交答案和改答事件的 `question_id` 也在反序列化时执行同一严格身份规则，与 TypeScript 按规范题目 ID 匹配的行为一致。
+- 提交答案和改答事件的 `question_id` 也在反序列化时执行同一严格身份规则，与前端（wasm 引擎调用同一份身份规则）按规范题目 ID 匹配的行为一致。
 - 题面文字、文本答案、治理原因拒绝 `U+0000`（NUL），不把无法存入 PostgreSQL 文本/JSONB 的输入拖到数据库层再报内部错误。文字作为纯文本使用，不是可信 HTML。
 - 数字题只接受 JSON 数字，拒绝字符串、布尔值、非有限值；边界是闭区间。`integer=true` 检查数学整数，评分还受 `i32` 整数范围和题面范围约束。
 - 数字与评分的 JSON 表示在规范化前最多 64 字节（`MAX_NUMBER_JSON_BYTES`），包括负号、小数点和指数。与 `serde_json` 一致，省略的正指数符号 `+` 也计入长度；例如 `1e3` 按 `1e+3` 计数。超限返回题目级 `422`，前端数字输入执行相同校验，不先舍入再发送。
@@ -313,9 +316,9 @@ SeaORM 做大部分查询和写入；`reports::response_snapshot` 使用参数�
 
 带规则版本使用该历史版本的 `FlowEvaluator` 重建适用性；详情中的 `question_states` 区分 `answered`、`unanswered`、`skipped`。统计满足 `applicable_count = answered_count + unanswered_count`，且适用数加 `skipped_count` 等于答卷总数；选择题分母仍为已答数。规则版本 CSV 在每题后增加独立的状态列，无规则历史版本保留原 CSV 格式。提交同样重建路径，拒绝路径外答案；原有幂等指纹和重放顺序不变。完整阶段边界见 [DSL 实施计划](survey-dsl-plan.md)。
 
-文本入口为 `domain::parse_logic_text(source, questions)`，实现位于私有模块 `logic_text.rs`，文法集中在 `logic_text.pest`。先以无递归词法入口检查 1 MiB 源文本、65,536 词元、64 字符标识符，以及括号、函数与布尔前缀共用的 64 层解析预算，再由 pest 匹配完整文法；`PrattParser` 负责优先级与左结合。生成 AST 时逐步检查节点和深度预算，数字保留原文，负号只接受数字字面量。
+文本入口为 `domain::parse_logic_text(source, questions)`，实现在 `logic-core/src/logic_text.rs`（模块对外私有，只经 `questionnaire_logic::domain` 暴露），文法集中在 `logic-core/src/logic_text.pest`。先以无递归词法入口检查 1 MiB 源文本、65,536 词元、64 字符标识符，以及括号、函数与布尔前缀共用的 64 层解析预算，再由 pest 匹配完整文法；`PrattParser` 负责优先级与左结合。生成 AST 时逐步检查节点和深度预算，数字保留原文，负号只接受数字字面量。
 
-随后检查别名类别和规范 UUID，生成 `DocumentLogic` 并调用同一文档编译器；返回值已通过类型、依赖与流程检查。`LogicTextError` 保留 Unicode 标量行列、稳定错误分类和语义 AST 路径，不回显 pest 原始输入诊断。HTTP 仍接收文档 JSON AST，网页 TypeScript 解析文本后发送 AST，服务端重新编译验证；没有新增数据库表或文本 HTTP 端点。文本回归位于独立的 `backend/tests/logic_text.rs`，与前端读取同一份 `fixtures/survey-logic/texts.json`。
+随后检查别名类别和规范 UUID，生成 `DocumentLogic` 并调用同一文档编译器；返回值已通过类型、依赖与流程检查。`LogicTextError` 保留 Unicode 标量行列、稳定错误分类和语义 AST 路径，不回显 pest 原始输入诊断。HTTP 仍接收文档 JSON AST：网页经 wasm 引擎（`logic-wasm` 调用同一份 `logic-core` 代码）解析文本后发送 AST，服务端重新编译验证；没有新增数据库表或文本 HTTP 端点。文本回归位于独立的 `backend/tests/logic_text.rs`，与前端（经 wasm 引擎）同读 `fixtures/survey-logic/texts.json`；其中的 `format_cases` 用人工期望逐字节锁定 `format_logic_text` 的输出，两端各读一次。
 
 时间过滤使用 RFC3339，必须带 `Z` 或时区偏移；区间为 **`[from, to)`**：包含开始、不包含结束，两个值同时存在时必须 `from < to`。PostgreSQL 存储精度为微秒；过滤边界不能含非零的微秒以下精度，不会静默截断。客户端统一发送最多六位小数即可，额外全零尾位不改变时刻。不要把服务器本地时区或无时区日期字符串当作输入约定。
 
