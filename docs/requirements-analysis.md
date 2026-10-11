@@ -544,3 +544,12 @@ release 对照均使用 stable + LLVM，仅切换 profile 配置：
 - `test:regression` 改用 Node 自动发现，支持传入单个文件。`AGENTS.md`、README 与当前指南统一为按改动选择检查；提交本身不重跑，不把无关端的测试、构建或静态检查捆绑执行。
 
 验证：改动文件已用 rustfmt / Prettier 整理；`cargo +stable test --locked -p questionnaire-api --test domain --test logic --test flow --test logic_text` 通过 26 项，`pnpm run test:regression` 通过 21 项，均执行一次。业务源码与依赖未变。
+
+## 23. 分支 review 两处 P1 修复（2026-10-11）
+
+依据 `docs/branch-review-dsl-survey-editor.md` 的两项 P1，按「不保留历史文档兼容」前提完成修复：
+
+- 流程编辑器插入节点回接（P1#1）：`FlowEditor.vue` 内联的 `addNode` 抽取为 `flow-compiler.ts` 的 `insertFlowNode`，并在原 `otherwise` 回接之外补上 `branches[].target` 等于原后继时同样改写为新节点。此前在条件分支后插入新页面，命中条件的填写者会静默跳过该页。
+- 历史容量双轨删除（P1#2）：删除 `Document::validate_copy_draft` 及 `validate_draft_with_text_limits` / `validate_publish_with_text_limits` 两个参数化私有函数，`validate_draft` / `validate_publish` 内联固定 200/1000 当前上限；`validate_answers` 与 `FlowEvaluator::new`、`copy_survey` 统一改用当前草稿/发布校验。`renew_ids` 保留（身份重写是当前行为，非兼容逻辑）。无正式发布版本存在，超当前上限的来源文档本就无法保存或发布，复制校验仅剩纵深防御作用。
+
+验证：`pnpm run test:regression` 22 项通过（新增「在节点后插入页面会回接所有指向原后继的出口」，修复前该用例失败）；`pnpm run build` 通过。仓库根 `cargo test --locked --workspace` 全绿，`cargo fmt --all -- --check` 与 `cargo clippy --locked --workspace --all-targets -- -D warnings` 通过。`backend-guide.md` 的容量与复制描述同步更新；本节与 §15 等既有历史记录不改。

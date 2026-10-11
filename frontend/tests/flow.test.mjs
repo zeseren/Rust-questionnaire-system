@@ -7,6 +7,7 @@ import { compileDocumentLogic, duplicateSurveyDocument } from '../src/document-l
 import { duplicateQuestion } from '../src/documents.ts'
 import { FlowSession } from '../src/flow.ts'
 import { LogicError } from '../src/logic.ts'
+import { insertFlowNode } from '../src/flow-compiler.ts'
 
 const fixtures = JSON.parse(
   readFileSync(new URL('../../fixtures/survey-logic/flows.json', import.meta.url), 'utf8'),
@@ -151,4 +152,41 @@ test('最终提交共享样例拒绝路径外输入并重建适用性', () => {
     assert.deepEqual(actual, fixture.expected, fixture.name)
     assert.deepEqual(session.snapshot(), before, '最终路径重建不能修改交互状态')
   }
+})
+
+test('在节点后插入页面会回接所有指向原后继的出口', () => {
+  const [p1, branch, p2, p3, end] = [
+    crypto.randomUUID(),
+    crypto.randomUUID(),
+    crypto.randomUUID(),
+    crypto.randomUUID(),
+    crypto.randomUUID(),
+  ]
+  const flow = {
+    entry: p1,
+    nodes: [
+      { type: 'page', id: p1, question_ids: [], next: branch },
+      {
+        type: 'branch',
+        id: branch,
+        branches: [
+          { when: { op: 'boolean', value: true }, target: p3 },
+          { when: { op: 'boolean', value: false }, target: p2 },
+        ],
+        otherwise: p2,
+      },
+      { type: 'page', id: p2, question_ids: [], next: p3 },
+      { type: 'page', id: p3, question_ids: [], next: end },
+      { type: 'end', id: end, outcome: 'complete' },
+    ],
+  }
+  const inserted = insertFlowNode(flow, 1, 'page')
+  assert.equal(flow.nodes.length, 6)
+  assert.equal(flow.nodes[2].id, inserted)
+  assert.equal(flow.nodes[2].next, p2, '新页面接原后继')
+  assert.equal(flow.nodes[1].branches[0].target, p3, '指向其他节点的分支不动')
+  assert.equal(flow.nodes[1].branches[1].target, inserted, '指向原后继的条件分支回接')
+  assert.equal(flow.nodes[1].otherwise, inserted, 'otherwise 回接')
+  const afterFirst = insertFlowNode(flow, 0, 'page')
+  assert.equal(flow.nodes[0].next, afterFirst, '页面前驱的 next 回接')
 })

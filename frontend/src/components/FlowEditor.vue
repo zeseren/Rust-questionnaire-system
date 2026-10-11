@@ -1,6 +1,7 @@
 <!-- 页面顺序和出口由作者显式配置，结构变化后保留失效引用供定位修复。 -->
 <script setup lang="ts">
 import { nextTick } from 'vue'
+import { insertFlowNode } from '../flow-compiler'
 import type { FlowDefinition, FlowNode } from '../flow-compiler'
 import type { ComputedVariable } from '../document-logic'
 import type { Question } from '../types'
@@ -37,23 +38,7 @@ async function locate(id: string) {
 }
 function addNode(index: number, type: FlowNode['type']) {
   if (!flow.value) return
-  const id = crypto.randomUUID(),
-    target = flow.value.nodes[index + 1]?.id ?? ''
-  const node: FlowNode =
-    type === 'page'
-      ? { type, id, question_ids: [], next: target }
-      : type === 'branch'
-        ? {
-            type,
-            id,
-            branches: [{ when: { op: 'boolean', value: true }, target }],
-            otherwise: target,
-          }
-        : { type, id, outcome: 'complete' }
-  const previous = flow.value.nodes[index]
-  if (previous?.type === 'page' && previous.next === target) previous.next = id
-  if (previous?.type === 'branch' && previous.otherwise === target) previous.otherwise = id
-  flow.value.nodes.splice(index + 1, 0, node)
+  const id = insertFlowNode(flow.value, index, type)
   void locate(id)
 }
 function move(index: number, direction: number) {

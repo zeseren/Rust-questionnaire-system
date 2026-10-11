@@ -801,9 +801,7 @@ async fn copy_survey(
     };
     let mut document: Document = serde_json::from_value(source_document)?;
     document.renew_ids();
-    // 来源可能是容量收紧前发布的历史版本，复制按历史容量校验；
-    // 超出当前上限的配置保留为待调整草稿，由保存或发布时提示。
-    document.validate_copy_draft()?;
+    document.validate_draft()?;
     let now = Utc::now();
     let record = insert_draft(&tx, owner_id, document, now).await?;
     let result = survey_detail(record, now)?;

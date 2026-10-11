@@ -553,7 +553,7 @@ impl<'a> FlowEvaluator<'a> {
             .unwrap_or(&empty)
             .compile(&document.questions)?;
         document
-            .validate_copy_draft()
+            .validate_draft()
             .map_err(|failure| error(LogicErrorCode::InvalidFlow, "$", failure.question_id))?;
         let flow = logic
             .flow
