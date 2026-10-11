@@ -1,8 +1,7 @@
 <!-- 可视化配置和文本共用统一模型，未应用的文本在工作区切换时继续保留。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import type { Question } from '../types'
-import type { DocumentLogic, QuestionRule } from '../document-logic'
+import type { DocumentLogic, Question, QuestionRule } from '../types'
 import { logicDiagnostic } from '../editor-logic'
 import ExpressionEditor from './ExpressionEditor.vue'
 import ConditionBuilder from './ConditionBuilder.vue'

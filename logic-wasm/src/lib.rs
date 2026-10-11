@@ -13,12 +13,14 @@
 //! - 信封本身也由 `serde_json::to_string` 产生；只有「入参不是合法 JSON / 不是
 //!   预期 DTO」这一层错误是本 crate 自己的 `invalid_syntax` 诊断。
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
 use questionnaire_logic::domain::{
-    FlowEvent, FlowSession as CoreFlowSession,
+    Answer, FlowEvaluator, FlowEvent, FlowSession as CoreFlowSession,
 };
 use questionnaire_logic::domain::{
     Document, DocumentLogic, Question, compile_expression as core_compile_expression,
@@ -75,15 +77,19 @@ pub fn format_logic_text(logic_json: String, questions_json: String) -> String {
 }
 
 /// 保存前的诊断预检：编译整份规则，只关心错误里的 `path` / `question_id`。
+///
+/// 成功信封同时返回 `variable_order`：计算变量的拓扑顺序，供前端在编译期展示
+/// 与断言使用（`evaluate_document_logic` 只负责按答案求值）。
 #[wasm_bindgen]
 pub fn compile_document_logic(logic_json: String, questions_json: String) -> String {
     let result = (|| {
         let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
         let logic: DocumentLogic = decode(&logic_json, "logic_json")?;
-        logic
-            .compile(&questions)
-            .map(|_| json!({ "compiled": true }))
-            .map_err(domain_error)
+        let compiled = logic.compile(&questions).map_err(domain_error)?;
+        Ok(json!({
+            "compiled": true,
+            "variable_order": compiled.variable_order(),
+        }))
     })();
     envelope_generic(result)
 }
@@ -112,6 +118,53 @@ pub fn renew_document_ids(document_json: String) -> String {
         let mut document: Document = decode(&document_json, "document_json")?;
         document.renew_ids();
         serde_json::to_value(&document).map_err(serde_json_to_boundary)
+    })();
+    envelope_generic(result)
+}
+
+/// 单个表达式求值：入参与 `compile_expression` 一致，另收已按问卷规则规范化的答案上下文。
+///
+/// 计算变量的解析需要回调，跨 JSON 边界无法表达；因此与核心
+/// `CompiledExpression::evaluate` 一样只接受答案，变量引用在编译期即被拒绝。
+///
+/// # 错误
+/// 入参非法、编译失败或引用答案的类型/数值不合法时返回 error 信封。
+#[wasm_bindgen]
+pub fn evaluate_expression(
+    raw_json: String,
+    questions_json: String,
+    answers_json: String,
+) -> String {
+    let result = (|| {
+        let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
+        let raw: Value = decode(&raw_json, "raw_json")?;
+        // 答案上下文按题目身份索引；身份类型由核心求值签名推断，边界不必重述。
+        let answers: BTreeMap<_, Value> = decode(&answers_json, "answers_json")?;
+        let compiled = core_compile_expression(&raw, &questions).map_err(domain_error)?;
+        let value = compiled.evaluate(&answers).map_err(domain_error)?;
+        serde_json::to_value(&value).map_err(serde_json_to_boundary)
+    })();
+    envelope_generic(result)
+}
+
+/// 整份规则的求值：编译后按答案上下文计算全部计算变量与规则结果。
+///
+/// # 错误
+/// 编译失败或求值中出现类型、引用、除零、溢出错误时返回 error 信封。
+#[wasm_bindgen]
+pub fn evaluate_document_logic(
+    logic_json: String,
+    questions_json: String,
+    answers_json: String,
+) -> String {
+    let result = (|| {
+        let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
+        let logic: DocumentLogic = decode(&logic_json, "logic_json")?;
+        // 答案上下文按题目身份索引；身份类型由核心求值签名推断。
+        let answers: BTreeMap<_, Value> = decode(&answers_json, "answers_json")?;
+        let compiled = logic.compile(&questions).map_err(domain_error)?;
+        let values = compiled.evaluate(&answers).map_err(domain_error)?;
+        serde_json::to_value(&values).map_err(serde_json_to_boundary)
     })();
     envelope_generic(result)
 }
@@ -155,9 +208,12 @@ impl FlowSession {
     #[wasm_bindgen(constructor)]
     pub fn new(document_json: String) -> Result<FlowSession, JsValue> {
         let document: Document = serde_json::from_str(&document_json).map_err(|error| {
-            JsValue::from_str(&serde_json::to_string(&json!({
-                "error": boundary_error(format!("document_json 不是合法 JSON：{error}"))
-            })).expect("信封序列化不会失败"))
+            JsValue::from_str(
+                &serde_json::to_string(&json!({
+                    "error": boundary_error(format!("document_json 不是合法 JSON：{error}"))
+                }))
+                .expect("信封序列化不会失败"),
+            )
         })?;
         let mut this = Self {
             session: None,
@@ -203,6 +259,23 @@ impl FlowSession {
             "ok": serde_json::to_value(&snapshot).expect("快照序列化不会失败")
         }))
         .expect("信封序列化不会失败")
+    }
+
+    /// 从最终答案重建整份答卷：不读取也不修改会话当前的历史与输入。
+    ///
+    /// 复用核心 `FlowEvaluator::evaluate_answers`（与提交路径同一段代码），因此
+    /// 到达 complete 只代表可提交，不代表已经保存。
+    ///
+    /// # 错误
+    /// 未知/重复题目、不适用答案、校验失败、未决条件或筛选结束时返回 error 信封。
+    pub fn evaluate_answers(&self, answers_json: String) -> String {
+        let result = (|| {
+            let answers: Vec<Answer> = decode(&answers_json, "answers_json")?;
+            let evaluator = FlowEvaluator::new(&self.document).map_err(domain_error)?;
+            let response = evaluator.evaluate_answers(answers).map_err(domain_error)?;
+            serde_json::to_value(&response).map_err(serde_json_to_boundary)
+        })();
+        envelope_generic(result)
     }
 }
 

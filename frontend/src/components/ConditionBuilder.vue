@@ -1,8 +1,7 @@
 <!-- 常用条件使用题目和选项名称，切换高级编辑不会重建或丢弃原表达式。 -->
 <script setup lang="ts">
 import { computed, ref, useId } from 'vue'
-import type { Question } from '../types'
-import type { ComputedVariable } from '../document-logic'
+import type { ComputedVariable, Question } from '../types'
 import { conditionOperators, groupExpression, readConditionGroup } from '../condition-builder'
 import type { ConditionGroup, ConditionOperator, SimpleCondition } from '../condition-builder'
 import ExpressionEditor from './ExpressionEditor.vue'

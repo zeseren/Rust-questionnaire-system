@@ -1,7 +1,6 @@
 <!-- 流程缩略图展示真实出口，点击节点回到对应配置，不把排列顺序误当执行路径。 -->
 <script setup lang="ts">
-import type { FlowDefinition } from '../flow-compiler'
-import type { Question } from '../types'
+import type { FlowDefinition, Question } from '../types'
 const props = defineProps<{ flow: FlowDefinition; questions: Question[] }>()
 defineEmits<{ select: [id: string] }>()
 function target(id: string) {

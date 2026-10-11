@@ -1,11 +1,11 @@
 //! 界面保留原始输入，流程只接收正确 JSON 类型；提交数字不能变成超范围裸整数。
 import { LosslessNumber } from 'lossless-json'
-import { FlowSession } from './flow.ts'
+import { FlowSession } from './wasm/index.ts'
 import { LogicError } from './logic.ts'
 import { copy } from './json.ts'
 import { numberError, numberInput } from './numbers.ts'
 import type { Inputs, InputValue } from './answers.ts'
-import type { Answer, SurveyDocument } from './types'
+import type { Answer, SurveyDocument } from './types.ts'
 
 export class FlowInputs {
   #document: SurveyDocument

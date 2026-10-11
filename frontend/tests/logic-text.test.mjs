@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { copy } from '../src/json.ts'
-import { formatLogicText, LogicTextError, parseLogicText } from '../src/logic-text.ts'
-import { compileExpression } from '../src/logic.ts'
+import { LogicTextError } from '../src/logic.ts'
+import { compileExpression, formatLogicText, parseLogicText } from '../src/wasm/index.ts'
 const read = (name) =>
   JSON.parse(
     readFileSync(new URL(`../../fixtures/survey-logic/${name}.json`, import.meta.url), 'utf8'),

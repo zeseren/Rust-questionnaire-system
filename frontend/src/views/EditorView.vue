@@ -26,7 +26,7 @@ import { createSurveyTemplate } from '../survey-templates'
 import type { SurveyTemplateId } from '../survey-templates'
 import { editorDisabledKey } from '../editor-context'
 import '../editor.css'
-import { compileDocumentLogic } from '../document-logic'
+import { compileDocumentLogic } from '../wasm/index'
 import { LogicError } from '../logic'
 const route = useRoute()
 const router = useRouter()

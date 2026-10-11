@@ -14,3 +14,9 @@ questionnaire-logic = { path = "../logic-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 wasm-bindgen = "0.2"
+
+[package.metadata.wasm-pack]
+# wasm-pack 0.15 的 wasm-opt 调用不带 --enable-bulk-memory-opt(binaryen 133 默认关闭该特性,
+# 而 wasm-bindgen 产物含 memory.copy),故构建脚本改用 --no-opt + 显式 wasm-opt;
+# 此处保留 false 以防有人直接跑 wasm-pack 时踩同一坑。
+wasm-opt = false

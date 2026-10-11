@@ -1,8 +1,7 @@
 <!-- 每次编辑替换 AST 节点，数字常量保留原文，引用始终绑定稳定身份。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { Question } from '../types'
-import type { ComputedVariable } from '../document-logic'
+import type { ComputedVariable, Question } from '../types'
 import SearchSelect from './SearchSelect.vue'
 const props = withDefaults(
   defineProps<{

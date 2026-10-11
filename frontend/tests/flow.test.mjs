@@ -3,11 +3,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { copy, decode } from '../src/json.ts'
-import { compileDocumentLogic, duplicateSurveyDocument } from '../src/document-logic.ts'
-import { duplicateQuestion } from '../src/documents.ts'
-import { FlowSession } from '../src/flow.ts'
+import { duplicateQuestion, duplicateSurveyDocument } from '../src/documents.ts'
 import { LogicError } from '../src/logic.ts'
-import { insertFlowNode } from '../src/flow-compiler.ts'
+import { FlowSession, compileDocumentLogic } from '../src/wasm/index.ts'
+import { insertFlowNode } from '../src/flow-tools.ts'
 
 const fixtures = JSON.parse(
   readFileSync(new URL('../../fixtures/survey-logic/flows.json', import.meta.url), 'utf8'),

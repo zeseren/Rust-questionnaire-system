@@ -1,7 +1,6 @@
 //! 编辑辅助只提供引用提示与位置换算，接受文本的依据仍是统一解析器。
-import type { Question } from './types'
-import type { DocumentLogic } from './document-logic'
-import { formatLogicText } from './logic-text.ts'
+import type { DocumentLogic, Question } from './types.ts'
+import { formatLogicText } from './wasm/index.ts'
 import { encode } from './json.ts'
 
 /** 服务端字段顺序和可选空值不应让已应用的文本重新变成待应用状态。 */

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { parse } from 'lossless-json'
-import { compileExpression, LogicError } from '../src/logic.ts'
+import { LogicError } from '../src/logic.ts'
+import { compileExpression } from '../src/wasm/index.ts'
 
 const fixtures = JSON.parse(
   readFileSync(new URL('../../fixtures/survey-logic/expressions.json', import.meta.url), 'utf8'),

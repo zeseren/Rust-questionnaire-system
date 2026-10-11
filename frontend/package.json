@@ -10,8 +10,9 @@
   "scripts": {
     "dev": "vite",
     "test:regression": "node --test",
-    "format": "prettier --write src vite.config.ts index.html package.json tsconfig.json .prettierrc.json",
-    "format:check": "prettier --check src vite.config.ts index.html package.json tsconfig.json .prettierrc.json",
+    "wasm:build": "wasm-pack build ../logic-wasm --target bundler --release --no-opt && node scripts/copy-wasm.mjs",
+    "format": "prettier --write src scripts vite.config.ts index.html package.json tsconfig.json .prettierrc.json",
+    "format:check": "prettier --check src scripts vite.config.ts index.html package.json tsconfig.json .prettierrc.json",
     "typecheck": "vue-tsc --noEmit",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview"

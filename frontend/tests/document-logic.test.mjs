@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { decode } from '../src/json.ts'
-import { compileDocumentLogic } from '../src/document-logic.ts'
 import { LogicError } from '../src/logic.ts'
 import { duplicateQuestion } from '../src/documents.ts'
+import { compileDocumentLogic } from '../src/wasm/index.ts'
 
 const expressions = JSON.parse(
   readFileSync(new URL('../../fixtures/survey-logic/expressions.json', import.meta.url), 'utf8'),

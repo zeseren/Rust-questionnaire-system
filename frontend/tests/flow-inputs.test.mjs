@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { FlowInputs } from '../src/flow-inputs.ts'
 import { copy, copyPayload, decode, encode } from '../src/json.ts'
-import { FlowSession } from '../src/flow.ts'
+import { FlowSession } from '../src/wasm/index.ts'
 const fixtures = JSON.parse(
   readFileSync(new URL('../../fixtures/survey-logic/flows.json', import.meta.url), 'utf8'),
 )

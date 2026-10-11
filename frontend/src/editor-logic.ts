@@ -1,8 +1,7 @@
 //! 编辑期定位结构问题；实际保存仍以同一领域编译器的结果为准。
-import { compileDocumentLogic } from './document-logic.ts'
+import { compileDocumentLogic } from './wasm/index.ts'
 import { LogicError } from './logic.ts'
-import type { DocumentLogic } from './document-logic.ts'
-import type { Question } from './types'
+import type { DocumentLogic, Question } from './types.ts'
 
 export interface LogicDiagnostic {
   message: string

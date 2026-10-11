@@ -1,7 +1,6 @@
 //! DTO 与后端字段一一对应，数字答案保留原始精度。
 import type { LosslessNumber } from 'lossless-json'
-import type { DocumentLogic } from './document-logic'
-import type { AnswerState } from './flow'
+import type { LogicErrorCode } from './logic'
 
 export type ExactNumber = number | LosslessNumber
 export type Status = 'unpublished' | 'collecting' | 'closed' | 'archived'
@@ -174,4 +173,87 @@ export interface Audit {
   target_id: string
   reason: string
   created_at: string
+}
+
+// —— 规则与流程 ——
+// 与后端 `questionnaire-logic` 的 DTO 及求值结果逐字段对应；引擎（wasm 包装）只在
+// 边界上编解码这些结构，界面与测试直接消费它们，因此集中放在 DTO 模块。
+
+/** 编译期确定的类型；缺失值沿用原表达式的静态类型。 */
+export type LogicValueType = 'boolean' | 'number' | 'text' | 'choice' | 'choices'
+/** 求值结果；布尔位置的 `missing` 对应三值逻辑中的未知。 */
+export type LogicValue =
+  | { type: 'missing' }
+  | { type: 'boolean'; value: boolean }
+  | { type: 'number'; value: number }
+  | { type: 'text' | 'choice'; value: string }
+  | { type: 'choices'; value: string[] }
+
+/** 计算变量；`expression` 原文保留给引擎与格式化器，界面只按节点读写。 */
+export interface ComputedVariable {
+  id: string
+  value_type: LogicValueType
+  expression: unknown
+}
+/** 一道题最多一组规则；未配置的字段以键缺失表达。 */
+export interface QuestionRule {
+  question_id: string
+  visible_if?: unknown
+  required_if?: unknown
+  validate?: unknown
+}
+export interface DocumentLogic {
+  flow?: FlowDefinition | null
+  dsl_version: number
+  semantics_version: number
+  variables: ComputedVariable[]
+  rules: QuestionRule[]
+}
+/** 规则求值结果：计算变量值与各规则字段的三值结果。 */
+export interface DocumentLogicValues {
+  variables: Record<string, LogicValue>
+  rules: Record<
+    string,
+    { visible_if: LogicValue | null; required_if: LogicValue | null; validate: LogicValue | null }
+  >
+}
+
+export type FlowOutcome = 'complete' | 'screen_out'
+export interface FlowBranch {
+  when: unknown
+  target: string
+}
+export type FlowNode =
+  | { type: 'page'; id: string; question_ids: string[]; next: string }
+  | { type: 'branch'; id: string; branches: FlowBranch[]; otherwise: string }
+  | { type: 'end'; id: string; outcome: FlowOutcome }
+export interface FlowDefinition {
+  entry: string
+  nodes: FlowNode[]
+}
+
+/** 某题在最终有效路径上的适用性；跳过与可选未答不可混用。 */
+export type AnswerState = 'answered' | 'unanswered' | 'skipped'
+export type FlowEvent =
+  | { type: 'change'; question_id: string; value: unknown }
+  | { type: 'next' }
+  | { type: 'previous' }
+/** 会话只读快照；改动返回值不会影响会话状态。 */
+export interface FlowSnapshot {
+  current_node: string
+  outcome: FlowOutcome | null
+  history: string[]
+  path: string[]
+  visible: string[]
+  required: string[]
+  answers: Record<string, AnswerValue>
+  errors: Record<string, LogicErrorCode>
+  route_error: LogicErrorCode | null
+  cleared: string[]
+}
+/** 由最终答案重建的答卷；到达 complete 不代表已经保存。 */
+export interface EvaluatedResponse {
+  answers: Record<string, AnswerValue>
+  question_states: Record<string, AnswerState>
+  path: string[]
 }

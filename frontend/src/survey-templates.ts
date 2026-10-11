@@ -1,7 +1,6 @@
 //! 模板每次生成新的配置身份，条件与流程始终引用本次生成的题目。
 import { newQuestion } from './documents.ts'
-import type { DocumentLogic } from './document-logic.ts'
-import type { Question, SurveyDocument } from './types'
+import type { DocumentLogic, Question, SurveyDocument } from './types.ts'
 
 export const surveyTemplates = [
   {

@@ -1,10 +1,8 @@
 <!-- 页面顺序和出口由作者显式配置，结构变化后保留失效引用供定位修复。 -->
 <script setup lang="ts">
 import { nextTick } from 'vue'
-import { insertFlowNode } from '../flow-compiler'
-import type { FlowDefinition, FlowNode } from '../flow-compiler'
-import type { ComputedVariable } from '../document-logic'
-import type { Question } from '../types'
+import { insertFlowNode } from '../flow-tools'
+import type { ComputedVariable, FlowDefinition, FlowNode, Question } from '../types'
 import ConditionBuilder from './ConditionBuilder.vue'
 import FlowTarget from './FlowTarget.vue'
 import FlowOverview from './FlowOverview.vue'

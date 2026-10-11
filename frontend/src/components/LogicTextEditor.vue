@@ -1,10 +1,10 @@
 <!-- 错误或尚未应用的文本不覆盖草稿；工作区切换保留缓冲区并阻止误保存。 -->
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import type { DocumentLogic } from '../document-logic'
-import type { Question } from '../types'
+import type { DocumentLogic, Question } from '../types'
 import { encode } from '../json'
-import { formatLogicText, LogicTextError, parseLogicText } from '../logic-text'
+import { LogicTextError } from '../logic'
+import { formatLogicText, parseLogicText } from '../wasm/index'
 import { logicTextSignature, textBindings, textErrorOffset } from '../logic-text-tools'
 import Icon from './Icon.vue'
 const DslCodeEditor = defineAsyncComponent(() => import('./DslCodeEditor.vue'))

@@ -1,6 +1,6 @@
 <!-- 跳转只选择后续节点；失效引用保持可见，等待作者明确修正。 -->
 <script setup lang="ts">
-import type { FlowNode } from '../flow-compiler'
+import type { FlowNode } from '../types'
 defineProps<{ nodes: FlowNode[]; index: number }>()
 const target = defineModel<string>({ required: true })
 </script>

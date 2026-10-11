@@ -2,9 +2,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createSurveyTemplate, surveyTemplates } from '../src/survey-templates.ts'
-import { compileDocumentLogic } from '../src/document-logic.ts'
-import { compileExpression } from '../src/logic.ts'
-import { formatLogicText } from '../src/logic-text.ts'
+import { compileDocumentLogic, compileExpression, formatLogicText } from '../src/wasm/index.ts'
 import {
   conditionExpression,
   groupExpression,
