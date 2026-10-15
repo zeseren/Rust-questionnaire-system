@@ -620,17 +620,24 @@ impl Formatter {
     }
 
     fn bind(&mut self, category: &str, id: Uuid, alias: String) {
-        self.aliases.insert(id, alias.clone());
         self.lines
             .push(format!("bind {category} {alias} = \"{id}\";"));
+        self.aliases.insert(id, alias);
+    }
+
+    fn bound(&self, id: Uuid) -> Result<&str, LogicError> {
+        self.aliases
+            .get(&id)
+            .map(String::as_str)
+            .ok_or_else(|| error(LogicErrorCode::InvalidReference, "$", None))
     }
 
     /// 未知绑定返回 `invalid_reference`；与 TS 端 `ref` 闭包语义一致。
     fn reference(&self, id: &Value) -> Result<&str, LogicError> {
-        serde_json::from_value::<Uuid>(id.clone())
-            .ok()
-            .and_then(|id| self.aliases.get(&id).map(String::as_str))
+        id.as_str()
+            .and_then(|raw| Uuid::parse_str(raw).ok())
             .ok_or_else(|| error(LogicErrorCode::InvalidReference, "$", None))
+            .and_then(|id| self.bound(id))
     }
 
     /// 递归渲染表达式节点；未知结构返回 `invalid_syntax`，运算符按 TS `binary` 表反查。
@@ -741,12 +748,11 @@ pub fn format_logic_text(
             formatter.bind("node", node.id(), format!("n{}", index + 1));
         }
     }
-    let id_value = |id: Uuid| serde_json::to_value(id).expect("UUID 序列化不会失败");
     formatter.lines.push(String::new());
     for variable in &logic.variables {
         formatter.lines.push(format!(
             "let {}: {} = {};",
-            formatter.reference(&id_value(variable.id))?,
+            formatter.bound(variable.id)?,
             serde_json::to_value(variable.value_type)
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_string))
@@ -763,17 +769,16 @@ pub fn format_logic_text(
             if let Some(raw) = raw {
                 formatter.lines.push(format!(
                     "{keyword} {} = {};",
-                    formatter.reference(&id_value(rule.question_id))?,
+                    formatter.bound(rule.question_id)?,
                     formatter.expression(raw)?
                 ));
             }
         }
     }
     if let Some(flow) = &logic.flow {
-        formatter.lines.push(format!(
-            "entry {};",
-            formatter.reference(&id_value(flow.entry))?
-        ));
+        formatter
+            .lines
+            .push(format!("entry {};", formatter.bound(flow.entry)?));
         for node in &flow.nodes {
             match node {
                 FlowNode::Page {
@@ -783,22 +788,18 @@ pub fn format_logic_text(
                 } => {
                     let references = question_ids
                         .iter()
-                        .map(|question_id| {
-                            formatter
-                                .reference(&id_value(*question_id))
-                                .map(str::to_owned)
-                        })
+                        .map(|question_id| formatter.bound(*question_id).map(str::to_owned))
                         .collect::<Result<Vec<_>, _>>()?;
                     formatter.lines.push(format!(
                         "page {} [{}] -> {};",
-                        formatter.reference(&id_value(*id))?,
+                        formatter.bound(*id)?,
                         references.join(", "),
-                        formatter.reference(&id_value(*next))?
+                        formatter.bound(*next)?
                     ));
                 }
                 FlowNode::End { id, outcome } => formatter.lines.push(format!(
                     "end {} = {};",
-                    formatter.reference(&id_value(*id))?,
+                    formatter.bound(*id)?,
                     match outcome {
                         FlowOutcome::Complete => "complete",
                         FlowOutcome::ScreenOut => "screen_out",
@@ -809,21 +810,19 @@ pub fn format_logic_text(
                     branches,
                     otherwise,
                 } => {
-                    formatter.lines.push(format!(
-                        "branch {} {{",
-                        formatter.reference(&id_value(*id))?
-                    ));
+                    formatter
+                        .lines
+                        .push(format!("branch {} {{", formatter.bound(*id)?));
                     for branch in branches {
                         formatter.lines.push(format!(
                             "  when {} -> {};",
                             formatter.expression(&branch.when)?,
-                            formatter.reference(&id_value(branch.target))?
+                            formatter.bound(branch.target)?
                         ));
                     }
-                    formatter.lines.push(format!(
-                        "  else -> {};",
-                        formatter.reference(&id_value(*otherwise))?
-                    ));
+                    formatter
+                        .lines
+                        .push(format!("  else -> {};", formatter.bound(*otherwise)?));
                     formatter.lines.push("}".into());
                 }
             }

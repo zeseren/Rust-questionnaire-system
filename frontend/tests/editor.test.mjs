@@ -4,6 +4,7 @@ import test from 'node:test'
 import { createSurveyTemplate, surveyTemplates } from '../src/survey-templates.ts'
 import { compileDocumentLogic, compileExpression, formatLogicText } from '../src/wasm/index.ts'
 import {
+  changeConditionOperator,
   conditionExpression,
   groupExpression,
   readConditionGroup,
@@ -103,6 +104,53 @@ test('选项条件保持选项身份，数字和文本条件不互相转换', ()
   )
   assert.deepEqual(compiled.evaluate({ [address.id]: '001' }), { type: 'boolean', value: true })
   assert.deepEqual(compiled.evaluate({ [address.id]: '1' }), { type: 'boolean', value: false })
+})
+
+test('切换同类运算符保留数字阈值、文本和选项身份', () => {
+  const document = createSurveyTemplate('registration')
+  const [number, choice, text] = document.questions
+  const cases = [
+    {
+      question: number,
+      condition: { questionId: number.id, operator: 'ge', value: '18.00', valueType: 'number' },
+      operator: 'gt',
+      answers: [
+        [18, false],
+        [19, true],
+      ],
+    },
+    {
+      question: text,
+      condition: { questionId: text.id, operator: 'eq', value: '001', valueType: 'text' },
+      operator: 'ne',
+      answers: [
+        ['001', false],
+        ['1', true],
+      ],
+    },
+    {
+      question: choice,
+      condition: { questionId: choice.id, operator: 'selected', value: choice.options[1].id },
+      operator: 'not_selected',
+      answers: [
+        [choice.options[0].id, true],
+        [choice.options[1].id, false],
+      ],
+    },
+  ]
+  for (const item of cases) {
+    const changed = changeConditionOperator(item.condition, item.operator, item.question)
+    assert.equal(changed.value, item.condition.value, '只修改运算符不能改写已有操作数')
+    const compiled = compileExpression(
+      { dsl_version: 1, semantics_version: 1, expression: conditionExpression(changed) },
+      document.questions,
+    )
+    for (const [answer, expected] of item.answers)
+      assert.deepEqual(compiled.evaluate({ [item.question.id]: answer }), {
+        type: 'boolean',
+        value: expected,
+      })
+  }
 })
 
 test('文本辅助忽略注释和字符串中的伪绑定，按 Unicode 列定位', () => {

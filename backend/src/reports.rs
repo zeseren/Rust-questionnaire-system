@@ -316,12 +316,14 @@ async fn response_detail(
     let document: Document = serde_json::from_value(version.document)?;
     let evaluator = report_evaluator(&document)?;
     let row = snapshot_row(
-        &document,
         evaluator.as_ref(),
         row.id,
         row.submitted_at,
         serde_json::from_value(row.answers)?,
     )?;
+    let question_states = row
+        .question_states
+        .unwrap_or_else(|| plain_question_states(&document, &row.answers));
     Ok(Json(ResponseDetail {
         receipt_id: row.receipt_id,
         version_id: version.id,
@@ -330,7 +332,7 @@ async fn response_detail(
         timezone: TIMEZONE,
         document,
         answers: row.answers,
-        question_states: row.question_states,
+        question_states,
     }))
 }
 
@@ -557,7 +559,7 @@ struct SnapshotRow {
     receipt_id: Uuid,
     submitted_at: DateTime<Utc>,
     answers: BTreeMap<Uuid, Value>,
-    question_states: BTreeMap<Uuid, AnswerState>,
+    question_states: Option<BTreeMap<Uuid, AnswerState>>,
 }
 
 fn report_evaluator(document: &Document) -> AppResult<Option<FlowEvaluator<'_>>> {
@@ -570,7 +572,6 @@ fn report_evaluator(document: &Document) -> AppResult<Option<FlowEvaluator<'_>>>
 }
 
 fn snapshot_row(
-    document: &Document,
     evaluator: Option<&FlowEvaluator<'_>>,
     receipt_id: Uuid,
     submitted_at: DateTime<Utc>,
@@ -580,23 +581,9 @@ fn snapshot_row(
         let result = evaluator
             .evaluate_stored(answers)
             .map_err(|error| AppError::internal(error))?;
-        (result.answers, result.question_states)
+        (result.answers, Some(result.question_states))
     } else {
-        let states = document
-            .questions
-            .iter()
-            .map(|question| {
-                (
-                    question.id,
-                    if answers.contains_key(&question.id) {
-                        AnswerState::Answered
-                    } else {
-                        AnswerState::Unanswered
-                    },
-                )
-            })
-            .collect();
-        (answers, states)
+        (answers, None)
     };
     Ok(SnapshotRow {
         receipt_id,
@@ -604,6 +591,26 @@ fn snapshot_row(
         answers,
         question_states,
     })
+}
+
+fn plain_question_states(
+    document: &Document,
+    answers: &BTreeMap<Uuid, Value>,
+) -> BTreeMap<Uuid, AnswerState> {
+    document
+        .questions
+        .iter()
+        .map(|question| {
+            (
+                question.id,
+                if answers.contains_key(&question.id) {
+                    AnswerState::Answered
+                } else {
+                    AnswerState::Unanswered
+                },
+            )
+        })
+        .collect()
 }
 
 async fn response_snapshot(
@@ -636,7 +643,7 @@ async fn response_snapshot(
     stored
         .into_iter()
         .map(|(id, submitted_at, answers)| {
-            snapshot_row(document, evaluator.as_ref(), id, submitted_at, answers.0)
+            snapshot_row(evaluator.as_ref(), id, submitted_at, answers.0)
         })
         .collect()
 }
@@ -648,7 +655,12 @@ fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<Que
         .count() as u64;
     let skipped_count = rows
         .iter()
-        .filter(|row| row.question_states.get(&question.id) == Some(&AnswerState::Skipped))
+        .filter(|row| {
+            row.question_states
+                .as_ref()
+                .and_then(|states| states.get(&question.id))
+                == Some(&AnswerState::Skipped)
+        })
         .count() as u64;
     let applicable_count = rows.len() as u64 - skipped_count;
     let is_multiple = matches!(&question.kind, QuestionKind::MultipleChoice { .. });
@@ -860,7 +872,8 @@ fn encode_csv(
             record.push(cell);
             if with_states {
                 let state = match question_states
-                    .get(&question.id)
+                    .as_ref()
+                    .and_then(|states| states.get(&question.id))
                     .ok_or_else(invalid_stored_answer)?
                 {
                     AnswerState::Answered => "已答",

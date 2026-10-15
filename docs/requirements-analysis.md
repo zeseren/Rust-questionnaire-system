@@ -580,3 +580,22 @@ release 对照均使用 stable + LLVM，仅切换 profile 配置：
 - `FlowSession` 用 `Box<Document>` 持有文档并把借用延伸为 `'static`（字段声明顺序保证 Drop 时先拆会话再释放文档），不使用 `Box::leak`，避免每次创建会话永久泄漏一份文档。
 
 本轮未重做浏览器手工冒烟、性能压测与 release 构建；既有服务与浏览器验证记录仍按原阶段解读，不据此宣称整体验收通过。本节与 §15、§23 等既有历史记录不改。
+
+## 25. 分支审查与 Rust 资源/冗余修复记录（2026-10-15）
+
+在 `wasm-dsl-unification` 分支上完成两轮审查修复：
+
+- 前端两项 P2 修复：`ConditionBuilder.vue` / `condition-builder.ts` 在同类运算符（比较类、`selected`/`not_selected`）切换时保留已有数字阈值、文本或选项身份；`json.ts` 的 `encodeAnswers` 对已规范化的原生 `number` 统一使用指数形式传输，避免 `2 ** 63` 等浮点数被展开成失真裸整数而被核心拒绝，`LosslessNumber` 仍保留原始输入词法。
+- Rust 资源、重复计算与坏气味收口：
+  1. **绑定表共享（`logic.rs` / `logic_document.rs` / `flow.rs`）**：引入 `CompilationContext`，同一文档编译时只做一次版本与绑定表构建，各 `CompiledExpression` 共享 `Arc<BTreeMap<Uuid, Binding>>`，并直接反序列化表达式 `&Value`，去掉每条表达式重建整张绑定表与 `json!` 包装深拷贝。
+  2. **消除同一文档重复编译（`domain.rs` / `flow.rs` / `logic-wasm/src/lib.rs`）**：拆出 `validate_draft_fields`、`validate_draft_compiled`、`validate_publish_compiled` 与 `FlowEvaluator::from_compiled`，使 `validate_answers` 与 `FlowEvaluator::new` 各自只编译一次 DSL 且保持原有错误优先级；`FlowSession::evaluate_answers` 直接复用会话已持有的 `FlowEvaluator`。
+  3. **改答就地更新（`flow.rs`）**：`FlowEvent::Change` 在前置拒绝检查通过后直接就地更新 `self.inputs`、投影并清理失效答案，去掉每次改答整张答案表的无条件克隆。
+  4. **无规则报表按需状态表（`backend/src/reports.rs`）**：`SnapshotRow.question_states` 改为 `Option<BTreeMap<Uuid, AnswerState>>`，无规则问卷在批量统计与 CSV 导出时不构造状态表，仅在单条答卷详情接口按需生成 `plain_question_states`。
+  5. **边界与格式化细节收口（`identity.rs` / `logic_text.rs` / `logic-wasm/src/lib.rs` / `logic-wasm/tests/smoke.rs`）**：`identity::parse` 改用无分配字节检查判定规范小写连字符 UUID；`format_logic_text` 为具类型 `Uuid` 提供直接查别名的 `bound()`，去掉 `Uuid → Value → Uuid` 往返与绑定时的多余克隆；`logic-wasm` 的 `FlowSession` 改为单步初始化（消除 `Option`、3 处 `expect` 与自定义 `Drop`）并修正 `SAFETY` 注释，信封组装直接移入 `serde_json::Map` 避免二次 `Value` 克隆；修复 `smoke.rs` 在 `wasm32` 目标下的两处类型错误、删除不可达 `cfg` 死分支并补齐规则引用重写断言。
+
+验证：
+
+- Rust：`cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo check --locked -p logic-wasm --tests --target wasm32-unknown-unknown` 均通过（0 warning）；`cargo test --locked --workspace` **38 项通过**。
+- 前端与 WASM 产物：`pnpm run wasm:build` 重新生成并同步 `frontend/src/wasm/pkg/` 五件套（`logic_wasm_bg.wasm` 为 1 046 295 字节），`pnpm run test:regression` **26 项通过**，`pnpm run build` 与 `pnpm run format:check` 通过。
+- WASM 线性内存核对（100 道单选题 × 50 选项 + 400 条常量表达式，独立 Node 实例）：创建 `FlowSession` 后的线性内存容量由修复前的 **108 593 152 字节（103.56 MiB）** 降至 **2 555 904 字节（2.44 MiB，下降约 42.5×）**，改答、拒绝事件回滚与快照语义一致。
+- 真实服务报表核对（PostgreSQL 18.1 + `questionnaire-api`）：62 项 HTTP 断言全部通过，覆盖无规则与有规则问卷的空统计/空 CSV、详情 `question_states`、统计 `answered`/`unanswered`/`skipped`/`applicable` 恒等式、CSV 状态列有无及归属隔离。

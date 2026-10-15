@@ -31,6 +31,35 @@ export const comparisonNames = {
   le: '小于或等于',
 } as const
 
+export function changeConditionOperator(
+  condition: SimpleCondition,
+  operator: ConditionOperator,
+  question?: Question,
+): SimpleCondition {
+  const questionId = condition.questionId
+  if (operator === 'answered' || operator === 'not_answered')
+    return { questionId, operator, value: '' }
+  if (operator === 'selected' || operator === 'not_selected') {
+    const value =
+      condition.operator === 'selected' || condition.operator === 'not_selected'
+        ? condition.value
+        : question && 'options' in question
+          ? (question.options[0]?.id ?? '')
+          : ''
+    return { questionId, operator, value }
+  }
+  const valueType = question?.type === 'text' || question?.type === 'textarea' ? 'text' : 'number'
+  const compatible =
+    Object.hasOwn(comparisonNames, condition.operator) &&
+    (condition.valueType ?? 'number') === valueType
+  return {
+    questionId,
+    operator,
+    valueType,
+    value: compatible ? condition.value : valueType === 'number' ? '0' : '',
+  }
+}
+
 function record(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)

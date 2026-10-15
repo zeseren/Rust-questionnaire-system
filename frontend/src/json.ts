@@ -19,19 +19,17 @@ export function copyPayload<T>(value: T): T {
 }
 
 /**
- * 规则求值/事件载荷的答案编码：原生 number 先转成最短词法表示的
- * `LosslessNumber`，避免 `String(1e20)` 展开成超出 u64 精度校验的裸整数
- * （与提交载荷的指数化策略一致；整数超精度时仍会被核心侧词法校验拒绝）。
+ * 规则求值/事件载荷的答案编码：原生 number 已是浮点数，用指数形式保留其数值，
+ * 不把十进制显示值重新当作原始裸整数校验。LosslessNumber 仍保留输入原文，
+ * 由核心侧拒绝超范围或无法精确表示的原始整数。
  */
 export function encodeAnswers(value: unknown): string {
-  const shortest = (raw: number): LosslessNumber => {
+  const normalized = (raw: number): LosslessNumber => {
     if (!Number.isFinite(raw)) throw new Error('答案数字必须是有限值')
-    const plain = String(raw)
-    const exponential = raw.toExponential()
-    return new LosslessNumber(exponential.length < plain.length ? exponential : plain)
+    return new LosslessNumber(raw.toExponential())
   }
   const rewrite = (input: unknown): unknown => {
-    if (typeof input === 'number') return shortest(input)
+    if (typeof input === 'number') return normalized(input)
     if (Array.isArray(input)) return input.map(rewrite)
     if (input instanceof LosslessNumber || input === null || typeof input !== 'object') return input
     return Object.fromEntries(Object.entries(input).map(([key, item]) => [key, rewrite(item)]))

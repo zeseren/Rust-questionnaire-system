@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
@@ -263,7 +264,7 @@ enum NodeKind {
 #[derive(Debug)]
 pub struct CompiledExpression {
     root: Node,
-    bindings: BTreeMap<Uuid, Binding>,
+    bindings: Arc<BTreeMap<Uuid, Binding>>,
     dependencies: BTreeSet<Uuid>,
     variable_dependencies: BTreeSet<Uuid>,
 }
@@ -343,110 +344,139 @@ pub fn compile_expression(
     raw: &Value,
     questions: &[Question],
 ) -> Result<CompiledExpression, LogicError> {
-    compile_with_variables(raw, questions, &BTreeMap::new())
-}
-
-pub(crate) fn compile_with_variables(
-    raw: &Value,
-    questions: &[Question],
-    variables: &BTreeMap<Uuid, LogicValueType>,
-) -> Result<CompiledExpression, LogicError> {
     // 在递归反序列化前限制 AST 深度，避免无效规则构造深层递归类型。
     check_raw_budget(raw.get("expression"), 1, &mut 0)?;
     let program =
         Program::deserialize(raw).map_err(|_| error(LogicErrorCode::InvalidSyntax, "$", None))?;
-    for version in [&program.dsl_version, &program.semantics_version] {
-        // 浏览器将 JSON 的 1 与 1.0 解析成同一值；版本按非负整数值检查。
-        let value = version
-            .as_f64()
-            .filter(|value| {
-                value.is_finite()
-                    && *value >= 0.0
-                    && *value <= f64::from(u32::MAX)
-                    && positive_zero(value.fract()).total_cmp(&0.0).is_eq()
-            })
-            .ok_or_else(|| error(LogicErrorCode::InvalidSyntax, "$", None))?;
-        if !value.total_cmp(&1.0).is_eq() {
-            return Err(error(LogicErrorCode::UnsupportedVersion, "$", None));
-        }
-    }
-    if questions.len() > MAX_QUESTIONS {
-        return Err(error(LogicErrorCode::LimitExceeded, "$.questions", None));
-    }
-    let mut bindings = BTreeMap::new();
-    for question in questions {
-        let (value_type, options) = match &question.kind {
-            QuestionKind::SingleChoice { options } => (LogicValueType::Choice, options.as_slice()),
-            QuestionKind::MultipleChoice { options, .. } => {
-                (LogicValueType::Choices, options.as_slice())
+    CompilationContext::new(
+        &program.dsl_version,
+        &program.semantics_version,
+        questions,
+        &BTreeMap::new(),
+    )?
+    .compile_parsed(program.expression)
+}
+
+/// 同一文档只构建一次绑定；表达式共享只读表，不复制题目与选项集合。
+pub(crate) struct CompilationContext {
+    bindings: Arc<BTreeMap<Uuid, Binding>>,
+}
+
+impl CompilationContext {
+    pub(crate) fn new(
+        dsl_version: &Number,
+        semantics_version: &Number,
+        questions: &[Question],
+        variables: &BTreeMap<Uuid, LogicValueType>,
+    ) -> Result<Self, LogicError> {
+        for version in [dsl_version, semantics_version] {
+            // 浏览器将 JSON 的 1 与 1.0 解析成同一值；版本按非负整数值检查。
+            let value = version
+                .as_f64()
+                .filter(|value| {
+                    value.is_finite()
+                        && *value >= 0.0
+                        && *value <= f64::from(u32::MAX)
+                        && positive_zero(value.fract()).total_cmp(&0.0).is_eq()
+                })
+                .ok_or_else(|| error(LogicErrorCode::InvalidSyntax, "$", None))?;
+            if !value.total_cmp(&1.0).is_eq() {
+                return Err(error(LogicErrorCode::UnsupportedVersion, "$", None));
             }
-            QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => {
-                (LogicValueType::Text, &[][..])
+        }
+        if questions.len() > MAX_QUESTIONS {
+            return Err(error(LogicErrorCode::LimitExceeded, "$.questions", None));
+        }
+        let mut bindings = BTreeMap::new();
+        for question in questions {
+            let (value_type, options) = match &question.kind {
+                QuestionKind::SingleChoice { options } => {
+                    (LogicValueType::Choice, options.as_slice())
+                }
+                QuestionKind::MultipleChoice { options, .. } => {
+                    (LogicValueType::Choices, options.as_slice())
+                }
+                QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => {
+                    (LogicValueType::Text, &[][..])
+                }
+                QuestionKind::Number { .. } | QuestionKind::Rating { .. } => {
+                    (LogicValueType::Number, &[][..])
+                }
+            };
+            let ids: BTreeSet<_> = options.iter().map(|option| option.id).collect();
+            if question.id.is_nil()
+                || bindings.contains_key(&question.id)
+                || ids.len() != options.len()
+                || ids.contains(&Uuid::nil())
+            {
+                return Err(error(
+                    LogicErrorCode::InvalidReference,
+                    "$.questions",
+                    Some(question.id),
+                ));
             }
-            QuestionKind::Number { .. } | QuestionKind::Rating { .. } => {
-                (LogicValueType::Number, &[][..])
+            if options.len() > MAX_CHOICES {
+                return Err(error(
+                    LogicErrorCode::LimitExceeded,
+                    "$.questions",
+                    Some(question.id),
+                ));
             }
-        };
-        let ids: BTreeSet<_> = options.iter().map(|option| option.id).collect();
-        if question.id.is_nil()
-            || bindings.contains_key(&question.id)
-            || ids.len() != options.len()
-            || ids.contains(&Uuid::nil())
-        {
-            return Err(error(
-                LogicErrorCode::InvalidReference,
-                "$.questions",
-                Some(question.id),
-            ));
+            bindings.insert(
+                question.id,
+                Binding {
+                    value_type,
+                    options: ids,
+                    variable: false,
+                },
+            );
         }
-        if options.len() > MAX_CHOICES {
-            return Err(error(
-                LogicErrorCode::LimitExceeded,
-                "$.questions",
-                Some(question.id),
-            ));
+        for (id, value_type) in variables {
+            if bindings.contains_key(id) {
+                return Err(error(LogicErrorCode::InvalidReference, "$.variables", None));
+            }
+            bindings.insert(
+                *id,
+                Binding {
+                    value_type: *value_type,
+                    options: BTreeSet::new(),
+                    variable: true,
+                },
+            );
         }
-        bindings.insert(
-            question.id,
-            Binding {
-                value_type,
-                options: ids,
-                variable: false,
-            },
-        );
+        Ok(Self {
+            bindings: Arc::new(bindings),
+        })
     }
-    for (id, value_type) in variables {
-        if bindings.contains_key(id) {
-            return Err(error(LogicErrorCode::InvalidReference, "$.variables", None));
-        }
-        bindings.insert(
-            *id,
-            Binding {
-                value_type: *value_type,
-                options: BTreeSet::new(),
-                variable: true,
-            },
-        );
+
+    pub(crate) fn compile(&self, raw: &Value) -> Result<CompiledExpression, LogicError> {
+        check_raw_budget(Some(raw), 1, &mut 0)?;
+        let expression = Expression::deserialize(raw)
+            .map_err(|_| error(LogicErrorCode::InvalidSyntax, "$", None))?;
+        self.compile_parsed(expression)
     }
-    let mut dependencies = BTreeSet::new();
-    let root = compile_node(
-        program.expression,
-        "$.expression".into(),
-        &bindings,
-        &mut dependencies,
-    )?;
-    let variable_dependencies = dependencies
-        .iter()
-        .copied()
-        .filter(|id| bindings[id].variable)
-        .collect();
-    dependencies.retain(|id| !bindings[id].variable);
-    Ok(CompiledExpression {
-        root,
-        bindings,
-        dependencies,
-        variable_dependencies,
-    })
+
+    fn compile_parsed(&self, expression: Expression) -> Result<CompiledExpression, LogicError> {
+        let mut dependencies = BTreeSet::new();
+        let root = compile_node(
+            expression,
+            "$.expression".into(),
+            &self.bindings,
+            &mut dependencies,
+        )?;
+        let variable_dependencies = dependencies
+            .iter()
+            .copied()
+            .filter(|id| self.bindings[id].variable)
+            .collect();
+        dependencies.retain(|id| !self.bindings[id].variable);
+        Ok(CompiledExpression {
+            root,
+            bindings: Arc::clone(&self.bindings),
+            dependencies,
+            variable_dependencies,
+        })
+    }
 }
 
 pub(crate) fn check_raw_budget(

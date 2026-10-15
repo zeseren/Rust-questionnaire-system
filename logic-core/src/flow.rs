@@ -3,14 +3,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::domain::{Answer, Document, Question, QuestionKind, canonical_number};
 use crate::logic::{
-    CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType,
-    compile_with_variables, error,
+    CompilationContext, CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType,
+    error,
 };
 use crate::logic_document::{CompiledDocumentLogic, DocumentLogic, rewrite};
 
@@ -219,6 +219,7 @@ pub(crate) fn compile_flow(
     definition: &DocumentLogic,
     logic: &CompiledDocumentLogic,
     questions: &[Question],
+    context: &CompilationContext,
 ) -> Result<CompiledFlow, LogicError> {
     let invalid = || error(LogicErrorCode::InvalidFlow, "$.logic.flow", None);
     if flow.nodes.len() > 256 {
@@ -296,11 +297,6 @@ pub(crate) fn compile_flow(
         common.insert(index);
         dominators.push(common);
     }
-    let variable_types = definition
-        .variables
-        .iter()
-        .map(|variable| (variable.id, variable.value_type))
-        .collect();
     let raw_variables: BTreeMap<_, _> = definition
         .variables
         .iter()
@@ -358,8 +354,8 @@ pub(crate) fn compile_flow(
                 let mut guards = Vec::with_capacity(branches.len());
                 for (branch_index, branch) in branches.iter().enumerate() {
                     let path = format!("$.logic.flow.nodes[{index}].branches[{branch_index}].when");
-                    let program = json!({"dsl_version": definition.dsl_version, "semantics_version": definition.semantics_version, "expression": branch.when});
-                    let expression = compile_with_variables(&program, questions, &variable_types)
+                    let expression = context
+                        .compile(&branch.when)
                         .map_err(|failure| failure.relocate(&path))?;
                     if expression.value_type() != LogicValueType::Boolean {
                         return Err(error(LogicErrorCode::TypeMismatch, &path, None));
@@ -547,23 +543,28 @@ impl<'a> FlowEvaluator<'a> {
             variables: Vec::new(),
             rules: Vec::new(),
         };
-        let mut logic = document
+        let logic = document
             .logic
             .as_ref()
             .unwrap_or(&empty)
             .compile(&document.questions)?;
         document
-            .validate_draft()
+            .validate_draft_fields()
             .map_err(|failure| error(LogicErrorCode::InvalidFlow, "$", failure.question_id))?;
+        Ok(Self::from_compiled(document, logic))
+    }
+
+    /// 调用方须先校验同一文档的草稿字段，并传入该文档的编译结果。
+    pub(crate) fn from_compiled(document: &'a Document, mut logic: CompiledDocumentLogic) -> Self {
         let flow = logic
             .flow
             .take()
             .unwrap_or_else(|| CompiledFlow::implicit(&document.questions));
-        Ok(Self {
+        Self {
             document,
             logic,
             flow,
-        })
+        }
     }
 
     /// 从入口重建最终答卷，不接受客户端历史或预先计算的可见题目。
@@ -843,6 +844,14 @@ impl<'a> FlowSession<'a> {
         })
     }
 
+    /// 复用已绑定的求值器重建最终答卷，不读取或修改会话的输入与历史。
+    ///
+    /// # 错误
+    /// 与独立求值器相同，拒绝无效答案、不适用答案、未决条件或筛选结束。
+    pub fn evaluate_answers(&self, answers: Vec<Answer>) -> Result<EvaluatedResponse, LogicError> {
+        self.evaluator.evaluate_answers(answers)
+    }
+
     /// 返回独立的只读快照，外部修改不会改变会话。
     #[must_use]
     pub fn snapshot(&self) -> FlowSnapshot {
@@ -894,17 +903,17 @@ impl<'a> FlowSession<'a> {
                 {
                     return Err(invalid());
                 }
-                let mut inputs = self.inputs.clone();
-                inputs.insert(question_id, value);
-                let projection = self.evaluator.project(&inputs);
-                self.cleared = inputs
+                // 拒绝检查已结束；投影没有可恢复失败，不需要复制输入表来回滚。
+                self.inputs.insert(question_id, value);
+                let projection = self.evaluator.project(&self.inputs);
+                self.cleared = self
+                    .inputs
                     .keys()
                     .filter(|id| !projection.visible.contains(id))
                     .copied()
                     .collect();
-                inputs.retain(|id, _| projection.visible.contains(id));
+                self.inputs.retain(|id, _| projection.visible.contains(id));
                 self.history.retain(|index| projection.path.contains(index));
-                self.inputs = inputs;
                 self.projection = projection;
             }
             FlowEvent::Previous => {

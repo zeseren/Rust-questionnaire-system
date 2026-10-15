@@ -10,12 +10,12 @@
  * 永久泄漏一份文档），再把该引用的生命周期安全地延伸为 `'static` 交给核心
  * 会话。安全性由三条不变量保证：
  *
- * 1. `Box` 分配后地址不再变化：`FlowSession` 本身被 wasm-bindgen 放在堆上且
- *    本 crate 从不移动 `document` 字段（无 `mem::replace`/移动构造）；
- * 2. 字段声明顺序 `session` 在 `document` 之前，Drop 时先拆掉会话再释放文档，
+ * 1. 堆分配地址稳定：移动 `Box<Document>` 只搬移指针而不移动堆上的 `Document`，
+ *    且本 crate 从不重写或提前释放 `document` 字段；
+ * 2. 字段声明顺序 `session` 在 `document` 之前，Drop 时先释放会话再释放文档，
  *    借用永远不悬空；
- * 3. 会话只在 `new` / `dispatch` / `snapshot` 内使用，期间 `self` 可变/不可变
- *    借用始终有效。
+ * 3. 会话只在 `new` / `dispatch` / `snapshot` / `evaluate_answers` 内使用，
+ *    期间 `self` 可变/不可变借用始终有效。
  *
  * 仅在 wasm32 目标导出：wasm-bindgen 的类导出 wrapper 在原生目标会 panic
  * （“function not implemented on non-wasm32 targets”），纯函数无此限制。

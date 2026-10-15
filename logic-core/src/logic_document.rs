@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::domain::{Question, QuestionKind};
 use crate::logic::{
-    CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType, check_raw_budget,
-    compile_with_variables, error,
+    CompilationContext, CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType,
+    check_raw_budget, error,
 };
 
 /// 可持久化的规则包；表达式结构由编译器严格检查。
@@ -248,13 +248,18 @@ impl DocumentLogic {
             }
             types.insert(variable.id, variable.value_type);
         }
+        // 即使规则包为空，也必须检查版本和题目绑定。
+        let context = CompilationContext::new(
+            &self.dsl_version,
+            &self.semantics_version,
+            questions,
+            &types,
+        )?;
         let compile = |expression: &Value, path: &str| {
-            let program = json!({ "dsl_version": self.dsl_version, "semantics_version": self.semantics_version, "expression": expression });
-            compile_with_variables(&program, questions, &types)
+            context
+                .compile(expression)
                 .map_err(|failure| failure.relocate(path))
         };
-        // 即使规则包为空，也必须检查版本和题目绑定。
-        compile(&json!({ "op": "boolean", "value": true }), "$.logic")?;
         let mut variables = BTreeMap::new();
         let mut variable_paths = BTreeMap::new();
         for (index, variable) in self.variables.iter().enumerate() {
@@ -362,7 +367,9 @@ impl DocumentLogic {
             flow: None,
         };
         if let Some(flow) = &self.flow {
-            compiled.flow = Some(crate::flow::compile_flow(flow, self, &compiled, questions)?);
+            compiled.flow = Some(crate::flow::compile_flow(
+                flow, self, &compiled, questions, &context,
+            )?);
         }
         Ok(compiled)
     }

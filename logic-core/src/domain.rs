@@ -248,6 +248,17 @@ impl Document {
     /// # Errors
     /// 超过容量、文本含空字符、出现空或重复 ID、数值边界非有限时返回可定位的错误。
     pub fn validate_draft(&self) -> Result<(), ValidationError> {
+        self.validate_draft_compiled().map(|_| ())
+    }
+
+    fn validate_draft_compiled(&self) -> Result<Option<CompiledDocumentLogic>, ValidationError> {
+        self.validate_draft_fields()?;
+        self.compile_logic()
+            .map_err(|error| ValidationError::new(error.question_id, error.to_string()))
+    }
+
+    // 独立流程入口先编译规则，再复用字段校验，保持其原有错误优先级。
+    pub(crate) fn validate_draft_fields(&self) -> Result<(), ValidationError> {
         check_length(&self.title, MAX_DOCUMENT_TITLE_LENGTH, None, "问卷标题")?;
         check_length(&self.description, MAX_TEXT_LENGTH, None, "调查说明")?;
         check_length(&self.purpose, MAX_TEXT_LENGTH, None, "收集目的")?;
@@ -319,8 +330,6 @@ impl Document {
                 }
             }
         }
-        self.compile_logic()
-            .map_err(|error| ValidationError::new(error.question_id, error.to_string()))?;
         Ok(())
     }
 
@@ -343,7 +352,11 @@ impl Document {
     /// # Errors
     /// 草稿不合法、内容未补全、范围矛盾或题型没有合法答案时返回错误。
     pub fn validate_publish(&self) -> Result<(), ValidationError> {
-        self.validate_draft()?;
+        self.validate_publish_compiled().map(|_| ())
+    }
+
+    fn validate_publish_compiled(&self) -> Result<Option<CompiledDocumentLogic>, ValidationError> {
+        let logic = self.validate_draft_compiled()?;
         // 筛选结果的保存与账号限次策略尚未确定，暂不发布包含筛选结束的流程。
         if self
             .logic
@@ -427,7 +440,7 @@ impl Document {
                 }
             }
         }
-        Ok(())
+        Ok(logic)
     }
 
     /// 按最坏情况估算一次完整提交的 JSON 字节数。
@@ -511,10 +524,9 @@ impl Document {
         &self,
         answers: Vec<Answer>,
     ) -> Result<BTreeMap<Uuid, Value>, ValidationError> {
-        self.validate_publish()?;
-        if self.logic.is_some() {
-            return FlowEvaluator::new(self)
-                .and_then(|evaluator| evaluator.evaluate_answers(answers))
+        if let Some(logic) = self.validate_publish_compiled()? {
+            return FlowEvaluator::from_compiled(self, logic)
+                .evaluate_answers(answers)
                 .map(|result| result.answers)
                 .map_err(|error| ValidationError::new(error.question_id, error.to_string()));
         }

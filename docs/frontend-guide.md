@@ -87,7 +87,7 @@
 
 前端包管理器固定为 pnpm（版本见 `frontend/package.json` 的 `packageManager`），锁文件为 `frontend/pnpm-lock.yaml`；不要使用 npm 或重建 `package-lock.json`。自动化测试沿用 Node 内置运行器；实际联调证据与未覆盖范围见 [实施记录](requirements-analysis.md#12-前端-mvp-实施与验证记录)。
 
-DSL 基础计划已完成，报表页展示适用未答与规则跳过。编辑页的“规则与跳题”以可视化配置为默认入口，分为题目规则、计算变量和页面流程。常用条件可直接选择题目、比较方式和选项，支持全部/任一条件组合；显隐与动态必填只列出前面的题目，答案约束还可引用本题。变量、嵌套计算等表达式继续使用高级配置，切换不会自动改写已有表达式。点击“定位配置”会打开对应分类并聚焦错误的变量、规则或流程节点；删除题目、选项或节点后不会静默放宽依赖。
+DSL 基础计划已完成，报表页展示适用未答与规则跳过。编辑页的“规则与跳题”以可视化配置为默认入口，分为题目规则、计算变量和页面流程。常用条件可直接选择题目、比较方式和选项，支持全部/任一条件组合；同类运算符之间切换保留已有数字阈值、文本或选项身份，操作数类型变化时才初始化新值。显隐与动态必填只列出前面的题目，答案约束还可引用本题。变量、嵌套计算等表达式继续使用高级配置，切换不会自动改写已有表达式。点击“定位配置”会打开对应分类并聚焦错误的变量、规则或流程节点；删除题目、选项或节点后不会静默放宽依赖。
 
 配置流程可从“每题一页”或一个页面开始，再添加分支；流程概览展示真实出口，点击节点即可定位配置。在“题目归属”中分配题目，每题恰好属于一页，页面拼接顺序须与题目顺序一致。出口只允许前往后续节点；分支按条件顺序匹配，并保留默认出口。入口须为第一个页面。新建题目自动加入最后一个页面，复制单题保留规则和页面归属；移动题目或节点后需要重新检查配置。包含筛选结束 `screen_out` 的问卷只能预览，暂不可发布。
 
@@ -114,7 +114,7 @@ DSL 基础计划已完成，报表页展示适用未答与规则跳过。编辑�
 | `ready` | 引擎就绪 Promise；包装在模块顶层 await 它，导入方可以直接同步调用 |
 
 - 错误类仍是 UI 契约：`logic.ts` 只保留 `LogicError` / `LogicTextError` 与稳定错误码文案，界面按 `code` 分支、按 `message` 展示。
-- 数字精度：入参经 `json.ts` 的 `encodeAnswers` 把 JS `number` 还原成最短词法表示（普通写法与指数写法取更短者），`1e20` 不会在过边界前被展开成超范围裸整数；出参只把领域层已规范化的结果转回 `number`。
+- 数字精度：`json.ts` 的 `encodeAnswers` 将已规范化的 JS `number` 用指数形式传输，避免把浮点数的十进制显示值重新作为原始裸整数校验；`LosslessNumber` 保留输入原文，核心仍拒绝超范围或失真的原始整数。出参只把领域层已规范化的结果转回 `number`；该策略不能恢复客户端此前已经丢失的精度。
 - 运行环境：Vite/浏览器走 wasm-pack 的 bundler 胶水（`pkg/logic_wasm.js`）；`node --test` 走 `pkg/logic_wasm_bg.js` + `readFileSync` 手动实例化——bundler 产物按打包器契约生成，既不提供 `initSync`，其 `.wasm` 静态导入也只有打包器能解析。
 - 产物与重建：`frontend/src/wasm/pkg/` 的五件套（`logic_wasm.js`、`logic_wasm_bg.js`、`logic_wasm_bg.wasm`、`logic_wasm.d.ts`、`logic_wasm_bg.wasm.d.ts`）入库。改动 `logic-core/` 或 `logic-wasm/` 后在 `frontend/` 运行 `pnpm run wasm:build`（即 `wasm-pack build ../logic-wasm --target bundler --release --no-opt` 后由 `scripts/copy-wasm.mjs` 同步五件套）；需要 Rust 工具链 + `wasm32-unknown-unknown` target + wasm-pack 0.15。只改前端时直接用入库产物，不需要 Rust。
-- 测试：`frontend/tests/` 中的 `logic`、`logic-text`、`document-logic`、`flow`、`flow-inputs` 等文件改从 `src/wasm/index.ts` 导入，断言不变。共享样例仍是唯一语义契约，只是从「双实现对照」变成「单实现双端回归」；`node --test` 与浏览器共用同一份包装。
+- 测试：`frontend/tests/` 中的 `logic`、`logic-text`、`document-logic`、`flow`、`flow-inputs` 等文件从 `src/wasm/index.ts` 导入，加载真实入库的 `.wasm`，不使用 TS 镜像或引擎替身。共享样例确认单实现双端的一致性，另保留编辑器操作数切换和规范化数字复用的缺陷回归。Rust 原生目标不导出 WASM `FlowSession` 类，其原生测试不能代替该类的 JS/WASM 边界验证。

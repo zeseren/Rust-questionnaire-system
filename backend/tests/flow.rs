@@ -217,6 +217,22 @@ fn 最终提交共享样例拒绝路径外输入并重建适用性() {
         let result = FlowEvaluator::new(&document)
             .unwrap()
             .evaluate_answers(answers.clone());
+        let mut session = FlowSession::new(&document).unwrap();
+        // 会话尚未前进且保留非法输入；最终答案重建不能信任或修改这份交互状态。
+        session
+            .dispatch(FlowEvent::Change {
+                question_id: document.questions[0].id,
+                value: json!({"非法": "输入"}),
+            })
+            .unwrap();
+        let before = serde_json::to_value(session.snapshot()).unwrap();
+        let reconstructed = session.evaluate_answers(answers.clone());
+        assert_eq!(
+            serde_json::to_value(reconstructed).unwrap(),
+            serde_json::to_value(&result).unwrap(),
+            "同一文档的最终重建不受当前会话影响"
+        );
+        assert_eq!(serde_json::to_value(session.snapshot()).unwrap(), before);
         let actual = match result {
             Ok(value) => {
                 // 同时守住 HTTP 实际调用的领域入口，避免只测纯引擎却遗漏提交接线。

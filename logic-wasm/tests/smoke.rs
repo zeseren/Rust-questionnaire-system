@@ -1,6 +1,6 @@
 //! 原生冒烟测试：不走 wasm 目标，直接调用与 `#[wasm_bindgen]` 导出完全相同的
-//! 函数体（wasm-bindgen 宏在原生目标下编译为普通函数/普通方法，代码路径不变，
-//! 因此无需 `cfg` 分支即可覆盖全部导出）。样例取自 `fixtures/survey-logic/texts.json`
+//! 纯函数体（wasm-bindgen 宏在原生目标下编译为普通函数，代码路径不变；
+//! `FlowSession` 类导出仅限 `wasm32` 目标）。样例取自 `fixtures/survey-logic/texts.json`
 //! 的第一个 `format_cases` 条目，保证与双端回归共用同一语义契约。
 
 use questionnaire_logic::domain::{Answer, Document, FlowEvaluator};
@@ -174,6 +174,14 @@ fn 重写问卷身份后题目标识全部更新() {
         renewed["questions"][0]["id"], item["questions"][0]["id"],
         "题目身份应被重写"
     );
+    assert_eq!(
+        renewed["logic"]["rules"][0]["question_id"], renewed["questions"][1]["id"],
+        "规则引用必须跟随题目身份重写"
+    );
+    assert!(
+        !output.contains(item["questions"][1]["id"].as_str().unwrap()),
+        "旧题目身份不应残留在逻辑引用里"
+    );
 }
 
 // 填写会话仅导出于 wasm32 目标（wasm-bindgen 类 wrapper 原生 panic），
@@ -210,15 +218,10 @@ fn 填写会话快照与事件信封可解析() {
     // 非法事件 JSON 必须给出 error.code。
     let invalid: Value = serde_json::from_str(&session.dispatch("{ 坏 JSON".to_string())).unwrap();
     assert!(invalid["error"]["code"].is_string(), "{invalid}");
-    // 非法文档必须以 Err(JSON 字符串) 拒绝。wasm-bindgen 的 `Result::Err`
-    // 载荷在原生目标是 `JsValue::NULL`（无 wasm 运行时），只断言失败分支；
-    // 错误字符串内容留给 wasm 侧冒烟脚本验证。
-    #[cfg(target_arch = "wasm32")]
-    {
-        let err = logic_wasm::FlowSession::new("不是 JSON".to_string()).unwrap_err();
-        let envelope: Value = serde_json::from_str(err.as_string().unwrap()).unwrap();
-        assert!(envelope["error"]["code"].is_string(), "{envelope}");
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    assert!(logic_wasm::FlowSession::new("不是 JSON".to_string()).is_err());
+    // 非法文档必须以 Err(JSON 字符串) 拒绝。
+    let Err(err) = logic_wasm::FlowSession::new("不是 JSON".to_string()) else {
+        panic!("非法文档必须返回错误");
+    };
+    let envelope: Value = serde_json::from_str(&err.as_string().unwrap()).unwrap();
+    assert!(envelope["error"]["code"].is_string(), "{envelope}");
 }

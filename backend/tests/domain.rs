@@ -1,7 +1,8 @@
 //! 领域回归守住当前问卷的身份、答案规范化与实际提交容量。
 use questionnaire_api::domain::{
-    Answer, Choice, Document, MAX_NUMBER_JSON_BYTES, MAX_QUESTIONS, MAX_SUBMISSION_BYTES,
-    MAX_TEXT_ANSWER_LENGTH, MAX_TEXT_LENGTH, MAX_TEXTAREA_ANSWER_LENGTH, Question, QuestionKind,
+    Answer, Choice, Document, DocumentLogic, FlowEvaluator, LogicErrorCode, MAX_NUMBER_JSON_BYTES,
+    MAX_QUESTIONS, MAX_SUBMISSION_BYTES, MAX_TEXT_ANSWER_LENGTH, MAX_TEXT_LENGTH,
+    MAX_TEXTAREA_ANSWER_LENGTH, Question, QuestionKind,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -603,4 +604,63 @@ fn 数字原文长度在规范化之前检查() {
             assert_eq!(rejected.question_id, Some(id(1)));
         }
     }
+}
+
+#[test]
+fn 流程构造与提交保留各自的文档错误优先级() {
+    let mut doc = document(vec![question(
+        1,
+        false,
+        QuestionKind::Text { max_length: 10 },
+    )]);
+    doc.logic = Some(DocumentLogic {
+        flow: None,
+        dsl_version: 2.into(),
+        semantics_version: 1.into(),
+        variables: Vec::new(),
+        rules: Vec::new(),
+    });
+    doc.title = "无效\0标题".into();
+    let draft_error = doc.validate_draft().unwrap_err();
+    assert_eq!(doc.validate_publish().unwrap_err(), draft_error);
+    assert_eq!(
+        doc.validate_answers(vec![answer(99, json!(true))])
+            .unwrap_err(),
+        draft_error
+    );
+    let flow_error = FlowEvaluator::new(&doc).unwrap_err();
+    assert_eq!(flow_error.code, LogicErrorCode::UnsupportedVersion);
+    assert_eq!(flow_error.path, "$");
+    assert_eq!(flow_error.question_id, None);
+
+    doc.logic.as_mut().unwrap().dsl_version = 1.into();
+    let flow_error = FlowEvaluator::new(&doc).unwrap_err();
+    assert_eq!(flow_error.code, LogicErrorCode::InvalidFlow);
+    assert_eq!(flow_error.path, "$");
+    assert_eq!(flow_error.question_id, None);
+
+    // 草稿允许未补全的题型范围；提交必须先拒绝发布错误，再检查答案身份。
+    doc.title = "问卷".into();
+    doc.questions[0].kind = QuestionKind::Text { max_length: 0 };
+    for with_logic in [true, false] {
+        if !with_logic {
+            doc.logic = None;
+        }
+        doc.validate_draft().unwrap();
+        FlowEvaluator::new(&doc).unwrap();
+        let publish_error = doc.validate_publish().unwrap_err();
+        assert_eq!(publish_error.question_id, Some(id(1)));
+        assert_eq!(
+            doc.validate_answers(vec![answer(99, json!(true))])
+                .unwrap_err(),
+            publish_error
+        );
+    }
+    // 独立无规则构造仍检查题型容量，不能只保留逻辑编译检查。
+    doc.questions[0].kind = QuestionKind::Text {
+        max_length: MAX_TEXT_ANSWER_LENGTH + 1,
+    };
+    let flow_error = FlowEvaluator::new(&doc).unwrap_err();
+    assert_eq!(flow_error.code, LogicErrorCode::InvalidFlow);
+    assert_eq!(flow_error.question_id, Some(id(1)));
 }

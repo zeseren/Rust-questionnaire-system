@@ -4,9 +4,12 @@ use serde::{Deserialize, Deserializer, de::Error};
 use uuid::Uuid;
 
 pub(crate) fn parse(raw: &str) -> Option<Uuid> {
-    Uuid::parse_str(raw)
-        .ok()
-        .filter(|id| !id.is_nil() && id.to_string() == raw)
+    let id = Uuid::parse_str(raw).ok().filter(|id| !id.is_nil())?;
+    (raw.len() == 36
+        && raw
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f' | b'-')))
+    .then_some(id)
 }
 
 pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Uuid, D::Error> {

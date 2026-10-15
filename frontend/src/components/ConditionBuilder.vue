@@ -2,7 +2,12 @@
 <script setup lang="ts">
 import { computed, ref, useId } from 'vue'
 import type { ComputedVariable, Question } from '../types'
-import { conditionOperators, groupExpression, readConditionGroup } from '../condition-builder'
+import {
+  changeConditionOperator,
+  conditionOperators,
+  groupExpression,
+  readConditionGroup,
+} from '../condition-builder'
 import type { ConditionGroup, ConditionOperator, SimpleCondition } from '../condition-builder'
 import ExpressionEditor from './ExpressionEditor.vue'
 import SearchSelect from './SearchSelect.vue'
@@ -48,18 +53,7 @@ function edit(index: number, change: Partial<SimpleCondition>) {
 function operator(index: number, value: string) {
   const condition = group.value?.conditions[index]
   if (!condition) return
-  const question = questionOf(condition)
-  const valueType = question?.type === 'text' || question?.type === 'textarea' ? 'text' : 'number'
-  edit(index, {
-    operator: value as ConditionOperator,
-    valueType,
-    value:
-      value === 'selected' || value === 'not_selected'
-        ? (optionChoices(condition)[0]?.value ?? '')
-        : valueType === 'number'
-          ? '0'
-          : '',
-  })
+  edit(index, changeConditionOperator(condition, value as ConditionOperator, questionOf(condition)))
 }
 function add() {
   if (group.value)

@@ -19,9 +19,7 @@ use serde_json::{Value, json};
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
-use questionnaire_logic::domain::{
-    Answer, FlowEvaluator, FlowEvent, FlowSession as CoreFlowSession,
-};
+use questionnaire_logic::domain::{Answer, FlowEvent, FlowSession as CoreFlowSession};
 use questionnaire_logic::domain::{
     Document, DocumentLogic, Question, compile_expression as core_compile_expression,
     format_logic_text as core_format_logic_text, parse_logic_text as core_parse_logic_text,
@@ -103,11 +101,10 @@ pub fn compile_expression(raw_json: String, questions_json: String) -> String {
             .map_err(|error| boundary_error(format!("raw_json 不是合法 JSON：{error}")))?;
         let compiled = core_compile_expression(&raw, &questions).map_err(domain_error)?;
         let dependencies: Vec<_> = compiled.dependencies().collect();
-        serde_json::to_value(json!({
+        Ok(json!({
             "value_type": compiled.value_type(),
             "dependencies": dependencies,
         }))
-        .map_err(serde_json_to_boundary)
     })();
     envelope_generic(result)
 }
@@ -177,28 +174,20 @@ pub fn evaluate_document_logic(
 /// 永久泄漏一份文档），再把该引用的生命周期安全地延伸为 `'static` 交给核心
 /// 会话。安全性由三条不变量保证：
 ///
-/// 1. `Box` 分配后地址不再变化：`FlowSession` 本身被 wasm-bindgen 放在堆上且
-///    本 crate 从不移动 `document` 字段（无 `mem::replace`/移动构造）；
-/// 2. 字段声明顺序 `session` 在 `document` 之前，Drop 时先拆掉会话再释放文档，
+/// 1. 堆分配地址稳定：移动 `Box<Document>` 只搬移指针而不移动堆上的 `Document`，
+///    且本 crate 从不重写或提前释放 `document` 字段；
+/// 2. 字段声明顺序 `session` 在 `document` 之前，Drop 时先释放会话再释放文档，
 ///    借用永远不悬空；
-/// 3. 会话只在 `new` / `dispatch` / `snapshot` 内使用，期间 `self` 可变/不可变
-///    借用始终有效。
+/// 3. 会话只在 `new` / `dispatch` / `snapshot` / `evaluate_answers` 内使用，
+///    期间 `self` 可变/不可变借用始终有效。
 ///
 /// 仅在 wasm32 目标导出：wasm-bindgen 的类导出 wrapper 在原生目标会 panic
 /// （“function not implemented on non-wasm32 targets”），纯函数无此限制。
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct FlowSession {
-    session: Option<CoreFlowSession<'static>>,
-    document: Box<Document>,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl Drop for FlowSession {
-    fn drop(&mut self) {
-        // 先于 document 释放（字段顺序已保证，这里显式表达意图）。
-        self.session.take();
-    }
+    session: CoreFlowSession<'static>,
+    _document: Box<Document>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -208,30 +197,20 @@ impl FlowSession {
     #[wasm_bindgen(constructor)]
     pub fn new(document_json: String) -> Result<FlowSession, JsValue> {
         let document: Document = serde_json::from_str(&document_json).map_err(|error| {
-            JsValue::from_str(
-                &serde_json::to_string(&json!({
-                    "error": boundary_error(format!("document_json 不是合法 JSON：{error}"))
-                }))
-                .expect("信封序列化不会失败"),
-            )
+            JsValue::from_str(&envelope_generic(Err(boundary_error(format!(
+                "document_json 不是合法 JSON：{error}"
+            )))))
         })?;
-        let mut this = Self {
-            session: None,
-            document: Box::new(document),
-        };
-        // SAFETY：`this.document` 是 Box 指向的堆分配，地址稳定且 Drop 晚于
-        // `session`（见结构体文档），把引用生命周期延伸为 'static 不会悬空。
-        let document: &Document = unsafe { &*(&*this.document as *const Document) };
-        let session = CoreFlowSession::new(document).map_err(|error| {
-            JsValue::from_str(
-                &serde_json::to_string(&json!({
-                    "error": serde_json::to_value(&error).expect("错误序列化不会失败")
-                }))
-                .expect("信封序列化不会失败"),
-            )
-        })?;
-        this.session = Some(session);
-        Ok(this)
+        let document = Box::new(document);
+        // SAFETY：引用指向 Box 的堆分配，移动 Box 只搬指针不搬堆对象，地址始终稳定；
+        // 字段声明顺序保证 session 先于 document 释放，失败路径引用亦不逃逸。
+        let document_ref: &'static Document = unsafe { &*(&*document as *const Document) };
+        let session = CoreFlowSession::new(document_ref)
+            .map_err(|error| JsValue::from_str(&envelope_generic(Err(domain_error(error)))))?;
+        Ok(Self {
+            session,
+            _document: document,
+        })
     }
 
     /// 应用一个流程事件；事件 JSON 反序列化失败或流程拒绝时返回 error 信封。
@@ -239,26 +218,16 @@ impl FlowSession {
         let result = (|| {
             let event: FlowEvent = serde_json::from_str(&event_json)
                 .map_err(|error| boundary_error(format!("event_json 不是合法事件：{error}")))?;
-            let session = self
-                .session
-                .as_mut()
-                .expect("session 在 new 成功后始终存在");
-            session.dispatch(event).map_err(domain_error)
+            self.session.dispatch(event).map_err(domain_error)
         })();
         envelope_generic(result.map(|()| Value::Null))
     }
 
     /// 只读快照，序列化为 `{"ok":snapshot}`。
     pub fn snapshot(&self) -> String {
-        let snapshot = self
-            .session
-            .as_ref()
-            .expect("session 在 new 成功后始终存在")
-            .snapshot();
-        serde_json::to_string(&json!({
-            "ok": serde_json::to_value(&snapshot).expect("快照序列化不会失败")
-        }))
-        .expect("信封序列化不会失败")
+        envelope_generic(
+            serde_json::to_value(self.session.snapshot()).map_err(serde_json_to_boundary),
+        )
     }
 
     /// 从最终答案重建整份答卷：不读取也不修改会话当前的历史与输入。
@@ -271,8 +240,10 @@ impl FlowSession {
     pub fn evaluate_answers(&self, answers_json: String) -> String {
         let result = (|| {
             let answers: Vec<Answer> = decode(&answers_json, "answers_json")?;
-            let evaluator = FlowEvaluator::new(&self.document).map_err(domain_error)?;
-            let response = evaluator.evaluate_answers(answers).map_err(domain_error)?;
+            let response = self
+                .session
+                .evaluate_answers(answers)
+                .map_err(domain_error)?;
             serde_json::to_value(&response).map_err(serde_json_to_boundary)
         })();
         envelope_generic(result)
@@ -283,10 +254,11 @@ impl FlowSession {
 /// serde 序列化，边界错误由 `boundary_error` 构造），成功值同样为 Value；
 /// 收口到一处保证 `{"ok":…} | {"error":…}` 的形状唯一。
 fn envelope_generic(result: Result<Value, Value>) -> String {
-    match result {
-        Ok(value) => serde_json::to_string(&json!({ "ok": value })).expect("信封序列化不会失败"),
-        Err(error) => {
-            serde_json::to_string(&json!({ "error": error })).expect("信封序列化不会失败")
-        }
-    }
+    let (key, value) = match result {
+        Ok(value) => ("ok", value),
+        Err(error) => ("error", error),
+    };
+    let mut envelope = serde_json::Map::with_capacity(1);
+    envelope.insert(key.to_owned(), value);
+    Value::Object(envelope).to_string()
 }
