@@ -5,19 +5,21 @@ import { LogicError } from './logic.ts'
 import { copy } from './json.ts'
 import { numberError, numberInput } from './numbers.ts'
 import type { Inputs, InputValue } from './answers.ts'
-import type { Answer, SurveyDocument } from './types.ts'
+import type { Answer, FlowSnapshot, SurveyDocument } from './types.ts'
 
 export class FlowInputs {
   #document: SurveyDocument
   #session: FlowSession
+  #snapshot: FlowSnapshot
   #values: Inputs = {}
 
   constructor(document: SurveyDocument) {
     this.#document = copy(document)
     this.#session = new FlowSession(this.#document)
+    this.#snapshot = this.#session.snapshot()
   }
   snapshot() {
-    return this.#session.snapshot()
+    return this.#snapshot
   }
   values(): Inputs {
     // 数组值写入时已克隆，基础类型不可变，消费方只读，浅拷贝即可。
@@ -33,14 +35,17 @@ export class FlowInputs {
       // 非法数字原文作为错误类型交给引擎，不能转成 missing 或先舍入。
     }
     this.#session.dispatch({ type: 'change', question_id: questionId, value: typed })
+    this.#snapshot = this.#session.snapshot()
     this.#values[questionId] = Array.isArray(value) ? [...value] : value
-    for (const id of this.snapshot().cleared) delete this.#values[id]
+    for (const id of this.#snapshot.cleared) delete this.#values[id]
   }
   next() {
     this.#session.dispatch({ type: 'next' })
+    this.#snapshot = this.#session.snapshot()
   }
   previous() {
     this.#session.dispatch({ type: 'previous' })
+    this.#snapshot = this.#session.snapshot()
   }
   submissionAnswers(): Answer[] {
     const snapshot = this.snapshot()

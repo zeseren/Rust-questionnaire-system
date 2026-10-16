@@ -730,8 +730,14 @@ fn selection(
 }
 
 fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<LogicValue, LogicError> {
-    let path = format!("$.answers.{id}");
-    let invalid = || error(LogicErrorCode::InvalidAnswer, &path, Some(id));
+    // 仅在答案不合法时才格式化错误路径，避免成功热路径每次分配 String。
+    let invalid = || {
+        error(
+            LogicErrorCode::InvalidAnswer,
+            &format!("$.answers.{id}"),
+            Some(id),
+        )
+    };
     let Some(raw) = raw.filter(|value| !value.is_null()) else {
         return Ok(LogicValue::Missing);
     };
@@ -751,7 +757,7 @@ fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<Logic
         LogicValueType::Choice => {
             let option = raw
                 .as_str()
-                .and_then(|text| reference(text, &path).ok())
+                .and_then(crate::identity::parse)
                 .filter(|option| binding.options.contains(option))
                 .ok_or_else(invalid)?;
             Ok(LogicValue::Choice(option))
@@ -765,7 +771,7 @@ fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<Logic
             for value in values {
                 let option = value
                     .as_str()
-                    .and_then(|text| reference(text, &path).ok())
+                    .and_then(crate::identity::parse)
                     .filter(|option| binding.options.contains(option))
                     .ok_or_else(invalid)?;
                 if !options.insert(option) {

@@ -571,8 +571,9 @@ impl<'a> FlowEvaluator<'a> {
         if let Some(code) = projection.route_error {
             return Err(error(code, "$.route", None));
         }
+        let visible: BTreeSet<Uuid> = projection.visible.iter().copied().collect();
         for id in inputs.keys() {
-            if !projection.visible.contains(id) {
+            if !visible.contains(id) {
                 return Err(error(
                     LogicErrorCode::InapplicableAnswer,
                     "$.answers",
@@ -596,7 +597,7 @@ impl<'a> FlowEvaluator<'a> {
             .questions
             .iter()
             .map(|question| {
-                let state = if !projection.visible.contains(&question.id) {
+                let state = if !visible.contains(&question.id) {
                     AnswerState::Skipped
                 } else if projection.answers.contains_key(&question.id) {
                     AnswerState::Answered
@@ -619,6 +620,9 @@ impl<'a> FlowEvaluator<'a> {
 
     fn project(&self, inputs: &BTreeMap<Uuid, Value>) -> Projection {
         let mut result = Projection::default();
+        // 前置依赖规则保证：被当前表达式引用的变量所依赖的题目均已在前面求值定型，
+        // 因此同一投影过程可安全复用计算变量缓存。
+        let mut variables = BTreeMap::new();
         let mut current = 0;
         loop {
             match &self.flow.nodes[current] {
@@ -630,20 +634,17 @@ impl<'a> FlowEvaluator<'a> {
                         // 流程编译保证页面题目都来自本文档，索引不会缺失。
                         let question = self.questions[id];
                         let rule = self.logic.rule(*id);
-                        let eval = |expression: Option<&CompiledExpression>,
-                                    answers: &BTreeMap<Uuid, Value>,
-                                    default| {
-                            expression
-                                .map(|expression| {
-                                    self.logic.evaluate_expression(expression, answers)
-                                })
-                                .unwrap_or(Ok(LogicValue::Boolean(default)))
-                        };
-                        match eval(
-                            rule.and_then(|rule| rule.visible_if.as_ref()),
-                            &result.answers,
-                            true,
-                        ) {
+                        match rule
+                            .and_then(|rule| rule.visible_if.as_ref())
+                            .map(|expression| {
+                                self.logic.evaluate_expression(
+                                    expression,
+                                    &result.answers,
+                                    &mut variables,
+                                )
+                            })
+                            .unwrap_or(Ok(LogicValue::Boolean(true)))
+                        {
                             Ok(LogicValue::Boolean(true)) => {}
                             Ok(_) => continue,
                             Err(failure) => {
@@ -656,18 +657,20 @@ impl<'a> FlowEvaluator<'a> {
                         let required = if question.required {
                             Ok(LogicValue::Boolean(true))
                         } else {
-                            eval(
-                                rule.and_then(|rule| rule.required_if.as_ref()),
-                                &result.answers,
-                                false,
-                            )
+                            rule.and_then(|rule| rule.required_if.as_ref())
+                                .map(|expression| {
+                                    self.logic.evaluate_expression(
+                                        expression,
+                                        &result.answers,
+                                        &mut variables,
+                                    )
+                                })
+                                .unwrap_or(Ok(LogicValue::Boolean(false)))
                         };
                         if matches!(&required, Ok(LogicValue::Boolean(true))) {
                             result.required.push(*id);
                         }
-                        let value = match question
-                            .normalize_answer(inputs.get(id).cloned().unwrap_or(Value::Null))
-                        {
+                        let value = match question.normalize_answer(inputs.get(id)) {
                             Ok(value) => value,
                             Err(_) => {
                                 result.errors.insert(*id, LogicErrorCode::InvalidAnswer);
@@ -688,20 +691,27 @@ impl<'a> FlowEvaluator<'a> {
                         }
                         if let Some(value) = value {
                             result.answers.insert(*id, value);
-                            match eval(
-                                rule.and_then(|rule| rule.validate.as_ref()),
-                                &result.answers,
-                                true,
-                            ) {
-                                Ok(LogicValue::Boolean(true)) => {}
-                                Ok(LogicValue::Missing) => {
-                                    result.errors.insert(*id, LogicErrorCode::UnknownCondition);
-                                }
-                                Ok(_) => {
-                                    result.errors.insert(*id, LogicErrorCode::ConstraintFailed);
-                                }
-                                Err(failure) => {
-                                    result.errors.insert(*id, failure.code);
+                            if let Some(validate) = rule.and_then(|rule| rule.validate.as_ref()) {
+                                // validate 允许读取当前题自身；若校验失败将回滚当前题答案，
+                                // 因此在副本缓存上求值，仅在通过时合入主缓存。
+                                let mut trial = variables.clone();
+                                match self.logic.evaluate_expression(
+                                    validate,
+                                    &result.answers,
+                                    &mut trial,
+                                ) {
+                                    Ok(LogicValue::Boolean(true)) => {
+                                        variables = trial;
+                                    }
+                                    Ok(LogicValue::Missing) => {
+                                        result.errors.insert(*id, LogicErrorCode::UnknownCondition);
+                                    }
+                                    Ok(_) => {
+                                        result.errors.insert(*id, LogicErrorCode::ConstraintFailed);
+                                    }
+                                    Err(failure) => {
+                                        result.errors.insert(*id, failure.code);
+                                    }
                                 }
                             }
                             if result.errors.contains_key(id) {
@@ -714,7 +724,10 @@ impl<'a> FlowEvaluator<'a> {
                 Node::Branch { guards, otherwise } => {
                     let mut target = *otherwise;
                     for (guard, next) in guards {
-                        match self.logic.evaluate_expression(guard, &result.answers) {
+                        match self
+                            .logic
+                            .evaluate_expression(guard, &result.answers, &mut variables)
+                        {
                             Ok(LogicValue::Boolean(true)) => {
                                 target = *next;
                                 break;
