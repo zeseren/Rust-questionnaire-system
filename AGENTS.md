@@ -139,6 +139,19 @@ Set-Location frontend; pnpm run wasm:build   # 改动 logic-core/ 或 logic-wasm
 - **数字**：`serde_json` 特意开启 `arbitrary_precision`（保证 JSONB 数字精度），不要删掉这个 feature。
 - **响应头**：新增响应头时要保留现有的 `no-store` / `nosniff` 行为。
 
+### 边界与反过度防御原则（禁止损伤性能与引入冗余）
+
+核心准则：**信守边界（Parse, don't re-validate）**——只在最外层边界（HTTP 抽取器、WASM 字符串信封、数据库约束）做一次性解析与校验，内部模块直接信任已确立的不变量，绝不层层重复设防。
+
+- **禁止在只读路径加排他写锁或开可写事务**：只读查询（如公开读题面 `GET /api/public/surveys/{id}`、问卷/答卷/治理分页列表、统计与导出）一律使用 `RepeatableRead + ReadOnly` 快照或普通只读查询，绝不复用写路径的 `FOR UPDATE` / `FOR SHARE` 行锁阻塞正常提交。列表查询若只需标题等摘要字段，用 SQL/JSONB 字段投影（如 `cast_json_field("title")`），禁止为取单个字段把整份 `Document` JSONB 反序列化。
+- **禁止对已编译/已校验结构回头解析原始 JSON 或重复遍历**：表达式、文档规则与流程一旦经 `CompilationContext` / `DocumentLogic::compile` 编译为类型化 AST（`CompiledExpression` / `Node`），下游分析（如必读依赖 `required_reads`、常量分支检查、求值）必须直接在类型化节点或预建索引（如 `BTreeMap<Uuid, &Question>`）上运行；禁止再回头读取原始 `&Value`、重复 `Uuid::parse_str`、重复跑 `check_raw_budget` 或重复编译同一份文档。
+- **禁止用静默兜底掩盖内部不变量违约**：编译期或上游已保证存在的数据（如流程页内题目、已声明变量、已知枚举状态），直接按类型或索引访问；禁止写 `unwrap_or("")`、`unwrap_or_default()`、`else { continue }` 或在 `catch` 中伪造领域语法错误（如 `LogicError('invalid_syntax')`）来吞掉不可能发生的分支。
+- **禁止无意义的深拷贝与双次序列化**：
+  - Rust / WASM 边界使用泛型 `Envelope<T>` 单遍 `serde_json::to_string` 序列化，禁止先 `serde_json::to_value` 构造中间树再 `.to_string()`。
+  - 求值器与状态机优先借用或按需就地更新（如 `FlowEvent::Change` 就地更新输入、无规则报表在统计/CSV 中不分配状态表），禁止为“防意外修改”预先克隆整张变量表或答案表。
+  - 前端禁止对 `api()` 刚解码出的新鲜对象、即将传给 `api()` 同步序列化的请求体、或只读消费的草稿/答案表反复调用 `copy()`（`encode` + `decode` 全量 JSON 往返）。
+- **禁止保留历史兼容后门与多份真相**：项目无历史版本兼容负担，校验与幂等重放保持单一正常顺序（先校验发布合法性，再判同内容重放）；状态派生（`effective_status`）、枚举解析（`SurveyStatus` / `FillingMode`）与错误文案提取（`message()`）集中在一处复用，不在多处手写副本。
+
 ## Important Files
 
 - `backend/src/lib.rs` — 组合根：`run()`、`router()`、`AppState`、健康检查、OpenAPI 合并。先读这里。
