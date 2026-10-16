@@ -29,6 +29,7 @@ function addOption() {
     question.value.options.push({ id: crypto.randomUUID(), label: '' })
 }
 function bound(name: 'min' | 'max', event: Event) {
+  // 非 number 题型没有 min/max 字段，这里的判定同时是类型收窄，不能删。
   if (question.value.type !== 'number') return
   const value = (event.target as HTMLInputElement).value
   question.value[name] = value === '' ? null : Number(value)

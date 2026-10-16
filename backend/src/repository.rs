@@ -12,6 +12,7 @@ use crate::{
     auth,
     entities::{survey, user},
     error::{AppError, AppResult},
+    surveys::SurveyStatus,
 };
 
 pub(crate) async fn lock_user_record(tx: &DatabaseTransaction, id: Uuid) -> AppResult<user::Model> {
@@ -102,11 +103,10 @@ pub(crate) fn ensure_collecting(survey: &survey::Model, now: DateTime<Utc>) -> A
     if survey.deadline.is_some_and(|deadline| deadline <= now) {
         return Err(AppError::conflict("deadline_passed", "问卷已到截止时间"));
     }
-    match survey.status.as_str() {
-        "collecting" => Ok(()),
-        "unpublished" => Err(AppError::not_found()),
-        "closed" => Err(AppError::conflict("collection_closed", "问卷已关闭回收")),
-        "archived" => Err(AppError::conflict("archived", "问卷已归档")),
-        _ => Err(AppError::internal("invalid persisted survey state")),
+    match SurveyStatus::from_stored(&survey.status)? {
+        SurveyStatus::Collecting => Ok(()),
+        SurveyStatus::Unpublished => Err(AppError::not_found()),
+        SurveyStatus::Closed => Err(AppError::conflict("collection_closed", "问卷已关闭回收")),
+        SurveyStatus::Archived => Err(AppError::conflict("archived", "问卷已归档")),
     }
 }

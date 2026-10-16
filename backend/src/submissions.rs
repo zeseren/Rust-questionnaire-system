@@ -9,7 +9,8 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, QuerySelect, Set, TransactionTrait,
+    AccessMode, ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, IsolationLevel,
+    QueryFilter, QuerySelect, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,10 +22,11 @@ use uuid::{Uuid, Variant, Version};
 use crate::{
     AppState, auth,
     domain::{Answer, Document},
-    entities::{response, survey, version},
+    entities::{response, survey, user, version},
     error::{AppError, AppResult, ErrorResponse},
     http::{ApiJson, ApiPath},
     repository,
+    surveys::FillingMode,
 };
 
 /// 公开题面只含当前发布内容及知情提示，不包含发布者账号或草稿。
@@ -159,44 +161,71 @@ async fn submit(
     Ok((status, Json(receipt)))
 }
 
+/// 题面读取不需要写锁：只读快照保证题面、发布者状态、发布版本与是否已提交
+/// 来自同一时刻，也不与回收写入争抢 users / surveys 行锁。
 async fn read_public_survey(
     state: &AppState,
     headers: &HeaderMap,
     id: Uuid,
 ) -> AppResult<PublicSurvey> {
-    let locked = lock_public_survey(state, headers, id).await?;
-    ensure_available(&locked, Utc::now())?;
-    ensure_not_submitted(&locked).await?;
-    let version_id = locked
-        .survey
+    let tx = state
+        .db
+        .begin_with_config(
+            Some(IsolationLevel::RepeatableRead),
+            Some(AccessMode::ReadOnly),
+        )
+        .await?;
+    let survey = survey::Entity::find_by_id(id)
+        .one(&tx)
+        .await?
+        .ok_or_else(AppError::not_found)?;
+    // anonymous 与尚未设置的模式完全不解释 Cookie；只有 login_once 才要求有效会话。
+    let (mode, respondent_id) = match survey.mode.as_deref() {
+        Some("login_once") => (
+            FillingMode::LoginOnce,
+            Some(auth::authenticate(headers, &tx).await?.id),
+        ),
+        Some("anonymous") | None => (FillingMode::Anonymous, None),
+        Some(_) => return Err(AppError::internal("unknown collection mode")),
+    };
+    let publisher = user::Entity::find_by_id(survey.owner_id)
+        .one(&tx)
+        .await?
+        .ok_or_else(|| AppError::internal("survey publisher is missing"))?;
+    if publisher.disabled {
+        return Err(AppError::conflict(
+            "publisher_disabled",
+            "发布者账号暂不可用，问卷暂停接受填写",
+        ));
+    }
+    repository::ensure_collecting(&survey, Utc::now())?;
+    if let Some(respondent_id) = respondent_id {
+        ensure_not_submitted(&tx, survey.id, respondent_id).await?;
+    }
+    let version_id = survey
         .current_version_id
         .ok_or_else(|| AppError::internal("collecting survey has no version"))?;
+    // 复合外键保证发布版本属于本问卷，不再重复按 survey_id 过滤。
     let published = version::Entity::find_by_id(version_id)
-        .filter(version::Column::SurveyId.eq(id))
-        .one(&locked.tx)
+        .one(&tx)
         .await?
         .ok_or_else(|| AppError::internal("current version is missing"))?;
-    let mode = locked
-        .survey
-        .mode
-        .ok_or_else(|| AppError::internal("published survey has no mode"))?;
-    let mode_notice = match mode.as_str() {
-        "anonymous" => {
+    let mode_notice = match mode {
+        FillingMode::Anonymous => {
             "公开匿名：即使已登录，答卷也不关联账号。不承诺按自然人限次，也不宣称不可追踪或严格一人一票。"
         }
-        "login_once" => {
+        FillingMode::LoginOnce => {
             "登录限次：同一账号对本问卷跨版本最多提交一次。平台保留内部账号关联用于限次，不能称为完全匿名；发布者页面及导出不提供账号信息。"
         }
-        _ => return Err(AppError::internal("unknown collection mode")),
     };
     let document = serde_json::from_value(published.document)?;
-    locked.tx.commit().await?;
+    tx.commit().await?;
     Ok(PublicSurvey {
         survey_id: id,
         version_id,
         version_number: published.number,
-        mode,
-        deadline: locked.survey.deadline,
+        mode: mode.as_str().to_owned(),
+        deadline: survey.deadline,
         document,
         privacy: PrivacyNotice {
             mode_notice,
@@ -247,7 +276,9 @@ async fn submit_response(
     if previous.is_none() {
         // 必须在取得问卷锁之后读取时间；成功重试不再检查新提交的回收资格。
         ensure_available(&locked, submitted_at)?;
-        ensure_not_submitted(&locked).await?;
+        if let Some(respondent_id) = locked.respondent_id {
+            ensure_not_submitted(&locked.tx, id, respondent_id).await?;
+        }
     }
     let published = version::Entity::find_by_id(request.version_id)
         .filter(version::Column::SurveyId.eq(id))
@@ -324,10 +355,14 @@ async fn lock_public_survey(
         .one(&state.db)
         .await?
         .ok_or_else(AppError::not_found)?;
-    let respondent_id = match initial_mode.as_deref() {
-        Some("login_once") => Some(auth::authenticate(headers, &state.db).await?.id),
-        Some("anonymous") | None => None,
-        Some(_) => return Err(AppError::internal("unknown collection mode")),
+    // 模式字符串只解析一次；未知值按内部错误处理，不静默降级为匿名。
+    let respondent_id = match initial_mode
+        .as_deref()
+        .map(FillingMode::from_stored)
+        .transpose()?
+    {
+        Some(FillingMode::LoginOnce) => Some(auth::authenticate(headers, &state.db).await?.id),
+        Some(FillingMode::Anonymous) | None => None,
     };
 
     let tx = state.db.begin().await?;
@@ -363,17 +398,18 @@ fn ensure_available(locked: &LockedSurvey, now: DateTime<Utc>) -> AppResult<()> 
     repository::ensure_collecting(&locked.survey, now)
 }
 
-async fn ensure_not_submitted(locked: &LockedSurvey) -> AppResult<()> {
-    let Some(respondent_id) = locked.respondent_id else {
-        return Ok(());
-    };
+async fn ensure_not_submitted(
+    db: &impl ConnectionTrait,
+    survey_id: Uuid,
+    respondent_id: Uuid,
+) -> AppResult<()> {
     let receipt = response::Entity::find()
         .select_only()
         .column(response::Column::Id)
-        .filter(response::Column::SurveyId.eq(locked.survey.id))
+        .filter(response::Column::SurveyId.eq(survey_id))
         .filter(response::Column::RespondentId.eq(respondent_id))
         .into_tuple::<Uuid>()
-        .one(&locked.tx)
+        .one(db)
         .await?;
     if receipt.is_some() {
         return Err(AppError::conflict(

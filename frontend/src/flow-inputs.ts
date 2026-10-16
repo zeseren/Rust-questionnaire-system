@@ -20,7 +20,8 @@ export class FlowInputs {
     return this.#session.snapshot()
   }
   values(): Inputs {
-    return copy(this.#values)
+    // 数组值写入时已克隆，基础类型不可变，消费方只读，浅拷贝即可。
+    return { ...this.#values }
   }
   change(questionId: string, value: InputValue) {
     const question = this.#document.questions.find((question) => question.id === questionId)

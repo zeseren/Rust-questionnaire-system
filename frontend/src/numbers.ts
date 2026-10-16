@@ -11,14 +11,10 @@ export function numberInput(value: string): string {
 }
 
 export function numberError(raw: string): string | undefined {
-  // serde_json 会补齐正指数符号；DSL 常量本身不允许首尾空白。
-  if (raw.replace(/([eE])(?=\d)/, '$1+').length > MAX_NUMBER_JSON_BYTES)
+  // 调用方已由 numberInput 完成空白修剪与正指数补 `+`，下方正则也拒绝空白。
+  if (raw.length > MAX_NUMBER_JSON_BYTES)
     return `数字最多 ${MAX_NUMBER_JSON_BYTES} 个字符（含小数点和指数符号）。`
-  if (
-    raw !== trimWhitespace(raw) ||
-    !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(raw) ||
-    !Number.isFinite(Number(raw))
-  )
+  if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(raw) || !Number.isFinite(Number(raw)))
     return '请输入有限数字，例如 12、0.5 或 1e3。'
   if (!/[.eE]/.test(raw)) {
     const integer = BigInt(raw)
@@ -26,10 +22,4 @@ export function numberError(raw: string): string | undefined {
     if (integer !== BigInt(Number(raw))) return '整数无法精确表示，请调整数值。'
   }
   return undefined
-}
-
-export function numeric(raw: string): number | undefined {
-  if (numberError(raw)) return undefined
-  const value = Number(raw)
-  return value === 0 ? 0 : value
 }

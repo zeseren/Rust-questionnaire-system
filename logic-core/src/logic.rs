@@ -285,6 +285,25 @@ impl CompiledExpression {
         self.variable_dependencies.iter().copied()
     }
 
+    /// 根节点是布尔字面量时返回其值；流程分支用它识别常量条件。
+    pub(crate) fn literal_boolean(&self) -> Option<bool> {
+        match &self.root.kind {
+            NodeKind::Literal(LogicValue::Boolean(value)) => Some(*value),
+            _ => None,
+        }
+    }
+
+    /// 求值时必然读取的题目集合；计算变量引用展开为其依赖的题目。
+    ///
+    /// `variables` 须已包含本表达式直接或间接依赖的全部计算变量，由文档编译器按
+    /// 拓扑顺序提供；未出现的变量视为没有依赖。
+    pub(crate) fn required_reads(
+        &self,
+        variables: &BTreeMap<Uuid, BTreeSet<Uuid>>,
+    ) -> BTreeSet<Uuid> {
+        self.root.required_reads(&self.bindings, variables)
+    }
+
     /// 对已按问卷规则规范化、且已排除不适用答案的上下文求值。
     ///
     /// 本入口防御性检查引用答案的类型、数字和选项身份，不代替问卷的必填、
@@ -301,20 +320,15 @@ impl CompiledExpression {
         answers: &BTreeMap<Uuid, Value>,
         variables: &BTreeMap<Uuid, LogicValue>,
     ) -> Result<LogicValue, LogicError> {
-        let mut context = BTreeMap::new();
-        for id in &self.dependencies {
-            let binding = &self.bindings[id];
-            let value = read_answer(answers.get(id), binding, *id)?;
-            context.insert(*id, value);
+        // 只在此处检查变量是否齐备；求值只在短路路径上按需解析变量。
+        if self
+            .variable_dependencies
+            .iter()
+            .any(|id| !variables.contains_key(id))
+        {
+            return Err(error(LogicErrorCode::InvalidReference, "$.variables", None));
         }
-        for id in &self.variable_dependencies {
-            let value = variables
-                .get(id)
-                .ok_or_else(|| error(LogicErrorCode::InvalidReference, "$.variables", None))?;
-            context.insert(*id, value.clone());
-        }
-        self.root
-            .evaluate(&mut |id| Ok(context.get(&id).cloned().unwrap_or(LogicValue::Missing)))
+        self.evaluate_resolving(answers, &mut |id| Ok(variables[&id].clone()))
     }
 
     pub(crate) fn evaluate_resolving(
@@ -450,7 +464,8 @@ impl CompilationContext {
     }
 
     pub(crate) fn compile(&self, raw: &Value) -> Result<CompiledExpression, LogicError> {
-        check_raw_budget(Some(raw), 1, &mut 0)?;
+        // 预算由调用方在反序列化前统一执行：DocumentLogic::compile 覆盖变量、规则与分支，
+        // compile_expression 覆盖单个表达式包。
         let expression = Expression::deserialize(raw)
             .map_err(|_| error(LogicErrorCode::InvalidSyntax, "$", None))?;
         self.compile_parsed(expression)
@@ -729,7 +744,7 @@ fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<Logic
         LogicValueType::Text => {
             let text = raw
                 .as_str()
-                .filter(|text| !text.contains('\0') && text.chars().count() <= MAX_TEXT_LENGTH)
+                .filter(|text| !text.contains('\0'))
                 .ok_or_else(invalid)?;
             Ok(LogicValue::Text(text.into()))
         }
@@ -763,6 +778,61 @@ fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<Logic
 }
 
 impl Node {
+    /// 求值时必然读取的题目；`all`/`any` 的后续分支不再读取已被存在性保护覆盖的题目。
+    fn required_reads(
+        &self,
+        bindings: &BTreeMap<Uuid, Binding>,
+        variables: &BTreeMap<Uuid, BTreeSet<Uuid>>,
+    ) -> BTreeSet<Uuid> {
+        match &self.kind {
+            // 常量与 answered 只判断有无答案，不读取答案内容。
+            NodeKind::Literal(_) | NodeKind::Answered(_) => BTreeSet::new(),
+            NodeKind::Answer(id) => {
+                if bindings[id].variable {
+                    variables.get(id).cloned().unwrap_or_default()
+                } else {
+                    [*id].into_iter().collect()
+                }
+            }
+            NodeKind::Selected(id, ..) => [*id].into_iter().collect(),
+            NodeKind::Not(expression) => expression.required_reads(bindings, variables),
+            NodeKind::Logical(expressions, all) => {
+                let mut reads = BTreeSet::new();
+                let mut guarded = BTreeSet::new();
+                for expression in expressions {
+                    reads.extend(
+                        expression
+                            .required_reads(bindings, variables)
+                            .difference(&guarded),
+                    );
+                    guarded.extend(expression.presence_guards(*all));
+                }
+                reads
+            }
+            // coalesce 在首值缺失时才会读取回退值。
+            NodeKind::Coalesce(_, fallback) => fallback.required_reads(bindings, variables),
+            NodeKind::Compare(_, left, right) | NodeKind::Arithmetic(_, left, right) => {
+                let mut reads = left.required_reads(bindings, variables);
+                reads.extend(right.required_reads(bindings, variables));
+                reads
+            }
+            NodeKind::Length(value) => value.required_reads(bindings, variables),
+        }
+    }
+
+    /// 在 `truth` 取该值时保证子表达式“有答案”的题目集合。
+    fn presence_guards(&self, truth: bool) -> BTreeSet<Uuid> {
+        match &self.kind {
+            NodeKind::Answered(id) if truth => [*id].into_iter().collect(),
+            NodeKind::Not(expression) => expression.presence_guards(!truth),
+            NodeKind::Logical(expressions, all) if *all == truth => expressions
+                .iter()
+                .flat_map(|expression| expression.presence_guards(truth))
+                .collect(),
+            _ => BTreeSet::new(),
+        }
+    }
+
     fn evaluate(
         &self,
         context: &mut dyn FnMut(Uuid) -> Result<LogicValue, LogicError>,

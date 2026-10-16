@@ -8,12 +8,15 @@ use crate::{
     error::{AppError, AppResult, ErrorResponse},
     http::{ApiJson, ApiPath, ApiQuery, Pagination},
     repository,
+    surveys::{SurveyStatus, effective_status},
 };
 use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, TransactionTrait, sea_query::LockType,
+    AccessMode, ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait, FromQueryResult,
+    IntoActiveModel, IsolationLevel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Select,
+    Set, TransactionTrait,
+    sea_query::{Expr, LockType, extension::postgres::PgExpr},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -34,6 +37,17 @@ fn require_admin(user: &AuthUser) -> AppResult<()> {
         return Err(AppError::forbidden());
     }
     Ok(())
+}
+
+// 治理列表统一使用可重复读的只读快照：总数与分页数据来自同一时刻，且不取写锁。
+async fn read_snapshot(state: &AppState) -> AppResult<DatabaseTransaction> {
+    Ok(state
+        .db
+        .begin_with_config(
+            Some(IsolationLevel::RepeatableRead),
+            Some(AccessMode::ReadOnly),
+        )
+        .await?)
 }
 
 fn reason(value: &str) -> AppResult<()> {
@@ -87,17 +101,19 @@ async fn users(
 ) -> AppResult<Json<UserPage>> {
     require_admin(&actor)?;
     let (offset, limit) = query.pagination.bounds()?;
-    let total = user::Entity::find().count(&state.db).await?;
+    let tx = read_snapshot(&state).await?;
+    let total = user::Entity::find().count(&tx).await?;
     let items = user::Entity::find()
         .order_by_desc(user::Column::CreatedAt)
         .order_by_desc(user::Column::Id)
         .offset(offset)
         .limit(limit)
-        .all(&state.db)
+        .all(&tx)
         .await?
         .into_iter()
         .map(UserItem::from)
         .collect();
+    tx.commit().await?;
     Ok(Json(UserPage { items, total }))
 }
 
@@ -127,8 +143,8 @@ async fn change_user(
         .ok_or_else(AppError::not_found)?;
     // 请求体可能迟到：锁定目标后重新判定当前 Session，不能沿用提取器中的旧身份。
     // NO KEY UPDATE 不阻塞审计外键的 KEY SHARE，避免管理员交叉治理时互锁。
+    // 角色不可通过治理接口更改，入口已校验管理员身份，重验后无需重复判定。
     let actor = crate::auth::authenticate(&headers, &tx).await?;
-    require_admin(&actor)?;
     let mut update = target.into_active_model();
     update.disabled = Set(input.disabled);
     update.update(&tx).await?;
@@ -157,8 +173,9 @@ async fn change_user(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Serialize, ToSchema)]
-struct SurveyItem {
+// 列表与详情只从 JSONB 中取标题，不把整份 Document 加载到内存。
+#[derive(FromQueryResult)]
+struct SurveyRow {
     id: Uuid,
     owner_id: Uuid,
     title: String,
@@ -167,28 +184,47 @@ struct SurveyItem {
     deadline: Option<DateTime<Utc>>,
     current_version_id: Option<Uuid>,
 }
+
+#[derive(Serialize, ToSchema)]
+struct SurveyItem {
+    id: Uuid,
+    owner_id: Uuid,
+    title: String,
+    status: SurveyStatus,
+    taken_down: bool,
+    deadline: Option<DateTime<Utc>>,
+    current_version_id: Option<Uuid>,
+}
 impl SurveyItem {
-    fn from_model(model: survey::Model) -> AppResult<Self> {
-        let draft: Document = serde_json::from_value(model.draft)?;
-        let status = if model.status == "collecting"
-            && model
-                .deadline
-                .is_some_and(|deadline| deadline <= Utc::now())
-        {
-            "closed".to_owned()
-        } else {
-            model.status
-        };
+    fn from_row(row: SurveyRow) -> AppResult<Self> {
         Ok(Self {
-            id: model.id,
-            owner_id: model.owner_id,
-            title: draft.title,
-            status,
-            taken_down: model.taken_down,
-            deadline: model.deadline,
-            current_version_id: model.current_version_id,
+            status: effective_status(&row.status, row.deadline, Utc::now())?,
+            id: row.id,
+            owner_id: row.owner_id,
+            title: row.title,
+            taken_down: row.taken_down,
+            deadline: row.deadline,
+            current_version_id: row.current_version_id,
         })
     }
+}
+
+// 治理列表与详情共用的投影：只取治理列与草稿标题。
+fn governance_query() -> Select<survey::Entity> {
+    survey::Entity::find()
+        .select_only()
+        .columns([
+            survey::Column::Id,
+            survey::Column::OwnerId,
+            survey::Column::Status,
+            survey::Column::TakenDown,
+            survey::Column::Deadline,
+            survey::Column::CurrentVersionId,
+        ])
+        .column_as(
+            Expr::col(survey::Column::Draft).cast_json_field("title"),
+            "title",
+        )
 }
 #[derive(Serialize, ToSchema)]
 struct AdminSurveyPage {
@@ -209,17 +245,21 @@ async fn surveys(
 ) -> AppResult<Json<AdminSurveyPage>> {
     require_admin(&actor)?;
     let (offset, limit) = query.pagination.bounds()?;
-    let total = survey::Entity::find().count(&state.db).await?;
-    let items = survey::Entity::find()
+    // 只读快照：总数与分页数据来自同一时刻，且不为列表取任何写锁。
+    let tx = read_snapshot(&state).await?;
+    let total = survey::Entity::find().count(&tx).await?;
+    let items = governance_query()
         .order_by_desc(survey::Column::CreatedAt)
         .order_by_desc(survey::Column::Id)
         .offset(offset)
         .limit(limit)
-        .all(&state.db)
+        .into_model::<SurveyRow>()
+        .all(&tx)
         .await?
         .into_iter()
-        .map(SurveyItem::from_model)
+        .map(SurveyItem::from_row)
         .collect::<AppResult<_>>()?;
+    tx.commit().await?;
     Ok(Json(AdminSurveyPage { items, total }))
 }
 
@@ -230,11 +270,13 @@ async fn survey_detail(
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<Json<GovernanceDetail>> {
     require_admin(&actor)?;
-    let model = survey::Entity::find_by_id(id)
+    let row = governance_query()
+        .filter(survey::Column::Id.eq(id))
+        .into_model::<SurveyRow>()
         .one(&state.db)
         .await?
         .ok_or_else(AppError::not_found)?;
-    let published_document = if let Some(version_id) = model.current_version_id {
+    let published_document = if let Some(version_id) = row.current_version_id {
         let version = version::Entity::find_by_id(version_id)
             .filter(version::Column::SurveyId.eq(id))
             .one(&state.db)
@@ -245,7 +287,7 @@ async fn survey_detail(
         None
     };
     Ok(Json(GovernanceDetail {
-        survey: SurveyItem::from_model(model)?,
+        survey: SurveyItem::from_row(row)?,
         published_document,
     }))
 }
@@ -274,8 +316,8 @@ async fn change_survey(
     let tx = state.db.begin().await?;
     repository::lock_user_record(&tx, target.owner_id).await?;
     let target = repository::lock_survey(&tx, id).await?;
+    // 同上：只重验 Session，管理员身份已在入口校验且角色不可变。
     let actor = crate::auth::authenticate(&headers, &tx).await?;
-    require_admin(&actor)?;
     let mut update = target.into_active_model();
     update.taken_down = Set(input.taken_down);
     update.updated_at = Set(Utc::now());
@@ -322,13 +364,14 @@ async fn audits(
 ) -> AppResult<Json<AuditPage>> {
     require_admin(&actor)?;
     let (offset, limit) = query.pagination.bounds()?;
-    let total = audit::Entity::find().count(&state.db).await?;
+    let tx = read_snapshot(&state).await?;
+    let total = audit::Entity::find().count(&tx).await?;
     let items = audit::Entity::find()
         .order_by_desc(audit::Column::CreatedAt)
         .order_by_desc(audit::Column::Id)
         .offset(offset)
         .limit(limit)
-        .all(&state.db)
+        .all(&tx)
         .await?
         .into_iter()
         .map(|item| AuditItem {
@@ -340,5 +383,6 @@ async fn audits(
             created_at: item.created_at,
         })
         .collect();
+    tx.commit().await?;
     Ok(Json(AuditPage { items, total }))
 }

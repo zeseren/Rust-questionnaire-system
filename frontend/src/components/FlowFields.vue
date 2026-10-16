@@ -6,6 +6,7 @@ import { LogicError } from '../logic'
 import type { Answer, FlowSnapshot, Question, SurveyDocument } from '../types'
 import { isAnswered } from '../answers'
 import type { Inputs, InputValue } from '../answers'
+import { message } from '../api'
 import SurveyFields from './SurveyFields.vue'
 const props = withDefaults(
   defineProps<{
@@ -39,7 +40,7 @@ function reset() {
   try {
     inputs = new FlowInputs(props.document)
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '流程无法加载'
+    error.value = message(reason, '流程无法加载')
   }
   refresh()
   emit('change', 0)
@@ -62,12 +63,12 @@ const fieldErrors = computed(() =>
   Object.fromEntries(
     pageDocument.value.questions.flatMap((q) => {
       const code = snapshot.value?.errors[q.id]
-      const message =
+      const text =
         props.errors[q.id] ||
         (code && (attempted.value || touched.value.has(q.id))
           ? new LogicError(code, '$.answers', q.id).message
           : '')
-      return message ? [[q.id, message]] : []
+      return text ? [[q.id, text]] : []
     }),
   ),
 )
@@ -84,7 +85,7 @@ function change(id: string, value: InputValue) {
     touched.value.add(id)
     error.value = ''
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '修改失败'
+    error.value = message(reason, '修改失败')
   }
   refresh()
   emit('change', Object.values(values.value).filter(isAnswered).length)
@@ -108,7 +109,7 @@ function navigate(direction: 'next' | 'previous') {
     attempted.value = false
     error.value = ''
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '无法继续填写'
+    error.value = message(reason, '无法继续填写')
   }
   refresh()
   void focus()
@@ -122,7 +123,7 @@ function submissionAnswers(): Answer[] | undefined {
   try {
     return inputs.submissionAnswers()
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '无法提交'
+    error.value = message(reason, '无法提交')
     void focus()
   }
 }

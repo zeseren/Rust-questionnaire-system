@@ -53,10 +53,8 @@ interface WasmGlue extends WasmEngine {
   __wbg_set_wasm(exports: WebAssembly.Exports): void
 }
 
-const initialization = loadEngine()
-/** 引擎就绪信号；模块在顶层 await 它，导入方因此总能同步调用下面的导出。 */
-export const ready: Promise<void> = initialization.then(() => undefined)
-const engine = await initialization
+// 顶层 await：模块求值结束即引擎就绪，导入方总能直接调用下面的导出。
+const engine = await loadEngine()
 
 async function loadEngine(): Promise<WasmEngine> {
   // node --test 没有打包器：bundler 胶水的 `.wasm` 静态导入会直接失败，改为读文件手动实例化。
@@ -104,14 +102,18 @@ function revive(error: EnvelopeError): LogicError | LogicTextError {
 }
 
 /** `FlowSession` 构造失败只能抛出携带 JSON 错误串的 JS 值（wasm-bindgen 契约）。 */
-function reviveThrown(reason: unknown): LogicError | LogicTextError {
+function reviveThrown(reason: unknown): never {
   // wasm-bindgen 把 `JsValue::from_str` 的错误按原样抛出，因此这里常见的是字符串而非 Error。
   const text = typeof reason === 'string' ? reason : reason instanceof Error ? reason.message : ''
+  let error: LogicError | LogicTextError | undefined
   try {
-    return revive(decode<{ error: EnvelopeError }>(text).error)
+    error = revive(decode<{ error: EnvelopeError }>(text).error)
   } catch {
-    return new LogicError('invalid_syntax', '$')
+    error = undefined
   }
+  if (error) throw error
+  // 非 JSON 信封说明这不是领域错误信封，原样抛出运行时报错，不能伪装成语法错误。
+  throw reason instanceof Error ? reason : new Error(String(reason))
 }
 
 /** 求值结果里的数字已由领域层规范化为有限 f64，还原成 TS 契约的 `number`。 */

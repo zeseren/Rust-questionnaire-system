@@ -76,16 +76,13 @@ pub async fn run() -> anyhow::Result<()> {
 
     let mut args = std::env::args().skip(1);
     let command = args.next().unwrap_or_else(|| "serve".to_owned());
-    if args.next().is_some() {
-        bail!("用法: questionnaire-api [serve|migrate|create-admin]");
-    }
-    match command.as_str() {
-        "migrate" => {
+    match (command.as_str(), args.next()) {
+        ("migrate", None) => {
             tracing::info!("database migrations completed");
             db.close().await?;
             return Ok(());
         }
-        "create-admin" => {
+        ("create-admin", None) => {
             let username = std::env::var("ADMIN_USERNAME").context("请设置 ADMIN_USERNAME")?;
             let password = std::env::var("ADMIN_PASSWORD").context("请设置 ADMIN_PASSWORD")?;
             auth::create_admin(&db, username, password).await?;
@@ -93,7 +90,7 @@ pub async fn run() -> anyhow::Result<()> {
             db.close().await?;
             return Ok(());
         }
-        "serve" => {}
+        ("serve", None) => {}
         _ => bail!("用法: questionnaire-api [serve|migrate|create-admin]"),
     }
     let listen = config.listen;

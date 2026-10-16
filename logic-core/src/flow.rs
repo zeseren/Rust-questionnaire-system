@@ -191,7 +191,7 @@ pub(crate) struct CompiledFlow {
 
 impl CompiledFlow {
     fn implicit(questions: &[Question]) -> Self {
-        // 虚拟身份只存在于运行状态，不写入旧文档或改变版本指纹。
+        // 虚拟身份只存在于运行状态，不写入未配置 `logic` 的文档，也不改变版本指纹。
         Self {
             nodes: vec![
                 Node::Page {
@@ -216,7 +216,7 @@ impl CompiledFlow {
 
 pub(crate) fn compile_flow(
     flow: &FlowDefinition,
-    definition: &DocumentLogic,
+    mut occupied: BTreeSet<Uuid>,
     logic: &CompiledDocumentLogic,
     questions: &[Question],
     context: &CompilationContext,
@@ -227,18 +227,6 @@ pub(crate) fn compile_flow(
     }
     if !matches!(flow.nodes.first(), Some(FlowNode::Page { id, .. }) if *id == flow.entry) {
         return Err(invalid());
-    }
-    let mut occupied: BTreeSet<_> = questions
-        .iter()
-        .map(|question| question.id)
-        .chain(definition.variables.iter().map(|variable| variable.id))
-        .collect();
-    for question in questions {
-        if let QuestionKind::SingleChoice { options }
-        | QuestionKind::MultipleChoice { options, .. } = &question.kind
-        {
-            occupied.extend(options.iter().map(|option| option.id));
-        }
     }
     let mut indices = BTreeMap::new();
     for (index, node) in flow.nodes.iter().enumerate() {
@@ -297,35 +285,33 @@ pub(crate) fn compile_flow(
         common.insert(index);
         dominators.push(common);
     }
-    let raw_variables: BTreeMap<_, _> = definition
-        .variables
-        .iter()
-        .map(|variable| (variable.id, &variable.expression))
-        .collect();
+    // 变量按拓扑顺序展开：每个变量只依赖更早的变量，因此读取集合可逐层复用。
     let mut variable_reads = BTreeMap::new();
     for id in logic.variable_order() {
-        variable_reads.insert(*id, required_reads(raw_variables[id], &variable_reads));
+        variable_reads.insert(*id, logic.variables()[id].required_reads(&variable_reads));
     }
-    let check_available = |raw: &Value, node: usize, path: &str| -> Result<(), LogicError> {
-        if required_reads(raw, &variable_reads)
-            .iter()
-            .any(|id| !dominators[node].contains(&pages[id]))
-        {
-            return Err(error(LogicErrorCode::UnavailableDependency, path, None));
-        }
-        Ok(())
-    };
-    for (index, rule) in definition.rules.iter().enumerate() {
-        for (field, raw) in [
+    let check_available =
+        |expression: &CompiledExpression, node: usize, path: &str| -> Result<(), LogicError> {
+            if expression
+                .required_reads(&variable_reads)
+                .iter()
+                .any(|id| !dominators[node].contains(&pages[id]))
+            {
+                return Err(error(LogicErrorCode::UnavailableDependency, path, None));
+            }
+            Ok(())
+        };
+    for rule in logic.rules() {
+        for (field, expression) in [
             ("visible_if", &rule.visible_if),
             ("required_if", &rule.required_if),
             ("validate", &rule.validate),
         ] {
-            if let Some(raw) = raw {
+            if let Some(expression) = expression {
                 check_available(
-                    raw,
+                    expression,
                     pages[&rule.question_id],
-                    &format!("$.logic.rules[{index}].{field}"),
+                    &format!("{}.{field}", rule.path),
                 )?;
             }
         }
@@ -360,8 +346,9 @@ pub(crate) fn compile_flow(
                     if expression.value_type() != LogicValueType::Boolean {
                         return Err(error(LogicErrorCode::TypeMismatch, &path, None));
                     }
-                    if branch.when["op"] == "boolean"
-                        && (branch.when["value"] == false || branch_index + 1 < branches.len())
+                    // 常量条件只能是不遮蔽后续分支的最后一条 true 分支。
+                    if let Some(literal) = expression.literal_boolean()
+                        && (!literal || branch_index + 1 < branches.len())
                     {
                         return Err(error(LogicErrorCode::InvalidFlow, &path, None));
                     }
@@ -372,7 +359,7 @@ pub(crate) fn compile_flow(
                     {
                         return Err(error(LogicErrorCode::ForwardReference, &path, None));
                     }
-                    check_available(&branch.when, index, &path)?;
+                    check_available(&expression, index, &path)?;
                     guards.push((expression, indices[&branch.target]));
                 }
                 Node::Branch {
@@ -384,66 +371,6 @@ pub(crate) fn compile_flow(
         nodes.push(compiled);
     }
     Ok(CompiledFlow { nodes })
-}
-
-// 对已经完成类型检查的 AST 做保守缺失分析；不展开变量 AST，避免指数膨胀。
-fn required_reads(raw: &Value, variables: &BTreeMap<Uuid, BTreeSet<Uuid>>) -> BTreeSet<Uuid> {
-    let uuid = |key| {
-        raw.get(key)
-            .and_then(Value::as_str)
-            .and_then(|id| Uuid::parse_str(id).ok())
-    };
-    match raw.get("op").and_then(Value::as_str).unwrap_or("") {
-        "answer" | "selected" | "contains_any" | "contains_all" => {
-            uuid("question_id").into_iter().collect()
-        }
-        "variable" => uuid("variable_id")
-            .and_then(|id| variables.get(&id))
-            .cloned()
-            .unwrap_or_default(),
-        "answered" => BTreeSet::new(),
-        "coalesce" => required_reads(&raw["fallback"], variables),
-        "all" | "any" => {
-            let mut reads = BTreeSet::new();
-            let mut guarded = BTreeSet::new();
-            if let Some(expressions) = raw["expressions"].as_array() {
-                for expression in expressions {
-                    reads.extend(required_reads(expression, variables).difference(&guarded));
-                    guarded.extend(presence_guards(expression, raw["op"] == "all"));
-                }
-            }
-            reads
-        }
-        _ => ["expression", "left", "right", "value"]
-            .into_iter()
-            .filter_map(|key| raw.get(key))
-            .flat_map(|child| required_reads(child, variables))
-            .collect(),
-    }
-}
-
-fn presence_guards(raw: &Value, truth: bool) -> BTreeSet<Uuid> {
-    match raw.get("op").and_then(Value::as_str).unwrap_or("") {
-        "answered" if truth => raw["question_id"]
-            .as_str()
-            .and_then(|id| Uuid::parse_str(id).ok())
-            .into_iter()
-            .collect(),
-        "not" => presence_guards(&raw["expression"], !truth),
-        "all" if truth => raw["expressions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .flat_map(|child| presence_guards(child, true))
-            .collect(),
-        "any" if !truth => raw["expressions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .flat_map(|child| presence_guards(child, false))
-            .collect(),
-        _ => BTreeSet::new(),
-    }
 }
 
 /// 一个外部事件完整处理后才更新状态；答案使用与提交相同的 JSON 类型。
@@ -526,6 +453,7 @@ pub struct EvaluatedResponse {
 #[derive(Debug)]
 pub struct FlowEvaluator<'a> {
     document: &'a Document,
+    questions: BTreeMap<Uuid, &'a Question>,
     logic: CompiledDocumentLogic,
     flow: CompiledFlow,
 }
@@ -560,8 +488,15 @@ impl<'a> FlowEvaluator<'a> {
             .flow
             .take()
             .unwrap_or_else(|| CompiledFlow::implicit(&document.questions));
+        // 题目身份在文档内唯一（草稿校验保证），一次索引替代每次投影的线性查找。
+        let questions = document
+            .questions
+            .iter()
+            .map(|question| (question.id, question))
+            .collect();
         Self {
             document,
+            questions,
             logic,
             flow,
         }
@@ -574,12 +509,7 @@ impl<'a> FlowEvaluator<'a> {
     pub fn evaluate_answers(&self, answers: Vec<Answer>) -> Result<EvaluatedResponse, LogicError> {
         let mut inputs = BTreeMap::new();
         for answer in answers {
-            if !self
-                .document
-                .questions
-                .iter()
-                .any(|question| question.id == answer.question_id)
-            {
+            if !self.questions.contains_key(&answer.question_id) {
                 return Err(error(
                     LogicErrorCode::InvalidReference,
                     "$.answers",
@@ -697,14 +627,8 @@ impl<'a> FlowEvaluator<'a> {
                 } => {
                     result.path.push(current);
                     for id in questions {
-                        let Some(question) = self
-                            .document
-                            .questions
-                            .iter()
-                            .find(|question| question.id == *id)
-                        else {
-                            continue;
-                        };
+                        // 流程编译保证页面题目都来自本文档，索引不会缺失。
+                        let question = self.questions[id];
                         let rule = self.logic.rule(*id);
                         let eval = |expression: Option<&CompiledExpression>,
                                     answers: &BTreeMap<Uuid, Value>,
@@ -828,7 +752,7 @@ pub struct FlowSession<'a> {
 }
 
 impl<'a> FlowSession<'a> {
-    /// 绑定不可变文档并创建空填写会话；旧问卷使用内存中的单页流程。
+    /// 绑定不可变文档并创建空填写会话；未配置 `logic` 的问卷使用内存中的单页流程。
     ///
     /// # 错误
     /// 草稿、规则或流程不合法时拒绝启动。

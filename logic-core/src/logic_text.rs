@@ -336,6 +336,7 @@ impl<'a> Compiler<'a> {
             }),
             "all" | "any" => {
                 let mut expressions = Vec::new();
+                // 逐个参数在深度 2 处检查预算，整棵子树不再重复遍历。
                 let mut count = 1;
                 for argument in arguments {
                     let value = self.expression(argument)?;
@@ -343,7 +344,7 @@ impl<'a> Compiler<'a> {
                         .map_err(|error| located(self.source, offset, error))?;
                     expressions.push(value);
                 }
-                json!({"op":op,"expressions":expressions})
+                return Ok(json!({"op":op,"expressions":expressions}));
             }
             "coalesce" => {
                 json!({"op":op,"value":self.expression(argument(0))?,"fallback":self.expression(argument(1))?})

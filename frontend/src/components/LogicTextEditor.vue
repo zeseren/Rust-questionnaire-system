@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import type { DocumentLogic, Question } from '../types'
+import { message } from '../api'
 import { encode } from '../json'
 import { LogicTextError } from '../logic'
 import { formatLogicText, parseLogicText } from '../wasm/index'
@@ -56,7 +57,7 @@ function check(): DocumentLogic | null {
     return result
   } catch (reason) {
     validation.value = {
-      message: reason instanceof Error ? reason.message : '文本无法应用',
+      message: message(reason, '文本无法应用'),
       offset:
         reason instanceof LogicTextError
           ? textErrorOffset(text.value, reason.line, reason.column)
@@ -85,8 +86,7 @@ function generate() {
     importError.value = ''
     check()
   } catch (reason) {
-    importError.value =
-      reason instanceof Error ? reason.message : '请先修复可视化配置，再生成文本。'
+    importError.value = message(reason, '请先修复可视化配置，再生成文本。')
   }
 }
 function restore() {

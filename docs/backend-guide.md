@@ -1,20 +1,30 @@
-# 后端使用与代码阅读指南
+# 后端开发指南
 
-本文从“发送一个请求”出发介绍已有实现，不要求你先读完 Rust 教材。先按 [README](../README.md) 准备数据库、`.env` 并启动服务。这里的命令仍从**仓库根目录**运行；HTTP 包在 `backend` 目录，包名是 `questionnaire-api`，DSL 领域语义在 `logic-core` 目录，包名是 `questionnaire-logic`（后端经 `pub use questionnaire_logic::domain;` 使用，见 2.1）。
+这是一份「读代码 + 跑通流程」的向导，写给第一次接触本项目的开发者。它不要求你先读完 Rust 教材，也不重复安装步骤：请先按 [README 的前三节](../README.md) 准备好数据库、`.env` 并启动服务，再回到这里。
 
-本文的命令是操作说明，不是运行证明；不据此宣称全部验收通过或达到某个性能指标。已验证范围以 [需求分析中的实施状态](requirements-analysis.md) 为准；该文档第 11.2 节记录过一次已在临时实例上完成的备份恢复演练，但它不代表你的环境已经核对。
+后端运行在一个三成员 Cargo workspace 里，分工是固定的：
+
+| 目录 | crate 名 | 职责 |
+| --- | --- | --- |
+| `backend/` | `questionnaire-api` | HTTP JSON API、鉴权、事务与业务用例 |
+| `logic-core/` | `questionnaire-logic` | 纯领域核心：题面与答案规则、表达式、流程引擎、文本 DSL；不依赖 HTTP/数据库，可编译到 `wasm32-unknown-unknown` |
+| `logic-wasm/` | `logic-wasm` | wasm 边界，把领域核心交给前端复用同一套实现 |
+
+`backend/src/lib.rs` 用 `pub use questionnaire_logic::domain;` 再导出领域核心，因此业务代码里的 `questionnaire_api::domain::Document` 和直接使用 `questionnaire_logic::domain::Document` 是同一个类型，下面所有模块路径也保持这个写法。
+
+全文分六节：第 1 节在 PowerShell 里跑一个最小真实闭环；第 2 节顺着一个请求读源码；第 3、4 节分别是版本并发规则与数据校验口径；第 5 节是路由与错误速查；第 6 节是备份与独立恢复。
 
 ## 1. PowerShell 最小真实闭环
 
-这个流程新建一个普通发布者、创建含六种题型的问卷，匿名提交一份答卷，再用发布者身份读取统计和 CSV。它会在数据库中留下真实账号、问卷和答卷，不是测试替身。不要填真实敏感信息。
+这段流程会新建一个普通发布者、创建一份含六种题型的问卷、匿名提交一份答卷，再用发布者身份读取统计和 CSV。它操作的是真实数据库，不是测试替身；请使用本机演示数据，不要填真实敏感信息。
 
 ### 1.1 注册、登录并保留 Cookie
 
-以下片段按顺序在**同一个新的 PowerShell 窗口**执行，服务在另一个窗口运行。默认配置使用 `http://localhost:3000`。用户名自动生成以免重复；在凭据窗口自行输入 8—128 个字符的密码，不把密码写进脚本或命令历史。
+以下片段请按顺序在**同一个新的 PowerShell 窗口**执行，服务在另一个窗口运行。默认地址是 `http://localhost:3000`；用户名自动生成以免重复，密码在凭据窗口里输入（8—128 个字符），不会写进脚本或命令历史。
 
 ```powershell
 $Base = 'http://localhost:3000'
-$Origin = 'http://localhost:3000' # 使用前端配置时改为 http://localhost:5173，需与 PUBLIC_ORIGIN 一致
+$Origin = 'http://localhost:3000' # 前端开发时改为 http://localhost:5173，须与后端 PUBLIC_ORIGIN 一致
 $WriteOptions = @{
     Headers = @{ Origin = $Origin; 'X-CSRF-Protection' = '1' }
     ContentType = 'application/json; charset=utf-8'
@@ -36,13 +46,16 @@ try {
 Invoke-RestMethod -Uri "$Base/api/auth/me" -WebSession $PublisherSession
 ```
 
-注册只建账号，不自动登录。登录的 `Set-Cookie` 被 `-SessionVariable PublisherSession` 保存，此后管理请求加 `-WebSession $PublisherSession`；不要从 Cookie 中复制 Session 秘密。`Get-Credential` 的密码在发送时仍会短暂成为进程内明文，所以关闭不再使用的终端，不保存会话对象。
+要点：
 
-这里每个写请求都有 **`Origin` 和 `X-CSRF-Protection: 1`**，不是只有已登录请求才需要。`Origin` 必须和 `.env` 的 `PUBLIC_ORIGIN` 完全一致；不能尾随 `/`。真实浏览器会设置 Origin，命令行需要自己传入。
+- 注册只建账号，不会自动登录。
+- 登录响应的 `Set-Cookie` 被 `-SessionVariable PublisherSession` 保存下来，后续管理请求都要带 `-WebSession $PublisherSession`。
+- **每个写请求**（不只是已登录请求）都必须携带 `Origin` 和 `X-CSRF-Protection: 1`。`Origin` 必须与 `.env` 里的 `PUBLIC_ORIGIN` 完全一致，不能带尾随 `/`。浏览器会自动设置 Origin，命令行需要自己传。
+- `Get-Credential` 的密码在发送瞬间仍是进程内明文，用完请关闭终端；不要把密码或 Cookie 复制到别处。
 
-### 1.2 构造完整 Document 并创建问卷
+### 1.2 构造包含六种题型的 Document 并创建问卷
 
-`Document` 必须包含 `title`、`description`、`purpose`、`thank_you`、`questions`。即使文字暂时为空，也不是随意省略这些字段。题型配置与 `id/title/required` 同层，**没有 `kind` 包裹层**。题目与选项用稳定 UUID 标识，不能用标题或数组下标代替。
+`Document` 的字段是固定的：`title`、`description`、`purpose`、`thank_you`、`questions`。即使某些文字暂时为空也不能省略字段（未知字段会被拒绝）。题型配置与 `id`/`title`/`required` 在同一层，没有 `kind` 包裹层。题目和选项用稳定的 UUID 标识，不能用标题或数组下标代替。
 
 ```powershell
 $QSingle = [guid]::NewGuid().ToString()
@@ -103,9 +116,11 @@ $SurveyId = $Survey.id
 $Survey | Select-Object id, status, revision
 ```
 
-`ConvertTo-Json -Depth 20` 很重要：默认深度不足以容纳题目和选项。显式转 UTF-8 字节可以避免 Windows PowerShell 发送中文时使用不合适的默认编码。
+两个容易踩的细节：`ConvertTo-Json -Depth 20` 必不可少，默认深度装不下题目和选项的嵌套；显式转 UTF-8 字节是为了避免 Windows PowerShell 用不合适的默认编码发送中文。
 
-### 1.3 选择匿名模式，然后发布已保存修订
+创建成功返回 `201`，`revision` 从 `1` 开始，`status` 是 `unpublished`。
+
+### 1.3 设置填写模式并发布
 
 ```powershell
 $CollectionBody = @{ mode = 'anonymous'; deadline = $null } | ConvertTo-Json -Compress
@@ -115,17 +130,19 @@ $PublishBody = @{ revision = $Survey.revision } | ConvertTo-Json -Compress
 $Published = Invoke-RestMethod -Method Post -Uri "$Base/api/surveys/$SurveyId/publish" @WriteOptions -WebSession $PublisherSession -Body ([System.Text.Encoding]::UTF8.GetBytes($PublishBody))
 $Published.survey | Select-Object id, status, current_version_id, share_url
 
-# 不携带发布者 WebSession：用匿名填写者的视角读取当前公开题面
+# 不携带发布者 WebSession：以匿名填写者的视角读取当前公开题面
 $Public = Invoke-RestMethod -Uri "$Base/api/public/surveys/$SurveyId"
 $Public.document.purpose
 $Public.privacy
 ```
 
-发布请求只传 `revision`，发布的是服务器已经保存的草稿，不是另传一份 Document。`share_url` 是同源公开 API 路径。Vue 前端将其对应到网页 `/s/:id`，并在填写前展示收集目的及 `privacy` 提示，详见 [前端指南](frontend-guide.md)。
+- 第一次发布前必须先设置 `anonymous` 或 `login_once`；**首次发布后模式冻结**，改模式会返回 `409 mode_frozen`。
+- 发布请求只传 `revision`：发布的是服务器上已保存的那一版草稿，不需要再传一份 Document。首次发布返回 `201`，问卷状态变为 `collecting`。
+- `share_url` 是同源公开 API 路径 `/api/public/surveys/{id}`；Vue 前端把它对应到网页地址 `/s/:id`，并在填写前展示收集目的与 `privacy` 提示，详见[前端指南](frontend-guide.md)。
 
-### 1.4 提交一份答卷，并重试同一次提交
+### 1.4 提交一份答卷并重试同一次提交
 
-一个逻辑提交只生成一次随机 UUIDv4 秘密。下例在 Windows 上用 `.NET Guid.NewGuid()` 生成；它是 `idempotency_key`，不是公开的问卷/版本 ID。不要打印、放进 URL、日志或分享给他人。
+一次逻辑提交只生成一次随机 UUIDv4 作为 `idempotency_key`。它是秘密，不要打印、放进 URL 或分享给别人；它也不是问卷/版本 ID。
 
 ```powershell
 $SubmissionSecret = [guid]::NewGuid().ToString()
@@ -151,17 +168,15 @@ $RetryReceipt = Invoke-RestMethod -Method Post -Uri "$Base/api/public/surveys/$S
 $Receipt.receipt_id -eq $RetryReceipt.receipt_id
 ```
 
-首次成功的 HTTP 状态为 `201`，合法重试为 `200`，都返回 `{ status, receipt_id }`。最后的比较应为 `True`，同一次提交不会新增第二份答卷。示例匿名提交故意**不传** `-WebSession`；即使传了登录 Cookie，匿名模式也不会关联账号。
+首次成功的状态码是 `201`，合法重试是 `200`，两者都返回 `{ status, receipt_id }`；最后的比较应为 `True`，同一次提交不会多出第二份答卷。匿名提交故意**不带** `-WebSession`：匿名模式不会解析 Cookie，即使带上登录 Cookie 也不会关联账号。
 
-不要在未知结果时改答案或换秘密重发：网络中断可能发生在服务端已经提交事务之后。应保留原请求用于重试。已完成且不再需要重试时，再移除终端中的敏感变量：
+如果请求结果未知（网络中断、超时），不要在改答案或换秘密后重发——中断可能发生在服务端已经提交事务之后。保留原请求重试即可。确认不再需要重试后再清理变量：
 
 ```powershell
 Remove-Variable SubmissionSecret, Submission, SubmissionBody, SubmissionBytes
 ```
 
-### 1.5 读取统计、答卷和 CSV
-
-明确传 `version_id`，避免你以后发布了新版本却误把“当前版本统计”当作旧版本统计：
+### 1.5 读取统计、答卷详情与导出 CSV
 
 ```powershell
 $VersionId = $Public.version_id
@@ -171,6 +186,7 @@ $Statistics.questions | Select-Object title, type, answered_count
 
 $ResponseDetail = Invoke-RestMethod -Uri "$Base/api/surveys/$SurveyId/responses/$($Receipt.receipt_id)" -WebSession $PublisherSession
 $ResponseDetail | Select-Object receipt_id, version_id, submitted_at
+$ResponseDetail.question_states
 
 $DataDirectory = Join-Path $env:LOCALAPPDATA 'questionnaire-data'
 New-Item -ItemType Directory -Path $DataDirectory -Force | Out-Null
@@ -179,24 +195,31 @@ Invoke-WebRequest -UseBasicParsing -Uri "$Base/api/surveys/$SurveyId/export.csv?
 Import-Csv -LiteralPath $CsvPath -Encoding UTF8 | Select-Object receipt_id, version_number
 ```
 
-在这个刚创建、只有上述一份提交的问卷上，`total_count` 应为 `1`，CSV 应有一条数据行。这里是操作后的核对目标，不是预先替你执行后的结果。CSV 保存在用户本地应用数据目录，不进入源码仓库；仍需限制文件访问，不上传公共网盘。会话过期或修改密码后，重新登录再下载。
+始终显式传 `version_id`：省略时接口默认取当前发布版本，发布过新版本后再查会看到不同的数据。在这份刚创建、只有一份提交的问卷上，`total_count` 应为 `1`，CSV 应有一条数据行。CSV 落在本地应用数据目录，不进源码仓库，仍属于敏感数据。
 
 ## 2. 沿着一个请求读源码
 
-推荐先读保存草稿，再读提交答卷。它们分别展示“防止覆盖旧内容”和“并发下只接受一份”的核心逻辑。
+推荐按「先读保存草稿，再读提交答卷」的顺序：前者展示如何避免覆盖别人的修改，后者展示并发下如何只接受一份。
 
-### 2.1 入口、HTTP 边界和业务函数
+### 2.1 三个 crate 如何协作
 
-实际结构不是一套空的多层框架：每个业务模块把 HTTP handler 与它调用的具体业务函数放在同一文件，只有共用的数据访问规则放进 `repository.rs`。
+`backend` 只持有 HTTP 与业务代码；所有 DSL 语义住在 `logic-core/src/`。因此领域规则可以同时被 HTTP 后端和前端 wasm 使用，不会出现两份实现。
 
-workspace 有三个成员：`backend/`（`questionnaire-api`，HTTP 与业务）、`logic-core/`（`questionnaire-logic`，纯领域 DSL 核心）、`logic-wasm/`（`logic-wasm`，把核心导成 wasm 给前端）。后端不自己持有 DSL 实现：`backend/src/lib.rs` 用 `pub use questionnaire_logic::domain;` 接入，因此下文与业务代码里的 `questionnaire_api::domain::*`（`Document`、`QuestionKind`、`FlowEvaluator` 等）路径、可见性和调用方式都不变；DSL 的六个文件住在 `logic-core/src/`，`backend/src/` 只剩 HTTP 与业务模块。
+```text
+logic-core/  domain.rs  identity.rs  logic.rs  logic_document.rs  logic_text.rs + logic_text.pest  flow.rs
+                   ▲                                    ▲
+                   │ pub use questionnaire_logic::domain │ wasm-bindgen JSON 信封
+              backend/ (questionnaire-api)          logic-wasm/ (logic-wasm)
+```
+
+### 2.2 一次「保存草稿」的调用链
 
 ```text
 main.rs: main
-  └─ lib.rs: run → 配置、连接池、迁移、router、HTTP 监听
-       └─ security.rs: guard → 同源写校验、全局限流
+  └─ lib.rs: run → 读取配置、建立连接池、执行迁移、组装 router、监听 HTTP
+       └─ security.rs: guard → 同源写校验、全局限流、no-store / nosniff
             └─ surveys.rs: save_draft（HTTP handler）
-                 ├─ http.rs: ApiPath / ApiJson 解析输入
+                 ├─ http.rs: ApiPath / ApiJson 在边界解析输入
                  ├─ auth.rs: AuthUser 提取有效账号
                  └─ surveys.rs: save_survey_draft（业务函数）
                       ├─ domain（logic-core/src/domain.rs）: validate_draft
@@ -204,125 +227,136 @@ main.rs: main
                       └─ entities.rs: survey::ActiveModel → PostgreSQL 事务
 ```
 
-阅读顺序及对应职责：
+每个业务模块都把 HTTP handler 和它调用的业务函数放在同一个文件里，只有共用的归属过滤与行锁集中在 `repository.rs`。handler 负责提取参数、返回 DTO；业务函数负责校验、加锁和提交事务。
 
-| 文件 | 先找这些函数/类型 | 看什么 |
+### 2.3 文件导读表
+
+| 文件 | 先看这些函数/类型 | 说明 |
 | --- | --- | --- |
-| [`main.rs`](../backend/src/main.rs)、[`lib.rs`](../backend/src/lib.rs) | `main`、`run`、`router`、`AppState` | Tokio 入口；配置、迁移、共享状态；各模块如何合并路由 |
-| [`http.rs`](../backend/src/http.rs)、[`error.rs`](../backend/src/error.rs) | `ApiJson`、`ApiPath`、`ApiQuery`、`Pagination`、`AppError` | 字符串/JSON 只在边界解析；错误统一成 HTTP JSON |
-| [`surveys.rs`](../backend/src/surveys.rs) | `save_draft` → `save_survey_draft`；`publish` → `publish_survey` | handler 不做数据库拼装；业务函数检查归属、修订、状态并提交事务 |
-| [`submissions.rs`](../backend/src/submissions.rs) | `submit` → `submit_response` → `lock_public_survey` | 模式判断、行锁、重验 Session、幂等、版本匹配、原子写入 |
-| [`domain`（`logic-core/src/domain.rs`）](../logic-core/src/domain.rs) | `Document`、`QuestionKind`、`validate_answers` | 不依赖网络和数据库的题面/答案规则；经 `lib.rs` 的 `pub use questionnaire_logic::domain;` 再导出 |
+| [`main.rs`](../backend/src/main.rs)、[`lib.rs`](../backend/src/lib.rs) | `main`、`run`、`router`、`AppState` | Tokio 入口；配置、迁移、连接池、路由合并与 OpenAPI 组装；`serve` / `migrate` / `create-admin` 子命令 |
+| [`http.rs`](../backend/src/http.rs)、[`error.rs`](../backend/src/error.rs) | `ApiJson`、`ApiPath`、`ApiQuery`、`Pagination`、`AppError` | 输入只在边界解析一次；错误统一成 HTTP JSON |
+| [`surveys.rs`](../backend/src/surveys.rs) | `save_draft` → `save_survey_draft`；`publish` → `publish_survey` | handler 不做数据库拼装；业务函数检查归属、修订号、状态后提交事务 |
+| [`submissions.rs`](../backend/src/submissions.rs) | `public_survey` → `read_public_survey`；`submit` → `submit_response` → `lock_public_survey` | 只读快照读题面；写路径加锁、重验 Session、幂等、版本匹配、原子写入 |
+| [`domain`（`logic-core/src/domain.rs`）](../logic-core/src/domain.rs) | `Document`、`QuestionKind`、`validate_draft`、`validate_publish`、`validate_answers` | 不依赖网络和数据库的题面/答案规则 |
 | [`identity.rs`](../logic-core/src/identity.rs) | `parse`、`deserialize`、`deserialize_vec` | 非零、小写连字符配置 UUID 的统一解析边界 |
-| [`logic.rs`](../logic-core/src/logic.rs)、[`logic_document.rs`](../logic-core/src/logic_document.rs) | `compile_expression`、`DocumentLogic::compile` | 表达式类型、变量依赖、题目规则、容量和引用重写 |
-| [`flow.rs`](../logic-core/src/flow.rs) | `FlowSession`、`FlowEvaluator` | 前向流程、改答清理与提交路径重建 |
-| [`logic_text.rs`](../logic-core/src/logic_text.rs)、[`logic_text.pest`](../logic-core/src/logic_text.pest) | `parse_logic_text`、`format_logic_text`、`Grammar`、`PRECEDENCE` | pest 文法与 Pratt 优先级；资源预检、身份绑定后编译到统一 AST；文本格式化唯一实现 |
-| [`logic-wasm/src/lib.rs`](../logic-wasm/src/lib.rs) | `parse_logic_text`、`format_logic_text`、`compile_document_logic`、`FlowSession` | wasm 边界：入参出参都是 JSON 字符串，信封 `{"ok":…}` / `{"error":…}`，错误字段与领域错误一一对应 |
-| [`repository.rs`](../backend/src/repository.rs)、[`entities.rs`](../backend/src/entities.rs) | `owned_survey`、`lock_user`、`lock_survey`、各 `Model` | 共用归属过滤与锁；数据库字段映射 |
-| [`reports.rs`](../backend/src/reports.rs) | `statistics`、`response_snapshot`、`summarize_question`、`encode_csv` | 同一版本与时间过滤；一次结果快照生成报表和导出 |
-| [`auth.rs`](../backend/src/auth.rs)、[`admin.rs`](../backend/src/admin.rs) | `authenticate`、`change_password`、`change_user`、`change_survey` | Session 失效与账号资格变化；治理操作和审计原子落库 |
-| [`migration.rs`](../backend/src/migration.rs)、[`schema.sql`](../backend/src/schema.sql) | `InitialSchema::up` | 迁移执行 SQL；主键、外键、唯一索引作为数据库约束 |
+| [`logic.rs`](../logic-core/src/logic.rs)、[`logic_document.rs`](../logic-core/src/logic_document.rs) | `compile_expression`、`DocumentLogic::compile` | 表达式类型、变量依赖、题目规则、容量与引用重写 |
+| [`flow.rs`](../logic-core/src/flow.rs) | `FlowSession`、`FlowEvaluator` | 前向流程、改答清理、提交与报表的路径重建 |
+| [`logic_text.rs`](../logic-core/src/logic_text.rs)、[`logic_text.pest`](../logic-core/src/logic_text.pest) | `parse_logic_text`、`format_logic_text`、`Grammar`、`PRECEDENCE` | pest 文法与 Pratt 优先级；资源预检后编译到统一 AST；文本格式化唯一实现 |
+| [`logic-wasm/src/lib.rs`](../logic-wasm/src/lib.rs) | `parse_logic_text`、`compile_document_logic`、`FlowSession` | wasm 边界：入参出参都是 JSON 字符串，信封为 `{"ok":…}` / `{"error":…}` |
+| [`repository.rs`](../backend/src/repository.rs)、[`entities.rs`](../backend/src/entities.rs) | `owned_survey`、`lock_user`、`lock_survey`、`lock_session_user`、各 `Model` | 共用的归属过滤与行锁顺序；数据库字段映射 |
+| [`reports.rs`](../backend/src/reports.rs) | `statistics`、`response_detail`、`response_snapshot`、`summarize_question`、`encode_csv` | 同一版本与时间过滤；一次结果快照同时生成统计与导出 |
+| [`auth.rs`](../backend/src/auth.rs)、[`admin.rs`](../backend/src/admin.rs) | `authenticate`、`change_password`、`change_user`、`change_survey` | Session 生命周期与账号资格；治理操作与审计同事务落库 |
+| [`security.rs`](../backend/src/security.rs) | `guard`、`check` | 同源写校验与单实例固定窗口限流 |
+| [`migration.rs`](../backend/src/migration.rs)、[`schema.sql`](../backend/src/schema.sql) | `InitialSchema::up` | 建表 SQL；主键、外键、唯一索引作为数据库层约束 |
 
-### 2.2 只理解此处用到的 Rust 写法
+### 2.4 读懂本项目需要的语言与框架常识
 
-- **`Result` 与 `?`**：`save_survey_draft` 返回 `AppResult<SurveyDetail>`，即成功得到详情、失败得到 `AppError`。`input.document.validate_draft()?` 表示校验失败就提前返回，经错误转换生成统一响应；不是吞掉错误或自动重试。`ValidationError` 中的 `question_id: Option<Uuid>` 可以定位到具体题目，问卷级错误没有题目 ID。
-- **`async` / `.await`**：`state.db.begin().await?` 要等待数据库，但等待期间让 Tokio 运行其他请求。`.await` 不代表操作已经原子化；事务与行锁才约束并发。CPU 较重的 Argon2 密码计算在 `auth.rs` 的阻塞线程池中执行，避免占住异步工作线程。
-- **`State(state): State<AppState>`**：这是 Axum 的参数提取与解构，意思是从 router 提供的共享状态取出 `state`；同理 `ApiJson(input): ApiJson<SaveDraft>` 解析出结构化请求，而不是在业务里反复解析 JSON。
-- **`Arc`**：`AppState.config: Arc<Config>` 和 `limits: Arc<Limits>` 让多个请求共享同一份配置/限流器。克隆 `Arc` 增加共享引用计数，不复制整份配置；它也不是数据库锁。数据库连接来自共享连接池，不是每个请求临时建立一条新连接。
-- **`enum`**：`QuestionKind` 把六种题型及各自字段放在六个分支中。`Rating` 有 `min_label`，`Text` 有 `max_length`，无需给所有题型塞一堆无意义的空字段。`SurveyStatus` 表达问卷状态，`match` 清楚列出状态分支。
-- **Serde**：`#[serde(tag = "type", rename_all = "snake_case")]` 使 `SingleChoice` 在 JSON 中成为 `"type":"single_choice"`；题型配置在 JSON 中与 `id`、`title`、`required` 位于同一层。`Document` 等输入 DTO 的 `deny_unknown_fields` 拒绝不认识的字段；不要靠多传 `role` 等字段绕过注册权限。Serde 的 `flatten` 会让 `deny_unknown_fields` 失效，所以 `Question` 手写反序列化：先取出公共字段，其余字段交给带 `deny_unknown_fields` 的 `QuestionKind`，把 `min` 拼成 `minimum` 这类错误会返回 `400 invalid_json`，而不是静默丢弃规则。`Serialize` 是把 Rust 值编码出去，`Deserialize` 是把输入解析成 Rust 值。
-- **`Option` 不是通用兜底**：`current_version_id: None` 表示从未发布。回收设置中的 `deadline: Option<Option<DateTime<Utc>>>` 专门区分 PATCH 的三态：省略保持原值、`null` 清空、时间字符串替换。
-- **SeaORM 的 `Model`、`ActiveModel`、`Set`**：`survey::Model` 是查到的一行。`record.into_active_model()` 将它变成可更新对象，`active.draft = Set(...)` 明确标记该字段要写入；`active.update(&tx).await?` 执行 SQL，不是给内存对象赋值就自动保存。`insert_draft` 用 `survey::ActiveModel { id: Set(...), revision: Set(1), ... }` 插入新行；部分更新里的 `..Default::default()` 留下未设置字段，并不把其他列重置为默认值。
-- **`&tx` 与 `&state.db`**：前者是当前事务，后者是连接池。已进入业务事务后，相关读写必须继续用 `&tx`，否则可能跑到另一条连接，失去前面锁与原子性的保护。
+- **`Result` 与 `?`**：`save_survey_draft` 返回 `AppResult<SurveyDetail>`——成功拿到详情，失败得到 `AppError`。`input.document.validate_draft()?` 的意思是「校验失败就提前返回」，错误会经 `From` 转换统一成 HTTP 响应；它不会吞掉错误，也不会自动重试。`ValidationError.question_id: Option<Uuid>` 让错误能定位到具体题目，问卷级错误的 `question_id` 为 `null`。
+- **`async` / `.await`**：`state.db.begin().await?` 在等待数据库时把线程让给 Tokio 处理其他请求。`.await` 本身不保证原子性，约束并发的是事务和行锁。较重的 Argon2 密码运算放在 `spawn_blocking` 阻塞线程池里执行，不占用异步工作线程。
+- **Axum 提取器与解构**：`State(state): State<AppState>` 是从 router 提供的共享状态里取出 `state`；`ApiJson(input): ApiJson<SaveDraft>` 在进入业务前把请求体解析成结构化类型，业务代码于是只处理类型，不反复解析 JSON。
+- **`Arc` 与连接池**：`AppState.config: Arc<Config>`、`limits: Arc<Limits>` 让所有请求共享同一份配置和限流器；克隆 `Arc` 只增加引用计数，不复制数据。数据库连接来自共享连接池（`max_connections = 10`），不是每个请求新建一条。
+- **`enum` 表达题型**：`QuestionKind` 把六种题型和各自的专属字段放进六个分支——评分题有 `min_label`，文本题有 `max_length`，不需要给所有题型塞无用字段。`match` 会强制你处理每个分支。
+- **Serde 的两种工作方向**：`Deserialize` 把 JSON 解析成 Rust 值，`Serialize` 把 Rust 值编码出去。`#[serde(tag = "type", rename_all = "snake_case")]` 让 `SingleChoice` 在 JSON 里变成 `"type": "single_choice"`。输入 DTO 上的 `deny_unknown_fields` 会拒绝不认识的字段，所以多传 `role` 之类的字段不会悄悄生效。因为 Serde 的 `flatten` 会让 `deny_unknown_fields` 失效，`Question` 手写了反序列化：先取出公共字段（`id`/`title`/`required`），其余全部交给严格的 `QuestionKind`，于是 `min` 拼错成 `minimum` 会返回 `400 invalid_json`，而不是被静默丢弃。
+- **`Option` 表达真实语义**：`current_version_id: None` 表示从未发布；回收设置里的 `deadline: Option<Option<DateTime<Utc>>>` 专门用来区分 PATCH 的三种情况——字段省略保持原值、传 `null` 清空、传时间字符串替换。
+- **SeaORM 的 `Model` / `ActiveModel` / `Set`**：`survey::Model` 是查到的一行；`record.into_active_model()` 变成可更新对象；`active.draft = Set(...)` 明确标记哪些字段要写；`active.update(&tx).await?` 才真正执行 SQL——给内存对象赋值不会自动保存。部分更新里的 `..Default::default()` 表示「这些列不动」，不会把其他列重置。
+- **`&tx` 与 `&state.db`**：前者是当前事务，后者是连接池。已经进入业务事务后，相关读写必须继续用 `&tx`，否则可能换到另一条连接，前面的锁和原子性就失效了。
 
-SeaORM 做大部分查询和写入；`reports::response_snapshot` 使用参数绑定的 SQLx 查询，并复用 SeaORM 的 PostgreSQL pool。这里的 SQLx 不是第二套数据库，也没有绕过 `owner_id` 过滤。HTTP 返回专门的 DTO，而不是直接序列化实体，所以密码哈希、内部账号关联和提交秘密不会因“返回整行”泄漏。
+绝大多数查询与写入走 SeaORM；只有 `reports::response_snapshot` 用参数绑定的 SQLx 查询，并复用同一个连接池——它不是第二套数据库，SQL 里仍然带 `owner_id` 过滤。所有对外响应都是专门的 DTO，不会直接序列化数据库实体，所以密码哈希、内部填写者关联和提交秘密不会因为「返回整行」而泄漏。
 
-## 3. 表、版本与并发规则
+## 3. 表结构、版本隔离与并发控制
 
 ### 3.1 六张业务表
 
-| 表 | 关键字段及作用 |
+| 表 | 关键字段与作用 |
 | --- | --- |
-| `users` | `id`、唯一的小写 `username`、Argon2id `password_hash`、`role`、`disabled` |
-| `sessions` | `id_hash` 是浏览器 Session 秘密的 SHA-256 摘要；`user_id`、`expires_at` 控制有效身份 |
-| `surveys` | `owner_id`、`status`、`mode`、`deadline`、独立的 `taken_down`；可变 `draft`、`revision`、`current_version_id` |
-| `versions` | 每次发布一行：`survey_id`、递增 `number`、不可变 `document`、`published_at` |
-| `responses` | 整份规范化 `answers`、`version_id`、`submitted_at`；`id` 是回执；`respondent_id/scope/key_hash/payload_hash` 用于限次和幂等 |
-| `audits` | 治理人 `actor_id`、`action`、目标 `target_id`、必填 `reason`、时间；与治理改动同事务写入 |
+| `users` | `id`、唯一的小写 `username`、Argon2id `password_hash`、`role`（`user`/`admin`）、`disabled` |
+| `sessions` | `id_hash`（浏览器 Session 秘密的 SHA-256）、`user_id`、`expires_at` |
+| `surveys` | `owner_id`、`status`、`mode`、`deadline`、独立的治理标志 `taken_down`；可变的 `draft`、`revision`、`current_version_id` |
+| `versions` | 每次发布一行：`survey_id`、递增 `number`、不可变的 `document`、`published_at` |
+| `responses` | 规范化后的整份 `answers`、`version_id`、`submitted_at`；`id` 就是回执；`respondent_id`/`scope`/`key_hash`/`payload_hash` 支撑限次与幂等 |
+| `audits` | 治理人 `actor_id`、`action`、目标 `target_id`、必填 `reason`（1—500 字符）、时间；与治理改动写在同一事务 |
 
-题面和整份答案使用 JSONB；不是每道题一张表。题目 ID 决定答案归属，数组顺序决定展示顺序，重命名或排序不应换 ID。复制问卷调用 `renew_ids` 更新所有题目/选项 ID，生成独立草稿，不继承答卷、回收设置或跨版本限次资格。复制生成的草稿按当前草稿上限校验（`Document::validate_draft`）；超出当前上限的来源内容会拒绝复制。
+题面和整份答案都以 JSONB 存储，不是「一道题一张表」。题目 ID 决定答案归属，数组顺序决定展示顺序，所以重命名或排序不应更换 ID。
 
-数据库用复合外键保证答案的版本属于同一问卷；`(survey_id, number)` 保证版本号唯一；`(survey_id, scope, key_hash)` 保证同作用域提交秘密唯一。`responses_once_per_account` 对非空 `respondent_id` 约束 `(survey_id, respondent_id)` 唯一，**不含版本号**，因此不能靠发布新版本再次占用同账号的填写资格。
+数据库层面还有几组关键约束：
 
-### 3.2 草稿 revision 与发布 version 不同
+- 复合外键 `surveys(id, current_version_id) → versions(survey_id, id)` 与 `responses(survey_id, version_id) → versions(survey_id, id)` 保证引用到的版本属于同一份问卷。
+- `versions` 的 `(survey_id, number)` 唯一，版本号在同一问卷内不重复。
+- `responses` 的 `(survey_id, scope, key_hash)` 唯一，同一作用域下同一个提交秘密只落一行。
+- 部分唯一索引 `responses_once_per_account` 约束非空 `respondent_id` 上的 `(survey_id, respondent_id)`，**不含版本号**——发布新版本不能给同一个账号再争取一次填写资格。
 
-- `revision` 从 `1` 开始，每次成功保存整份草稿加一。保存和发布都要求传入最后读到的修订号；`ensure_revision` 在事务锁内比较，旧值返回 `409`，不会静默覆盖另一窗口保存的内容。这就是此处的乐观锁。
-- 发布插入新的 `versions` 行，然后切换 `surveys.current_version_id`。历史版本不被草稿编辑覆盖，答卷绑定提交时的版本。当前实现的不可变性由业务写路径维护；数据库运维人员仍可直接改数据，因此不要绕过 API 手改题面和答案。
-- 草稿 revision 未变、且内容与当前版本完全一致时，发布按幂等重放处理：不新增版本，返回 `200` 与当前版本；只有确实创建新版本才返回 `201`。重放判定先于内容校验与提交预算检查，这样响应丢失后的重试不会凭空产生第二个内容相同的版本号。
-- 草稿与新发布版本的单行文本上限为 200、多行文本上限为 1000 个 Unicode 标量值（`MAX_TEXT_ANSWER_LENGTH` / `MAX_TEXTAREA_ANSWER_LENGTH`），每题可以调低。调查说明、收集目的仍各允许 5000 个。复制与答卷校验均按当前上限检查文档结构；答案长度仍按版本内每题保存的 `max_length` 执行。
-- 预览与发布均按最坏情况估算一次完整提交的字节数（`domain::Document::estimated_submission_bytes`）；超过 `MAX_SUBMISSION_BYTES` 时，预览返回 `publishable=false` 和容量错误，发布返回相同错误的 `422`。该常量与 HTTP body limit 共用（1 MiB）。当前 100 道多行题各允许 1000 字时预算为 606856 字节，合法配置均可容纳；保留预算检查防止后续扩大容量时出现回退。文本预算包括两端引号和每标量最多六字节的控制字符转义，数字与评分按规范化前最多 64 字节计算。估算假设客户端使用紧凑 JSON、标准 UUID 和默认 UTF-8 字符串编码；主动转义非 ASCII 或添加大量空白的请求仍可能触发 `413`。预算仅限制新发布，不阻断历史版本的小载荷答卷及成功重试。
-- 发布不替你保存客户端尚未上传的内容，也不会让已关闭问卷自动恢复回收。第一次发布前必须设置 `anonymous` 或 `login_once`；首次发布后模式冻结。
-- `unpublished` 首次发布后变成 `collecting`；关闭或到期后视为 `closed`。到期后即使延长或清空 `deadline`，仍需显式调用 `resume`。`expire_survey` 先记住旧截止时间已到期的事实，再应用新设置，避免延期顺手抹掉关闭状态。
-- `archive` 不可撤销，禁止继续编辑、发布、恢复；保留版本、答卷、报表和复制能力，复制得到独立草稿。彻底删除只允许从未发布的问卷。
-- `taken_down` 是独立治理标志。发布者恢复回收不能撤销管理员下架；管理员恢复问卷也不自动修改关闭状态或截止时间。
+复制问卷会调用 `Document::renew_ids()` 重写全部题目与选项 ID，生成一份独立草稿：不继承答卷、回收设置或跨版本限次资格，并按当前草稿上限重新校验内容。
 
-### 3.3 锁顺序为什么重要
+### 3.2 草稿 revision 与发布 version 是两回事
 
-回收相关写入使用相同顺序：**发布者用户行 `FOR SHARE` → 问卷行 `FOR UPDATE`**。`repository::lock_owned_survey` 把这个顺序集中起来，随后检查归属。公开读题面也使用短事务检查资格，避免把失效状态的题面继续作为可填写内容返回。
+- `revision` 从 `1` 开始，每成功保存一次整份草稿加一。保存和发布都要传最后读到的修订号，`ensure_revision` 在事务锁内比较：值不匹配返回 `409 revision_conflict`，不会静默覆盖另一个窗口的内容。这就是这里的乐观锁。
+- 发布只做一件事：往 `versions` 插入新行，再把 `surveys.current_version_id` 指向它。历史版本不被草稿编辑影响，每份答卷绑定它提交时的版本。
+- 发布**先**执行 `Document::deserialize`、`validate_publish()`、`ensure_submission_budget()` 和 `mode` 非空检查，**再**判断这版草稿是否与当前版本内容完全相同。相同时按幂等重放处理：不新增版本，直接返回 `200` 和当前版本；确实新建版本才返回 `201`。这样响应丢失后的重试不会凭空多出一个内容相同的版本号，同时校验结果也不会因为「看起来像重试」而被跳过。
+- 第一次发布前必须设置填写模式，之后模式冻结；首次发布把 `unpublished` 变成 `collecting`。截止时间到期后问卷按 `closed` 处理，即使之后延长或清空 `deadline`，也要显式调用 `resume` 才恢复回收（`expire_survey` 会先把「已到期」这个事实落库，再应用新设置，避免延期顺手抹掉关闭状态）。
+- `archive` 不可撤销：归档后不能编辑、发布或恢复，但历史版本、答卷、报表和复制能力保留。彻底删除只允许从未发布过的问卷。
+- `taken_down` 是独立的治理标志。发布者恢复回收不会撤销管理员的下架；管理员恢复问卷也不会改动关闭状态或截止时间。
 
-`AuthUser` 提取器在读取请求体之前完成认证，请求体可能迟到。因此所有者写入（新建、保存、复制、删除、发布、回收设置、关闭/恢复/归档）都经 `repository::lock_session_user`：锁定账号行后，在同一事务里用原 Cookie 重新 `authenticate` 并核对身份。退出、改密、禁用都要取得同一账号的 `NO KEY UPDATE` 锁，所以持锁后的重验看得到撤销结果，迟到请求返回 `401`，不会写入。
+### 3.3 锁顺序与只读快照
 
-`submit_response` 通过 `lock_public_survey` 获取这些锁；登录限次同样经 `lock_session_user` 锁填写者用户行为 `SHARE` 并重验 Session。等待锁期间可能改密、退出或被禁用，所以不能只信任事务前提取出的用户身份。
+所有回收相关的写入都使用同一个顺序：**发布者用户行 `FOR SHARE` → 问卷行 `FOR UPDATE`**。`repository::lock_owned_survey` 把这个顺序集中在一处，锁后立刻校验归属。公开读题面走的是另一条路：`GET /api/public/surveys/{id}` 用 `RepeatableRead + ReadOnly` 只读事务快照检查回收状态、发布者状态和登录限次资格（匿名模式完全不解析 Cookie），**不取行写锁**，因此读题面不会和答卷提交互相阻塞。
 
-登录创建 Session、修改密码以及管理员改变用户状态使用用户行 **`FOR NO KEY UPDATE`**，不是更强的 `FOR UPDATE`。它与提交持有的 `SHARE` 冲突，能把资格改变和提交排队；同时与外键检查用的 `KEY SHARE` 兼容，避免并发治理写审计时因不必要的强锁互相卡住。治理问卷仍遵循发布者 `SHARE` → 问卷 `UPDATE`，在同一事务写审计。
+`AuthUser` 提取器在读取请求体之前就完成了认证，而请求体可能迟到。所以所有「所有者写入」（新建、保存、复制、删除、发布、回收设置、关闭/恢复/归档）都要经过 `repository::lock_session_user`：锁住账号行后，在同一个事务里用原 Cookie 重新 `authenticate` 并核对身份。退出登录、修改密码、被禁用都要取得同一账号的 `NO KEY UPDATE` 锁，因此持锁后的重验一定能看到撤销结果，迟到请求会得到 `401` 而不会写入。
 
-问卷行锁使关闭、发布新版本和提交在同一份问卷上有确定顺序。服务在拿到锁之后读取提交时间，再检查截止；不会把等待锁之前的旧时间当作提交发生时间。事务只有在全部校验和插入成功后才提交；错误不会留下半份答卷或单独占用限次资格。这保证业务一致性，但也意味着同一问卷的写入会排队，不能据此宣称高并发吞吐量。
+`submit_response` 通过 `lock_public_survey` 取同样的锁：登录限次模式还会经 `lock_session_user` 锁填写者并重验 Session。治理类写入（禁用用户、下架问卷）同样用 `NO KEY UPDATE`——它与提交持有的 `SHARE` 冲突，从而和提交排队；同时不与外键检查用的 `KEY SHARE` 冲突，避免管理员交叉治理时无谓互锁。
 
-### 3.4 幂等成功记录就是答卷的一部分
+服务拿到锁之后才读取提交时间再检查截止，不会把「等待锁之前的旧时间」当成提交时刻。事务只有在全部校验和插入都成功后提交，因此不会留下半份答卷或单独占用限次资格。代价是同一份问卷上的写入会排队——这是业务一致性要求，不是高并发吞吐设计。
 
-服务端只保存 UUIDv4 秘密的 SHA-256 `key_hash`，不保存明文秘密。作用域由问卷和填写模式决定：匿名是 `anonymous`；登录限次是账号 UUID。答案先按题目 UUID 排序、多选按选项 UUID 排序，再与 `version_id` 一起计算 `payload_hash`。
+只读路径统一使用快照：本人问卷列表、答卷列表、统计与 CSV、管理员治理列表都是 `RepeatableRead + ReadOnly`（统计与 CSV 的 `response_snapshot` 用一条 SELECT 固定结果集），保证一个响应里的总数与分页/统计来自同一时刻，也不与写入争抢行锁。问卷列表和管理员治理列表通过 JSONB 投影只取 `title`，不逐行反序列化整份 `Document`。
 
-查到成功记录时，先匹配原版本，再用**原版本的不可变题面**规范化答案。匹配后返回原回执；改了版本或规范化答案则 `409 idempotency_conflict`。题目排列顺序、多选集合顺序、数字 `1` 与 `1.0` 不构成不同载荷；重复题目/选项仍是非法输入，而不是靠排序掩盖。
+### 3.4 幂等提交：成功记录本身就是答卷
 
-原成功请求可以在关闭、下架、发布者禁用或当前版本切换后合法重试，不占新名额；登录限次仍须有有效的填写者身份。没有成功记录的旧版本请求不能提交到新版本，返回 `version_changed`；客户端应保留输入、重新加载题面核对，不能自动换版本强行提交。
+服务端只保存 UUIDv4 秘密的 SHA-256（`key_hash`），不保存明文。作用域由问卷和填写模式决定：匿名是 `"anonymous"`，登录限次是账号 UUID。答案先按题目 UUID 排序、多选按选项 UUID 排序，再与 `version_id` 一起算出 `payload_hash`。指纹、答案和回执写在同一条 `responses` 记录里，天然原子。
 
-## 4. 数据边界与报表口径
+提交时的判定顺序：
 
-### 4.1 匿名不是无法识别的承诺
+1. `idempotency_key` 必须是安全随机 UUIDv4，否则 `422`。
+2. 用 `(survey_id, scope, key_hash)` 查历史成功记录；命中且版本不同，直接 `409 idempotency_conflict`。
+3. 没有历史记录时检查回收资格与账号限次；有记录时不再重复检查（于是关闭、下架、发布者禁用或版本切换之后，原请求仍能合法重试，也不占新名额）。
+4. 用**原版本的不可变题面**规范化答案——有规则的版本还会从入口重建路径，只有已校验且在有效路径内的答案参与后续条件。
+5. 指纹一致返回原回执（`200`）；指纹不同返回 `409`；全新记录插入并返回 `201`。
 
-- `anonymous` 不解析 Cookie 来关联填写者，`respondent_id` 为空；不使用设备指纹、地理位置来判定身份，也不承诺自然人限次或严格一人一票。
-- `login_once` 内部保留账号关联以实现同账号跨版本一次，因此不能称为“完全匿名”。发布者的答卷详情、列表、统计和导出不含该账号字段。
-- 问卷链接可被转发，不是保密访问控制。应用管理员只有治理权限，不能以管理员身份读取他人答卷；数据库账号、备份运维权限则能接触数据，不能与应用角色混为一谈。
-- 密码用 Argon2id，在 `spawn_blocking` 内调用 Argon2 0.6 的 `hash_password`，由库生成随机盐并保存完整 PHC 字符串。Session 用 `getrandom::fill` 生成 32 字节随机秘密；Session 秘密和提交秘密用 SHA-256 摘要。快速摘要适用于高熵秘密，不能拿来替代密码哈希。改密在同一事务删除该账号全部 Session，当前窗口和其他设备均需重新登录；禁用账号也撤销其 Session。
-- `Cookie::split_parse` 遍历全部 Cookie 头，保留重复 session 拒绝、64 位十六进制校验和不做百分号解码的策略；不用会覆盖同名项的 CookieJar。`Cookie::build` 生成 HttpOnly、SameSite=Lax、Path=/、Max-Age，按配置设置 Secure；退出和改密生成 Max-Age=0 的清除 Cookie。
+因此题目排列顺序、多选集合顺序、`1` 与 `1.0` 都不构成不同载荷，而重复题目/选项仍是非法输入，不会被排序掩盖。没有成功记录、但提交到旧版本时返回 `409 version_changed`：客户端应保留输入、重新加载题面核对，不能自动换版本强行提交。
 
-### 4.2 文本、缺失与数字
+## 4. 数据校验与统计口径
 
-- 草稿允许不完整，但容量、ID 唯一性、数值有限性等基本约束始终有效。发布再要求标题、目的、至少一道题、有效题型配置；最多 100 题，每道选择题最多 50 个选项。单题上限之和可以合法超过单次提交的请求上限，因此发布期还按最坏情况总量预算把关（见 3.2）。
-- 文字按 Rust `chars()`，即 Unicode 标量值计数，不是 UTF-8 字节数，也不等同于用户眼里的字形数量。非空白答案保留原文；不会静默截断、修剪或按内容判断“有效性”。
-- `null`、空白文本、空多选视为缺失：可选题不存这一键，必填题拒绝。**合法数值 `0` 不等于缺失。** 单行文本拒绝换行，多行文本允许换行。
-- 空白按 Unicode `White_Space`（Rust `str::trim`），前端普通填写、流程填写与进度计数使用相同规则：U+0085 视为空白；U+FEFF 是内容，不视为空白。非空白文本仍保留首尾原文。
-- 配置中的题目、选项、变量、规则题目、流程入口/节点/出口/页面归属与 AST 引用均使用非零、小写连字符 UUID。Rust 配置 DTO 在反序列化时拒绝其他写法，经 HTTP 返回 `400 invalid_json`；AST 引用错误由编译器报告。答案的选项值仍接受可解析 UUID 并按现有选项规范化；这不是历史格式兼容分支。
-- 提交答案和改答事件的 `question_id` 也在反序列化时执行同一严格身份规则，与前端（wasm 引擎调用同一份身份规则）按规范题目 ID 匹配的行为一致。
-- 题面文字、文本答案、治理原因拒绝 `U+0000`（NUL），不把无法存入 PostgreSQL 文本/JSONB 的输入拖到数据库层再报内部错误。文字作为纯文本使用，不是可信 HTML。
-- 数字题只接受 JSON 数字，拒绝字符串、布尔值、非有限值；边界是闭区间。`integer=true` 检查数学整数，评分还受 `i32` 整数范围和题面范围约束。
-- 数字与评分的 JSON 表示在规范化前最多 64 字节（`MAX_NUMBER_JSON_BYTES`），包括负号、小数点和指数。与 `serde_json` 一致，省略的正指数符号 `+` 也计入长度；例如 `1e3` 按 `1e+3` 计数。超限返回题目级 `422`，前端数字输入执行相同校验，不先舍入再发送。
-- 数字规范化和统计使用 **`f64`**，不是任意精度十进制或金额系统。`serde_json` 启用 `arbitrary_precision` 保留数字原文，`finite_number` 对没有小数点和指数的**原始裸整数**先检查 `i64::MIN..=u64::MAX` 范围，再核对转换成 `f64` 是否保持整数精度；不允许先舍入，再把两个不同整数当成同一份答案。`f64` 只有 53 位整数精度，例如 `9007199254740993` 会被拒绝；不是简单禁止所有大于 `2^53` 的数，部分更大的整数仍可精确表示。
-- 带小数点或指数形式按有限 `f64` 语义处理，可能发生二进制浮点舍入；`1` 与 `1.0`、正零与负零按相同答案处理。原始整数检查不意味着整个 API 提供任意精度保证，也无法恢复客户端在发送前已经舍入的数字。需要精确十进制或大整数的调查，不应借此接口假装保存了完整精度。
+### 4.1 匿名与登录限次的隐私边界
 
-### 4.3 版本、时间和统计
+- `anonymous` 不解析 Cookie，`respondent_id` 为空，不使用设备指纹或地理位置判定身份，也不承诺按自然人限次或严格一人一票。
+- `login_once` 为了做到「同一账号跨版本一次」，内部必须保留账号关联，所以它不是完全匿名；发布者看到的答卷详情、列表、统计和导出里都不含账号字段。
+- 公开链接可以被转发，它不是保密访问控制。应用管理员只有治理权限，不能以管理员身份读取他人答卷；数据库账号和备份运维权限能接触数据，这与应用角色是两件事。
+- 密码用 Argon2id（`spawn_blocking` 内调用 Argon2 0.6 的 `hash_password`，盐由库生成，保存完整 PHC 字符串）。Session 秘密和提交秘密用 `getrandom::fill` 生成高熵随机值，数据库只存 SHA-256 摘要——快速摘要适合高熵秘密，不能替代密码哈希。
+- 修改密码会在同一事务里删除该账号的全部 Session，当前窗口和其他设备都要重新登录；禁用账号同样撤销其 Session。
+- Cookie 解析用 `Cookie::split_parse` 遍历全部 Cookie 头，重复 `session` 直接拒绝，校验 64 位十六进制摘要且不做百分号解码；不使用会覆盖同名项的 `CookieJar`。设置 Cookie 时统一带上 `HttpOnly`、`SameSite=Lax`、`Path=/`、`Max-Age`，`Secure` 由配置决定；退出和改密下发 `Max-Age=0` 的清除 Cookie。
 
-答卷列表、统计、CSV 一次只选择一个版本；省略 `version_id` 表示当前发布版本，不是合并全部历史版本。答卷详情始终附带其原版本题面。统计与 CSV 的 `response_snapshot` 一次 SELECT 固定结果，再从同一批数据计算总数、各题结果与趋势，不在同一响应里混用前后两次计数；不同请求之间仍可能有新答卷进入。
+### 4.2 文本、缺失与身份
 
-带规则版本使用该历史版本的 `FlowEvaluator` 重建适用性；详情中的 `question_states` 区分 `answered`、`unanswered`、`skipped`。统计满足 `applicable_count = answered_count + unanswered_count`，且适用数加 `skipped_count` 等于答卷总数；选择题分母仍为已答数。规则版本 CSV 在每题后增加独立的状态列，无规则历史版本保留原 CSV 格式。提交同样重建路径，拒绝路径外答案；原有幂等指纹和重放顺序不变。完整阶段边界见 [DSL 实施计划](survey-dsl-plan.md)。
+- 草稿允许不完整，但容量、ID 唯一性和数值有限性始终有效。发布额外要求：标题与收集目的非空白、至少一道题、题目标题和选项文字非空白，最多 100 题、每题最多 50 个选项。单题上限之和可以合法超过单次提交上限，所以发布时还要按最坏情况做提交预算检查（见 3.2）。
+- 文字长度按 Rust `chars()`（Unicode 标量值）计数，不是 UTF-8 字节数，也不等同于用户眼里的字形数。上限：问卷标题 200、题目标题 500、选项文字 500、调查说明与收集目的各 5000、结束语 1000、评分端点说明 100；文本题上限为单行 200、多行 1000，发布者可以调低。
+- `null`、空白文本和空多选都算缺失：可选题不存这个键，必填题直接拒绝。**合法的数值 `0` 不是缺失。** 单行文本拒绝换行字符，多行文允许换行；非空白文本保留原文，不静默截断或修剪。
+- 空白判定统一使用 Unicode `White_Space`（等价于 Rust `str::trim`）：`U+0085` 算空白，`U+FEFF` 算内容。前端填写、流程进度计数和 `answers.ts` 的校验用同一套规则。
+- 配置中的题目、选项、变量、规则引用、流程节点与页面归属都用**非零、小写连字符 UUID**。Rust DTO 在反序列化时就拒绝其他写法，HTTP 返回 `400 invalid_json`；AST 里的引用错误由编译器报告。答案里的 `question_id` 同样在反序列化时执行这条严格规则，和前端的匹配行为一致。
+- 答案的**选项值**则宽松一些：接受任何可解析的 UUID 字符串，再按该版本已有选项规范化为标准写法——这是输入规范化，不是历史格式兼容分支。
+- 题面文字、文本答案和治理原因都拒绝 `U+0000`（NUL），不把无法存入 PostgreSQL 文本/JSONB 的输入拖到数据库层再报内部错误。文字一律按纯文本使用，不是可信 HTML。
 
-文本入口为 `domain::parse_logic_text(source, questions)`，实现在 `logic-core/src/logic_text.rs`（模块对外私有，只经 `questionnaire_logic::domain` 暴露），文法集中在 `logic-core/src/logic_text.pest`。先以无递归词法入口检查 1 MiB 源文本、65,536 词元、64 字符标识符，以及括号、函数与布尔前缀共用的 64 层解析预算，再由 pest 匹配完整文法；`PrattParser` 负责优先级与左结合。生成 AST 时逐步检查节点和深度预算，数字保留原文，负号只接受数字字面量。
+### 4.3 数字语义
 
-随后检查别名类别和规范 UUID，生成 `DocumentLogic` 并调用同一文档编译器；返回值已通过类型、依赖与流程检查。`LogicTextError` 保留 Unicode 标量行列、稳定错误分类和语义 AST 路径，不回显 pest 原始输入诊断。HTTP 仍接收文档 JSON AST：网页经 wasm 引擎（`logic-wasm` 调用同一份 `logic-core` 代码）解析文本后发送 AST，服务端重新编译验证；没有新增数据库表或文本 HTTP 端点。文本回归位于独立的 `backend/tests/logic_text.rs`，与前端（经 wasm 引擎）同读 `fixtures/survey-logic/texts.json`；其中的 `format_cases` 用人工期望逐字节锁定 `format_logic_text` 的输出，两端各读一次。
+- 数字题只接受 JSON 数字，拒绝字符串、布尔值和非有限值；范围是闭区间。`integer = true` 时要求数学意义上的整数；评分题的整数值还受 `i32` 范围和题面范围约束。
+- 规范化前，数字与评分的 JSON 表示最多 64 字节（`MAX_NUMBER_JSON_BYTES`），包含负号、小数点和指数。与 `serde_json` 一致，省略的正指数符号也算进长度：`1e3` 按 `1e+3` 计数。超限返回题目级 `422`；前端在发送前执行同样的长度检查，不会先舍入再发送。
+- 规范化和统计统一使用 **`f64`**，不是任意精度十进制。`serde_json` 开启 `arbitrary_precision` 以保留数字原文：对没有小数点和指数的**原始裸整数**，先检查是否落在 `i64::MIN..=u64::MAX`，再核对转成 `f64` 后是否仍精确——所以 `9007199254740993` 会被拒绝，而部分更大的整数仍可精确表示。这不是「禁止所有大于 2^53 的数」。
+- 带小数点或指数形式的按有限 `f64` 处理，可能发生二进制浮点舍入；`1` 与 `1.0`、正零与负零被视为同一答案（负零会归一为 `0`）。
 
-时间过滤使用 RFC3339，必须带 `Z` 或时区偏移；区间为 **`[from, to)`**：包含开始、不包含结束，两个值同时存在时必须 `from < to`。PostgreSQL 存储精度为微秒；过滤边界不能含非零的微秒以下精度，不会静默截断。客户端统一发送最多六位小数即可，额外全零尾位不改变时刻。不要把服务器本地时区或无时区日期字符串当作输入约定。
+### 4.4 版本、时间与统计口径
 
-内部时间按 UTC 比较；报表的返回时间、CSV 提交时间和自然日趋势明确用 **Asia/Shanghai（当前业务固定 `+08:00`）**，不依赖服务器操作系统时区。查询含 `+08:00` 时要编码 `+`，否则 URL 查询解码可能把它当空格。例如在前面脚本之后：
+答卷列表、统计和 CSV 一次只针对一个版本；省略 `version_id` 表示当前发布版本，不会合并历史版本。答卷详情始终附带它提交时的那版题面。
+
+带规则的版本会用该历史版本的 `FlowEvaluator` 重建适用性：详情里的 `question_states` 区分三种状态——`answered`（已答）、`unanswered`（在有效路径内但未答）、`skipped`（被规则跳过）。统计恒满足 `applicable_count = answered_count + unanswered_count`，且 `applicable_count + skipped_count` 等于本次答卷总数。是否跳过只来自路径重建，不靠「答案缺失」猜测。
+
+时间过滤使用 RFC3339，必须带 `Z` 或时区偏移，区间是 **`[from, to)`**：包含 `from`、不包含 `to`，两个都给时必须 `from < to`。PostgreSQL 只存到微秒，过滤边界同样不允许超过微秒的非零精度，不会静默截断；客户端发最多六位小数即可，多余的零尾位不改变时刻。含 `+08:00` 的时间在 URL 里要编码 `+`：
 
 ```powershell
 $From = [uri]::EscapeDataString('2026-01-01T00:00:00+08:00')
@@ -330,23 +364,25 @@ $To = [uri]::EscapeDataString('2027-01-01T00:00:00+08:00')
 Invoke-RestMethod -Uri "$Base/api/surveys/$SurveyId/statistics?version_id=$VersionId&from=$From&to=$To" -WebSession $PublisherSession
 ```
 
-统计口径：
+内部时间一律按 UTC 比较；返回给用户的时间、CSV 提交时间和自然日趋势固定用 **Asia/Shanghai（`+08:00`）**，不依赖服务器操作系统的时区设置。
 
-- `total_count` 是当前版本及时间范围内的答卷数；`answered_count` 是真正回答该题的答卷数，排除缺失。
-- 选择题 `proportion = 选项频次 / 本题 answered_count`，返回 `0..1` 比例，不是已乘 100 的百分数。多选合计可超过 100%。**分母为零时 `proportion=null`，不是 0 或 NaN。**
-- 数字的均值、最小、最大排除缺失但包含合法零；没有回答时返回 `null`。评分均值同理。
-- 评分 `distribution` 是按分值升序的**稀疏分布**，只列实际出现的分数，没出现的分数代表频次 0；不会为一个很大的评分范围分配每个整数桶。趋势同样省略没有提交的日期。
-- 文本统计返回原始文本与回执/时间，不做自动情感分析或主观质量判定。
+统计口径要点：
 
-### 4.4 CSV 不是裸 JSON 的无损替代
+- `total_count` 是选定版本与时间范围内的答卷数。
+- 选择题的 `proportion = 选项频次 / 本题 answered_count`，返回 `0..1` 的比例而不是百分数；多选合计可以超过 1。**分母为 0 时 `proportion` 为 `null`**，不是 `0` 或 `NaN`。
+- 数字的均值、最小值、最大值排除缺失但包含合法的 `0`；没有有效回答时返回 `null`。评分均值同理。
+- 评分的 `distribution` 是按分值升序的**稀疏分布**，只列出实际出现过的分值；没出现的分值等价于频次 0，不为一个很大的评分范围分配每个整数桶。趋势同样省略没有提交的自然日。
+- 文本统计返回原始文本、回执与时间，不做情感分析或主观质量判断。
 
-`encode_csv` 生成 UTF-8 CSV，使用 CRLF 行结束和标准 CSV 转义。表头含回执、版本、上海时区提交时间及题目标题/UUID；选择题保存选项 UUID，多选在**一个 CSV 字段里保留 JSON 数组**，不是用逗号拼接；未答可选题留空。字段中的逗号、双引号和换行由 CSV 库处理。
+### 4.5 CSV 导出与公式注入防护
 
-`formula_safe` 检查每个单元格，包括表头：以 `=`、`+`、`-`、`@` 开头，或在前导空白、控制字符、常见不可见字符后出现这些前缀时，在**原字段最前面加单引号 `'`**，防止电子表格把调查内容当公式执行。原始数据库答案不因此被修改。负数也可能带这个文本保护前缀，这是导出安全语义，不是算错数；需要程序分析原始类型时优先用受权限保护的答卷 JSON。
+`encode_csv` 生成 UTF-8 CSV，使用 CRLF 行结束和标准 CSV 转义。表头依次是回执、版本 ID、版本号、提交时间（Asia/Shanghai +08:00），随后每题一列「`题目标题 [题目 UUID]`」；带规则的版本会在每题后再加一列状态（已答 / 适用未答 / 规则跳过），无规则的历史版本保持原有列结构。选择题保存选项 UUID，**多选在一个字段里保留 JSON 数组**（不是逗号拼接），未答的可选题留空，字段内的逗号、双引号和换行交给 CSV 库处理。
 
-## 5. 全部路由组与精确接口入口
+`formula_safe` 会逐格检查（包括表头）：以 `=`、`+`、`-`、`@` 开头，或在前导空白、控制字符、常见不可见字符之后出现这些前缀时，在**原字段最前面加一个单引号 `'`**，避免电子表格把调查内容当公式执行。数据库里的原文不会被改动；负数也可能带这个保护前缀，这是导出安全语义，不是算错数——需要按原始类型分析时请用受权限保护的答卷 JSON。
 
-精确字段、请求体、响应体、查询参数、错误码见启动服务后的 [OpenAPI JSON](http://localhost:3000/api/openapi.json)。业务模块使用 `OpenApiRouter<AppState>` 和 `routes!`，从 handler 的同一份 `#[utoipa::path]` 登记路由与文档；`lib.rs::router()` 合并后用 `split_for_parts()` 生成文档，并加入 session Cookie 安全方案。文档只在组装时生成；仓库没有 Swagger 网页。发布者与管理员的列表分别使用 `SurveyPage`、`AdminSurveyPage`，避免组件名称冲突。此处只给路由导航，不手工重复全部 schema。更改端口或部署 origin 后，相应调整链接。
+## 5. 路由速查与错误契约
+
+精确的字段、请求体、响应体和错误码，以启动服务后的 [OpenAPI JSON](http://localhost:3000/api/openapi.json) 为准（端口或 origin 改变时相应调整链接）。业务模块使用 `OpenApiRouter<AppState>` 和 `routes!`，从 handler 上同一份 `#[utoipa::path]` 登记路由与文档，`lib.rs::router()` 合并后用 `split_for_parts()` 生成文档并加入 session Cookie 安全方案。仓库里没有 Swagger 网页，文档只在组装时生成。
 
 ### 基础与认证
 
@@ -355,24 +391,24 @@ Invoke-RestMethod -Uri "$Base/api/surveys/$SurveyId/statistics?version_id=$Versi
 | GET | `/health` | 数据库就绪探测 |
 | GET | `/api/openapi.json` | OpenAPI 定义 |
 | POST | `/api/auth/register` | 注册普通账号，不自动登录 |
-| POST | `/api/auth/login` | 登录并设置 HttpOnly / SameSite=Lax Cookie |
-| POST | `/api/auth/logout` | 撤销当前 Session、清 Cookie，可重复调用 |
+| POST | `/api/auth/login` | 登录并下发 HttpOnly / SameSite=Lax 的 `session` Cookie |
+| POST | `/api/auth/logout` | 撤销当前 Session 并清 Cookie，可重复调用 |
 | GET | `/api/auth/me` | 当前有效账号 |
-| PUT | `/api/auth/password` | 验证旧密码、更新密码、撤销全部 Session |
+| PUT | `/api/auth/password` | 校验旧密码、更新密码、撤销全部 Session |
 
 ### 本人的问卷管理
 
-除创建/列表外，`{id}` 均是本人的问卷 UUID；管理员走这些接口也不能越过归属检查。
+除创建与列表外，`{id}` 都是本人的问卷 UUID；管理员走这些接口也不能越过归属检查。
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET / POST | `/api/surveys` | 筛选分页列表 / 创建草稿 |
+| GET / POST | `/api/surveys` | 筛选分页列表（按标题子串与状态）/ 创建草稿 |
 | GET / DELETE | `/api/surveys/{id}` | 管理详情 / 删除从未发布的问卷 |
-| PUT | `/api/surveys/{id}/draft` | 带 revision 保存整份草稿 |
+| PUT | `/api/surveys/{id}/draft` | 携带 `revision` 保存整份草稿 |
 | GET | `/api/surveys/{id}/preview` | 已保存草稿与发布校验结果，不产生答卷 |
-| POST | `/api/surveys/{id}/copy` | 复制为新草稿 |
+| POST | `/api/surveys/{id}/copy` | 复制为独立新草稿 |
 | POST | `/api/surveys/{id}/publish` | 发布指定 revision（内容未变时幂等返回当前版本） |
-| PATCH | `/api/surveys/{id}/collection` | 模式与截止设置 |
+| PATCH | `/api/surveys/{id}/collection` | 修改填写模式与截止时间（三态语义见 2.4） |
 | POST | `/api/surveys/{id}/close` | 关闭回收 |
 | POST | `/api/surveys/{id}/resume` | 显式恢复回收 |
 | POST | `/api/surveys/{id}/archive` | 不可撤销归档 |
@@ -382,33 +418,41 @@ Invoke-RestMethod -Uri "$Base/api/surveys/$SurveyId/statistics?version_id=$Versi
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | `/api/public/surveys/{id}` | 当前可填写题面与隐私提示；登录限次须认证 |
+| GET | `/api/public/surveys/{id}` | 当前可填写题面与隐私提示；登录限次模式需要认证 |
 | POST | `/api/public/surveys/{id}/responses` | 整份提交或合法幂等重试 |
-| GET | `/api/surveys/{id}/responses` | 本人问卷答卷分页列表 |
-| GET | `/api/surveys/{id}/responses/{receipt_id}` | 一份答卷及原版本题面 |
-| GET | `/api/surveys/{id}/statistics` | 本人问卷选定版本统计 |
-| GET | `/api/surveys/{id}/export.csv` | 本人问卷选定版本 CSV |
+| GET | `/api/surveys/{id}/responses` | 本人问卷的答卷分页列表 |
+| GET | `/api/surveys/{id}/responses/{receipt_id}` | 一份答卷及其原版本题面 |
+| GET | `/api/surveys/{id}/statistics` | 本人问卷选定版本的统计 |
+| GET | `/api/surveys/{id}/export.csv` | 本人问卷选定版本的 CSV |
 
 ### 管理员治理
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | GET | `/api/admin/users` | 账号分页列表 |
-| PATCH | `/api/admin/users/{id}` | `disabled` 与必填 `reason` |
-| GET | `/api/admin/surveys` | 治理所需问卷元数据 |
-| GET | `/api/admin/surveys/{id}` | 元数据与当前已发布题面，不返回他人草稿/答卷 |
-| PATCH | `/api/admin/surveys/{id}` | `taken_down` 与必填 `reason` |
+| PATCH | `/api/admin/users/{id}` | 设置 `disabled`，必须提供 `reason` |
+| GET | `/api/admin/surveys` | 治理所需的问卷元数据 |
+| GET | `/api/admin/surveys/{id}` | 元数据与当前已发布题面，不返回他人草稿或答卷 |
+| PATCH | `/api/admin/surveys/{id}` | 设置 `taken_down`，必须提供 `reason` |
 | GET | `/api/admin/audits` | 治理审计分页列表 |
 
-通用分页从 `page=1` 开始，默认 `page_size=20`，范围 `1..=100`。请求体上限为 1 MiB（`domain::MAX_SUBMISSION_BYTES`，与发布期总量预算共用）。错误结构为 `{"error":{"code":"...","message":"...","question_id":null}}`，题目级错误会给出 UUID；JSON/路径格式错误通常为 `400`、无有效身份 `401`、拒绝权限或来源 `403`、资源不可访问 `404`、业务冲突 `409`、领域校验 `422`、限流 `429`。内部错误（`500`）的日志带 `error_id`、错误类别与发起位置，响应头 `X-Error-Id` 返回同一标识供检索；日志与响应都不含原始 SQL 或用户数据。管理接口对他人问卷使用不可访问结果，不以猜测 UUID 的方式提供查询入口。
+### 分页、错误与通用约定
+
+- 分页从 `page=1` 开始，`page_size` 默认 `20`、范围 `1..=100`；参数非法返回 `422`。
+- 请求体上限 1 MiB（`domain::MAX_SUBMISSION_BYTES`，与发布预算共用同一常量），超限返回 `413`。
+- 错误响应统一为 `{"error":{"code":"…","message":"…","question_id":null}}`；题目级错误会给出 UUID。
+- 常见状态码：JSON/路径格式错误 `400`、无有效身份 `401`、来源或权限被拒 `403`、资源不可访问 `404`、业务冲突 `409`（含 `revision_conflict`、`idempotency_conflict`、`version_changed`、`mode_frozen` 等稳定 `code`）、领域校验失败 `422`、限流 `429`、内部错误 `500`、数据库未就绪 `503`。
+- 内部错误会在日志里带 `error_id`、错误类别与发生位置，同时通过响应头 `X-Error-Id` 返回同一标识供检索；日志与响应都不含原始 SQL 或用户数据。
+- 所有响应都带 `Cache-Control: no-store` 与 `X-Content-Type-Options: nosniff`；写请求必须来自配置的同源站点并携带 `X-CSRF-Protection: 1`，否则 `403 csrf_rejected`。
+- 限流是单实例的固定窗口：认证类路径和公开提交各有独立配额（`AUTH_REQUESTS_PER_MINUTE`、`SUBMISSIONS_PER_MINUTE`），不按 IP 或身份区分，也不在多实例间共享。
 
 ## 6. 备份与独立恢复
 
-**下面是操作步骤，不表示已经在你的环境演练成功。** [需求分析第 11.2 节](requirements-analysis.md#112-后端阶段实际执行的验证) 记录过一次在临时实例上用同类步骤完成的演练；当前 Compose 路径仍未在本机验证。首次实际演练应使用非敏感演示数据，保存命令退出结果和核对结果；不要在唯一的生产库上试恢复命令。
+演练请先用非敏感演示数据，保存命令输出和核对结果，不要拿唯一的生产库直接试恢复命令。历史演练记录见[需求分析第 9 章](requirements-analysis.md#9-架构演进历次关键决策与验证总结)。
 
 ### 6.1 备份到受保护的文件
 
-使用 PostgreSQL 18 客户端连接本指南的 PostgreSQL 18 服务。`pg_dump` 备份一个数据库，**不会替你备份集群角色和部署密钥**；另外安全管理角色配置、`.env` 和恢复所需凭据。先确定备份文件夹只允许本人/授权运维读取，不是公开同步目录；备份含密码哈希、Session 哈希、内部填写者关联及全部答案，应加密保管并设置保留期限。
+用 PostgreSQL 18 客户端连接本项目的 PostgreSQL 18 服务。`pg_dump` 只备份一个数据库，**不会备份集群角色和部署密钥**，这些请另外管理；`.env` 与恢复所需凭据同样要单独保管。备份文件包含密码哈希、Session 哈希、内部填写者关联和全部答案，请放在只有本人或授权运维可读的目录，加密保管并设置保留期限。
 
 ```powershell
 $BackupDirectory = Join-Path $env:LOCALAPPDATA 'questionnaire-backups'
@@ -418,11 +462,11 @@ pg_dump -h 127.0.0.1 -p 5432 -U questionnaire -d questionnaire -W -Fc -f $DumpPa
 if ($LASTEXITCODE -ne 0) { throw '备份失败，不要把此文件当作可恢复备份' }
 ```
 
-必须使用 **`pg_dump -Fc -f 文件`**。不要写 `pg_dump ... > backup.dump`，也不要把二进制归档通过 PowerShell 文本管道传递，避免编码/重定向破坏文件。`pg_dump` 自身取得一致快照，不是按表随意复制；但若之后还在写入，实时库总数当然可能比该快照多。演练核对时暂停写入，或记录备份时对应的版本与时间筛选范围。
+必须使用 `pg_dump -Fc -f 文件` 这种写法：不要用 `pg_dump ... > backup.dump`，也不要让二进制归档经过 PowerShell 文本管道，那会破坏文件。`pg_dump` 自身取得一致快照，但如果备份期间仍有写入，实时库的总数当然可能比快照多——核对时请暂停写入，或记录备份对应的版本与时间范围。
 
 ### 6.2 恢复到新的独立空库
 
-在同一服务器上生成一个独立库名，避免误用原库。恢复目标不能先执行应用迁移，也不能含旧表。下面仍由数据库管理员创建库，应用专用账号负责恢复；每步密码交互输入：
+恢复目标用一个全新的独立库名，避免误用原库；目标库不能先执行应用迁移，也不能含旧表。下面由数据库管理员建库、应用账号执行恢复，每步交互输入密码：
 
 ```powershell
 $RestoreDb = 'questionnaire_restore_' + (Get-Date -Format 'yyyyMMdd_HHmmss')
@@ -432,11 +476,11 @@ pg_restore -h 127.0.0.1 -p 5432 -U questionnaire -d $RestoreDb -W --exit-on-erro
 if ($LASTEXITCODE -ne 0) { throw '恢复失败，此库不能当作完成恢复的结果' }
 ```
 
-`--no-owner --no-privileges` 让对象由恢复账号拥有，不照搬原库的 ACL；正式恢复如有额外角色授权，应由授权运维明确重建，不能假设上述两项也恢复了权限。没有 `--clean`，没有覆盖原库，也不自动删除失败目标库。失败后先查清原因，再由你选择另一个新空库重新演练。
+`--no-owner --no-privileges` 让对象由恢复账号拥有，不照搬原库的 ACL；如果正式恢复还需要额外角色授权，应由授权运维显式重建。这里没有 `--clean`，不会覆盖原库，也不会自动删除失败的目标库——失败后先查清原因，再选一个新的空库重试。
 
-### 6.3 核对行数、版本关系和报表
+### 6.3 核对行数、版本关系与报表
 
-先直接核对恢复库中的业务计数与版本对应关系：
+先直接核对恢复库的业务计数与版本对应关系：
 
 ```powershell
 $CountSql = "SELECT 'users' AS table_name, count(*) AS row_count FROM users UNION ALL SELECT 'surveys', count(*) FROM surveys UNION ALL SELECT 'versions', count(*) FROM versions UNION ALL SELECT 'responses', count(*) FROM responses UNION ALL SELECT 'audits', count(*) FROM audits;"
@@ -444,15 +488,14 @@ psql -h 127.0.0.1 -p 5432 -U questionnaire -d $RestoreDb -W -c $CountSql
 psql -h 127.0.0.1 -p 5432 -U questionnaire -d $RestoreDb -W -c "SELECT s.id AS survey_id, s.current_version_id, v.number, v.id AS version_id, count(r.id) AS response_count FROM surveys s LEFT JOIN versions v ON v.survey_id = s.id LEFT JOIN responses r ON r.survey_id = s.id AND r.version_id = v.id GROUP BY s.id, s.current_version_id, v.number, v.id ORDER BY s.id, v.number;"
 ```
 
-将这些结果与暂停写入时的源库记录比较，不能只看到 `pg_restore` 退出成功就说业务恢复成功。随后验证应用确实能解释恢复数据：
+把这些结果与暂停写入时的源库记录逐项比较——`pg_restore` 退出成功只说明 SQL 没有报错，不等于业务数据已经恢复完整。接着验证应用确实能解释这些数据：
 
-1. 在**单独终端**从仓库根目录启动第二个 API 实例；通过进程环境变量把 `DATABASE_URL` 指向 `$RestoreDb`（密码仍需要 URI 编码），设置 `LISTEN_ADDR=127.0.0.1:3001`、`PUBLIC_ORIGIN=http://localhost:3001`、`COOKIE_SECURE=false`，运行 `cargo run --locked -p questionnaire-api`。不要改原实例的连接；恢复库已经含迁移记录，启动会照常检查迁移。
-2. 在另一个客户端终端把 `$Base` 改为 `http://localhost:3001`，`Origin` 同步更新，使用**备份中已有发布者账号**重新登录，建立独立 `WebSession`。不要重新注册替代原账号，也不要复用原实例的会话；Cookie 不以端口隔离，更不应在同一个会话容器里混用两个本机实例。
-3. 调用 `/health`、该问卷的 `/versions`、带明确 `version_id` 和相同时间区间的 `/statistics`；核对版本列表、每版本答卷数、`total_count`、关键选项频次/数值统计，并抽查一份答卷详情或 CSV。健康检查通过只证明连接，不证明数据完整。
-4. 记录恢复所用归档、目标库名、命令结果及上述核对值，完成后停止恢复实例。恢复库与归档仍含敏感数据，按保留策略处理；不要因“演练结束”随意公开或上传。
+1. 在**单独终端**从仓库根目录启动第二个 API 实例：通过进程环境变量把 `DATABASE_URL` 指向 `$RestoreDb`（密码仍需 URI 编码），设置 `LISTEN_ADDR=127.0.0.1:3001`、`PUBLIC_ORIGIN=http://localhost:3001`、`COOKIE_SECURE=false`，运行 `cargo run --locked -p questionnaire-api`。不要改原实例的连接；恢复库已含迁移记录，启动会照常检查迁移。
+2. 在另一个客户端终端把 `$Base` 改成 `http://localhost:3001`、`$Origin` 同步更新，用**备份里已有的发布者账号**重新登录并建立新的 `WebSession`。不要重新注册替代原账号，也不要复用原实例的会话——Cookie 不以端口隔离，两个本机实例更不该混用同一个会话容器。
+3. 依次调用 `/health`、该问卷的 `/versions`、带明确 `version_id` 与相同时间区间的 `/statistics`，核对版本列表、每版本答卷数、`total_count`、关键选项频次或数值统计，并抽查一份答卷详情或 CSV。健康检查通过只证明连接正常，不证明数据完整。
+4. 记录本次使用的归档、目标库名、命令结果与核对值，完成后停止恢复实例。恢复库和归档仍含敏感数据，请按保留策略处理。
+5. 恢复库里的 `sessions` 也来自备份，仍在有效期内的旧会话可能继续有效。如果真实事故恢复要求所有人重新登录，应由运维明确执行会话撤销并留下记录。
 
-恢复后的 `sessions` 也来自备份，仍在有效期内的旧会话可能继续有效。若真实事故恢复要求所有人重新登录，应由运维明确执行会话撤销并记录，而不是假定改了地址就使 Session 全部失效。
+## 7. 交付边界
 
-## 7. 当前交付边界
-
-本文说明后端 API 与数据一致性实现；新增 Vue 前端及移动布局见 [前端指南](frontend-guide.md)。性能压测报告、公众长期运营的隐私合规流程、HTTPS/TLS 终止、部署反向代理与应用容器镜像不在项目范围内。全局内存限流只保护单实例固定窗口，不按身份判断人次，也不在多个实例间共享。对外运营还涉及告知同意、合法收集范围、数据保留与删除、运维权限及事件响应，不能用“匿名模式”三个字替代这些责任。
+本文覆盖后端 API 与数据一致性实现；Vue 前端与移动布局见[前端指南](frontend-guide.md)，DSL 与流程的阶段边界见 [DSL 实施计划](survey-dsl-plan.md)。性能压测报告、面向公众长期运营的隐私合规流程、HTTPS/TLS 终止、反向代理与容器镜像部署都不在本项目范围内；限流也只是单实例固定窗口，不按身份判断人次。如果要对外运营，告知同意、合法收集范围、数据保留与删除、运维权限和事件响应都需要另行设计，这不是「开了匿名模式」就能替代的。

@@ -6,12 +6,13 @@ import type { User } from './types'
 
 export const useAuth = defineStore('auth', () => {
   const user = ref<User | null>(null)
-  const initialized = ref(false)
+  // 仅在本 store 内记录恢复是否已完成，外部不读取，因此不需要响应式。
+  let initialized = false
   const expired = ref(false)
   const restoreError = ref('')
   let restoring: Promise<void> | null = null
   async function restore() {
-    if (initialized.value) return
+    if (initialized) return
     if (restoring) return restoring
     restoring = (async () => {
       try {
@@ -21,7 +22,7 @@ export const useAuth = defineStore('auth', () => {
         if (!(error instanceof ApiError && error.status === 401))
           restoreError.value = message(error)
       } finally {
-        initialized.value = true
+        initialized = true
         restoring = null
       }
     })()
@@ -30,7 +31,7 @@ export const useAuth = defineStore('auth', () => {
   async function login(username: string, password: string) {
     user.value = await api<User>('/api/auth/login', 'POST', { username, password })
     expired.value = false
-    initialized.value = true
+    initialized = true
     restoreError.value = ''
   }
   async function logout() {
@@ -38,7 +39,7 @@ export const useAuth = defineStore('auth', () => {
     user.value = null
     expired.value = false
   }
-  return { user, initialized, expired, restoreError, restore, login, logout }
+  return { user, expired, restoreError, restore, login, logout }
 })
 
 // 与 styles.css 的 --canvas 一一对应；改动主题底色时同步 index.html 的首绘脚本。

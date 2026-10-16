@@ -44,7 +44,7 @@ fn decode<'de, T: serde::Deserialize<'de>>(raw: &'de str, what: &str) -> Result<
 
 /// 领域错误统一序列化为信封错误对象；错误对象本身只含基础类型，序列化不会失败。
 fn domain_error(error: impl serde::Serialize) -> Value {
-    serde_json::to_value(&error).unwrap_or_else(|_| boundary_error("领域错误序列化失败"))
+    serde_json::to_value(&error).expect("领域错误只含基础类型，序列化不应失败")
 }
 
 /// 解析文本 DSL；失败信封额外携带 `line` / `column`。
@@ -52,24 +52,18 @@ fn domain_error(error: impl serde::Serialize) -> Value {
 pub fn parse_logic_text(source: String, questions_json: String) -> String {
     let result = (|| {
         let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
-        let logic = core_parse_logic_text(&source, &questions).map_err(domain_error)?;
-        serde_json::to_value(&logic).map_err(serde_json_to_boundary)
+        core_parse_logic_text(&source, &questions).map_err(domain_error)
     })();
     envelope_generic(result)
 }
 
-/// 序列化成功值失败只可能是信封构造故障，统一转为边界错误。
-fn serde_json_to_boundary(error: serde_json::Error) -> Value {
-    boundary_error(format!("结果序列化失败：{error}"))
-}
 /// 把规则 JSON 格式化回文本 DSL。
 #[wasm_bindgen]
 pub fn format_logic_text(logic_json: String, questions_json: String) -> String {
     let result = (|| {
         let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
         let logic: DocumentLogic = decode(&logic_json, "logic_json")?;
-        let text = core_format_logic_text(&logic, &questions).map_err(domain_error)?;
-        serde_json::to_value(&text).map_err(serde_json_to_boundary)
+        core_format_logic_text(&logic, &questions).map_err(domain_error)
     })();
     envelope_generic(result)
 }
@@ -114,7 +108,7 @@ pub fn renew_document_ids(document_json: String) -> String {
     let result = (|| {
         let mut document: Document = decode(&document_json, "document_json")?;
         document.renew_ids();
-        serde_json::to_value(&document).map_err(serde_json_to_boundary)
+        Ok(document)
     })();
     envelope_generic(result)
 }
@@ -138,8 +132,7 @@ pub fn evaluate_expression(
         // 答案上下文按题目身份索引；身份类型由核心求值签名推断，边界不必重述。
         let answers: BTreeMap<_, Value> = decode(&answers_json, "answers_json")?;
         let compiled = core_compile_expression(&raw, &questions).map_err(domain_error)?;
-        let value = compiled.evaluate(&answers).map_err(domain_error)?;
-        serde_json::to_value(&value).map_err(serde_json_to_boundary)
+        compiled.evaluate(&answers).map_err(domain_error)
     })();
     envelope_generic(result)
 }
@@ -160,8 +153,7 @@ pub fn evaluate_document_logic(
         // 答案上下文按题目身份索引；身份类型由核心求值签名推断。
         let answers: BTreeMap<_, Value> = decode(&answers_json, "answers_json")?;
         let compiled = logic.compile(&questions).map_err(domain_error)?;
-        let values = compiled.evaluate(&answers).map_err(domain_error)?;
-        serde_json::to_value(&values).map_err(serde_json_to_boundary)
+        compiled.evaluate(&answers).map_err(domain_error)
     })();
     envelope_generic(result)
 }
@@ -197,7 +189,7 @@ impl FlowSession {
     #[wasm_bindgen(constructor)]
     pub fn new(document_json: String) -> Result<FlowSession, JsValue> {
         let document: Document = serde_json::from_str(&document_json).map_err(|error| {
-            JsValue::from_str(&envelope_generic(Err(boundary_error(format!(
+            JsValue::from_str(&envelope_generic::<Value>(Err(boundary_error(format!(
                 "document_json 不是合法 JSON：{error}"
             )))))
         })?;
@@ -205,8 +197,9 @@ impl FlowSession {
         // SAFETY：引用指向 Box 的堆分配，移动 Box 只搬指针不搬堆对象，地址始终稳定；
         // 字段声明顺序保证 session 先于 document 释放，失败路径引用亦不逃逸。
         let document_ref: &'static Document = unsafe { &*(&*document as *const Document) };
-        let session = CoreFlowSession::new(document_ref)
-            .map_err(|error| JsValue::from_str(&envelope_generic(Err(domain_error(error)))))?;
+        let session = CoreFlowSession::new(document_ref).map_err(|error| {
+            JsValue::from_str(&envelope_generic::<Value>(Err(domain_error(error))))
+        })?;
         Ok(Self {
             session,
             _document: document,
@@ -225,9 +218,7 @@ impl FlowSession {
 
     /// 只读快照，序列化为 `{"ok":snapshot}`。
     pub fn snapshot(&self) -> String {
-        envelope_generic(
-            serde_json::to_value(self.session.snapshot()).map_err(serde_json_to_boundary),
-        )
+        envelope_generic(Ok(self.session.snapshot()))
     }
 
     /// 从最终答案重建整份答卷：不读取也不修改会话当前的历史与输入。
@@ -240,25 +231,37 @@ impl FlowSession {
     pub fn evaluate_answers(&self, answers_json: String) -> String {
         let result = (|| {
             let answers: Vec<Answer> = decode(&answers_json, "answers_json")?;
-            let response = self
-                .session
-                .evaluate_answers(answers)
-                .map_err(domain_error)?;
-            serde_json::to_value(&response).map_err(serde_json_to_boundary)
+            self.session.evaluate_answers(answers).map_err(domain_error)
         })();
         envelope_generic(result)
     }
 }
 
-/// 统一信封：错误在进入本函数前已序列化为 `serde_json::Value`（领域错误经
-/// serde 序列化，边界错误由 `boundary_error` 构造），成功值同样为 Value；
-/// 收口到一处保证 `{"ok":…} | {"error":…}` 的形状唯一。
-fn envelope_generic(result: Result<Value, Value>) -> String {
-    let (key, value) = match result {
-        Ok(value) => ("ok", value),
-        Err(error) => ("error", error),
+/// 信封只含一个键：成功值与错误值互斥，错误在进入本函数前已序列化为
+/// `serde_json::Value`（领域错误经 serde 序列化，边界错误由 `boundary_error` 构造）。
+enum Envelope<T> {
+    Ok(T),
+    Error(Value),
+}
+
+impl<T: serde::Serialize> serde::Serialize for Envelope<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut envelope = serializer.serialize_map(Some(1))?;
+        match self {
+            Self::Ok(value) => envelope.serialize_entry("ok", value)?,
+            Self::Error(error) => envelope.serialize_entry("error", error)?,
+        }
+        envelope.end()
+    }
+}
+
+/// 统一信封：把成功值或错误值一次性序列化成 `{"ok":…}` / `{"error":…}`，
+/// 形状只在 `Envelope` 一处定义，成功值不需要先转成 `Value` 再序列化。
+fn envelope_generic<T: serde::Serialize>(result: Result<T, Value>) -> String {
+    let envelope = match result {
+        Ok(value) => Envelope::Ok(value),
+        Err(error) => Envelope::Error(error),
     };
-    let mut envelope = serde_json::Map::with_capacity(1);
-    envelope.insert(key.to_owned(), value);
-    Value::Object(envelope).to_string()
+    serde_json::to_string(&envelope).expect("信封只由可序列化的领域值组成，序列化不应失败")
 }

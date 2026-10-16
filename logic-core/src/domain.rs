@@ -62,7 +62,7 @@ const MAX_RATING_LABEL_LENGTH: usize = 100;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Document {
-    /// 可选的版本化规则；旧文档序列化时不增加字段。
+    /// 可选的版本化规则；未配置 `logic` 的文档序列化时不增加字段。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logic: Option<DocumentLogic>,
     /// 问卷标题，最多 200 个 Unicode 标量值；发布时不能为空白。
@@ -150,12 +150,12 @@ pub enum QuestionKind {
     },
     /// 单行文本题，不允许 Unicode 换行字符。
     Text {
-        /// 最多允许的 Unicode 标量值数；新发布时介于 1 和 200 之间，历史版本保留原限制。
+        /// 最多允许的 Unicode 标量值数；须介于 1 和 200 之间。
         max_length: usize,
     },
     /// 多行文本题，允许换行。
     Textarea {
-        /// 最多允许的 Unicode 标量值数；新发布时介于 1 和 1000 之间，历史版本保留原限制。
+        /// 最多允许的 Unicode 标量值数；须介于 1 和 1000 之间。
         max_length: usize,
     },
     /// 数字题，只接受 JSON 数字，不接受字符串、布尔值或非有限数值。
@@ -333,7 +333,7 @@ impl Document {
         Ok(())
     }
 
-    /// 编译文档规则；旧文档没有规则时返回 None。
+    /// 编译文档规则；未配置 `logic` 的文档返回 None。
     ///
     /// # 错误
     /// 规则类型、引用、容量或依赖关系不合法时返回定位信息。

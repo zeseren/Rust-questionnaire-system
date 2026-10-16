@@ -1,14 +1,12 @@
 <!-- 当前草稿的试填只创建内存会话，修改配置后重建会话，不向服务端提交。 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { copy } from '../json'
+import { ref } from 'vue'
 import { buildAnswers } from '../answers'
 import type { Inputs } from '../answers'
 import type { SurveyDocument } from '../types'
 import FlowFields from './FlowFields.vue'
 import SurveyFields from './SurveyFields.vue'
 const props = defineProps<{ document: SurveyDocument; textPending: boolean }>()
-const snapshot = computed(() => copy(props.document))
 const values = ref<Inputs>({})
 const errors = ref<Record<string, string>>({})
 const feedback = ref('')
@@ -21,7 +19,7 @@ function reset() {
   generation.value++
 }
 function validate() {
-  const result = buildAnswers(snapshot.value, values.value)
+  const result = buildAnswers(props.document, values.value)
   errors.value = result.errors
   feedback.value = Object.keys(result.errors).length
     ? '请检查标记的题目。'
@@ -56,17 +54,17 @@ function validate() {
         <p class="plain-text hint mt">收集目的：{{ document.purpose || '尚未填写' }}</p>
       </section>
       <FlowFields
-        v-if="snapshot.logic && snapshot.questions.length"
+        v-if="document.logic && document.questions.length"
         :key="generation"
-        :document="snapshot"
+        :document="document"
         preview
         @submit="feedback = '试填校验通过，未提交答卷。'"
         @change="feedback = ''"
       />
-      <template v-else-if="snapshot.questions.length">
+      <template v-else-if="document.questions.length">
         <SurveyFields
           v-model="values"
-          :document="snapshot"
+          :document="document"
           :errors="errors"
           @change="feedback = ''"
         />

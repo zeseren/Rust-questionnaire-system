@@ -1,4 +1,4 @@
-//! 文档规则先完成类型与依赖编译；复制必须重写身份引用，旧文档不增加规则字段。
+//! 文档规则先完成类型与依赖编译；复制必须重写身份引用，未配置 `logic` 的文档不增加规则字段。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -66,7 +66,7 @@ pub struct QuestionRule {
 #[derive(Debug)]
 pub(crate) struct RuleExpressions {
     pub(crate) question_id: Uuid,
-    path: String,
+    pub(crate) path: String,
     pub(crate) visible_if: Option<CompiledExpression>,
     pub(crate) required_if: Option<CompiledExpression>,
     pub(crate) validate: Option<CompiledExpression>,
@@ -106,6 +106,16 @@ pub struct CompiledDocumentLogic {
 impl CompiledDocumentLogic {
     pub(crate) fn rule(&self, id: Uuid) -> Option<&RuleExpressions> {
         self.rules.iter().find(|rule| rule.question_id == id)
+    }
+
+    /// 已编译的计算变量；流程编译按 `variable_order` 逐个展开依赖。
+    pub(crate) fn variables(&self) -> &BTreeMap<Uuid, CompiledExpression> {
+        &self.variables
+    }
+
+    /// 已编译的题目规则，保持文档声明顺序。
+    pub(crate) fn rules(&self) -> &[RuleExpressions] {
+        &self.rules
     }
 
     pub(crate) fn dependencies(&self, expression: &CompiledExpression) -> BTreeSet<Uuid> {
@@ -367,8 +377,9 @@ impl DocumentLogic {
             flow: None,
         };
         if let Some(flow) = &self.flow {
+            // 题目、选项与变量身份已在上面登记，流程节点身份直接续用同一集合。
             compiled.flow = Some(crate::flow::compile_flow(
-                flow, self, &compiled, questions, &context,
+                flow, occupied, &compiled, questions, &context,
             )?);
         }
         Ok(compiled)

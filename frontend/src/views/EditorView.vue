@@ -2,7 +2,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, shallowRef } from 'vue'
 import { onBeforeRouteLeave, RouterLink, useRoute, useRouter } from 'vue-router'
-import { api, ApiError, copy, encode, message } from '../api'
+import { api, ApiError, message } from '../api'
+import { encode } from '../json'
 import { dateTime, localInput, questionNames, shareLink, statusNames, toTimestamp } from '../format'
 import { duplicateQuestion, newQuestion } from '../documents'
 import { useNotice } from '../stores'
@@ -106,7 +107,7 @@ async function load() {
   try {
     const result = await api<SurveyDetail>(`/api/surveys/${id}`)
     survey.value = result
-    draft.value = copy(result.draft)
+    draft.value = result.draft
     saved.value = encode(result.draft)
     revision.value = result.revision
     mode.value = result.mode ?? 'anonymous'
@@ -150,11 +151,11 @@ async function save() {
     if (dirty.value) {
       const result = await api<SurveyDetail>(`/api/surveys/${id}/draft`, 'PUT', {
         revision: revision.value,
-        document: copy(draft.value),
+        document: draft.value,
       })
       revision.value = result.revision
       saved.value = encode(result.draft)
-      draft.value = copy(result.draft)
+      draft.value = result.draft
       survey.value = result
     }
     if (settingsDirty.value) {

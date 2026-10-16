@@ -40,7 +40,7 @@ pub(crate) enum SurveyStatus {
 }
 
 impl SurveyStatus {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Unpublished => "unpublished",
             Self::Collecting => "collecting",
@@ -49,7 +49,7 @@ impl SurveyStatus {
         }
     }
 
-    fn from_stored(value: &str) -> AppResult<Self> {
+    pub(crate) fn from_stored(value: &str) -> AppResult<Self> {
         match value {
             "unpublished" => Ok(Self::Unpublished),
             "collecting" => Ok(Self::Collecting),
@@ -69,14 +69,14 @@ pub(crate) enum FillingMode {
 }
 
 impl FillingMode {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Anonymous => "anonymous",
             Self::LoginOnce => "login_once",
         }
     }
 
-    fn from_stored(value: &str) -> AppResult<Self> {
+    pub(crate) fn from_stored(value: &str) -> AppResult<Self> {
         match value {
             "anonymous" => Ok(Self::Anonymous),
             "login_once" => Ok(Self::LoginOnce),
@@ -842,14 +842,18 @@ async fn publish_survey(
     ensure_editable(&record)?;
     ensure_revision(&record, revision)?;
 
+    // 先按当前规则校验这版内容，再判断是否为幂等重放。
+    let document = Document::deserialize(&record.draft)?;
+    document.validate_publish()?;
+    document.ensure_submission_budget()?;
+    if record.mode.is_none() {
+        return Err(AppError::conflict("mode_required", "请先设置填写模式"));
+    }
+
     // 内容与当前版本完全一致的重复发布（例如响应丢失后的重试）是幂等重放：
     // 不新增版本，直接返回当前版本，避免同一份题面出现两个版本号。
-    // 重放判定先于内容校验：历史版本可能带有旧版文本容量，
-    // 未改动内容的重复发布不能因新上限被拒；只有确实需要新建版本时，
-    // 才按当前规则校验完整题面与提交预算（模式由数据库约束保证已设置）。
     if let Some(current_id) = record.current_version_id {
         let current = version::Entity::find_by_id(current_id)
-            .filter(version::Column::SurveyId.eq(id))
             .one(&tx)
             .await?
             .ok_or_else(|| AppError::internal("current version is missing"))?;
@@ -868,12 +872,6 @@ async fn publish_survey(
         }
     }
 
-    let document = Document::deserialize(&record.draft)?;
-    document.validate_publish()?;
-    document.ensure_submission_budget()?;
-    if record.mode.is_none() {
-        return Err(AppError::conflict("mode_required", "请先设置填写模式"));
-    }
     let first_publish = record.current_version_id.is_none();
     if first_publish {
         ensure_future_deadline(record.deadline, now)?;
@@ -949,6 +947,7 @@ async fn update_collection(
             "首次发布后不能更改填写模式",
         ));
     }
+    let deadline_changed = input.deadline.is_some();
     let mut active = record.into_active_model();
     if let Some(mode) = input.mode {
         active.mode = Set(Some(mode.as_str().to_owned()));
@@ -958,8 +957,12 @@ async fn update_collection(
     }
     active.updated_at = Set(now);
     let updated = active.update(&tx).await?;
-    // 新截止时间若已经到达，也立即关闭；它永远不会把 closed 改成 collecting。
-    let updated = repository::expire_survey(&tx, updated, now).await?;
+    // 只有写入新截止时间时才可能产生新到期；它永远不会把 closed 改成 collecting。
+    let updated = if deadline_changed {
+        repository::expire_survey(&tx, updated, now).await?
+    } else {
+        updated
+    };
     let result = survey_detail(updated, now)?;
     tx.commit().await?;
     Ok(result)
@@ -1103,7 +1106,7 @@ fn ensure_future_deadline(deadline: Option<DateTime<Utc>>, now: DateTime<Utc>) -
     Ok(())
 }
 
-fn effective_status(
+pub(crate) fn effective_status(
     status: &str,
     deadline: Option<DateTime<Utc>>,
     now: DateTime<Utc>,

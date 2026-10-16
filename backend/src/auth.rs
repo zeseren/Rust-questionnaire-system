@@ -166,9 +166,6 @@ async fn login(
     if !verify_password(request.password, candidate.password_hash.clone()).await? {
         return Err(invalid_credentials());
     }
-    if candidate.disabled {
-        return Err(invalid_credentials());
-    }
 
     let token = new_session_token()?;
     let cookie = session_cookie(
