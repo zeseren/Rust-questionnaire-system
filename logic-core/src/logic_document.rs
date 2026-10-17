@@ -127,6 +127,15 @@ impl CompiledDocumentLogic {
         result
     }
 
+    /// 当某题答案因校验失败被回滚时，仅失效传递依赖该题的计算变量缓存。
+    pub(crate) fn evict_dependent_variables(
+        &self,
+        variables: &mut BTreeMap<Uuid, LogicValue>,
+        question_id: Uuid,
+    ) {
+        variables.retain(|id, _| !self.question_dependencies[id].contains(&question_id));
+    }
+
     pub(crate) fn evaluate_expression(
         &self,
         expression: &CompiledExpression,
@@ -437,7 +446,7 @@ fn serialized_bytes(value: &Value) -> usize {
         }
     }
     let mut counter = ByteCounter(0);
-    serde_json::to_writer(&mut counter, value).expect("内存字节计数写入不应失败");
+    serde_json::to_writer(&mut counter, value).expect("BUG: 内存字节计数器写入 Value 不会失败");
     counter.0
 }
 

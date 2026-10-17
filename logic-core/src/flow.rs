@@ -692,21 +692,12 @@ impl<'a> FlowEvaluator<'a> {
                         if let Some(value) = value {
                             result.answers.insert(*id, value);
                             if let Some(validate) = rule.and_then(|rule| rule.validate.as_ref()) {
-                                // validate 允许读取当前题自身；若校验失败将回滚当前题答案，
-                                // 因此在副本缓存上求值，仅在通过时合入主缓存。
-                                let mut trial = variables.clone();
                                 match self.logic.evaluate_expression(
                                     validate,
                                     &result.answers,
-                                    &mut trial,
+                                    &mut variables,
                                 ) {
-                                    Ok(LogicValue::Boolean(true)) => {
-                                        // 此前规则可能已记录错误，当前答案随后会被回滚；
-                                        // 此时合入试算缓存会污染依赖该答案的计算变量。
-                                        if !result.errors.contains_key(id) {
-                                            variables = trial;
-                                        }
-                                    }
+                                    Ok(LogicValue::Boolean(true)) => {}
                                     Ok(LogicValue::Missing) => {
                                         result.errors.insert(*id, LogicErrorCode::UnknownCondition);
                                     }
@@ -720,6 +711,7 @@ impl<'a> FlowEvaluator<'a> {
                             }
                             if result.errors.contains_key(id) {
                                 result.answers.remove(id);
+                                self.logic.evict_dependent_variables(&mut variables, *id);
                             }
                         }
                     }
