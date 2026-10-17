@@ -138,6 +138,7 @@ impl CompiledDocumentLogic {
             self.evaluate_variable(id, answers, variables)
         })
     }
+
     fn evaluate_variable(
         &self,
         id: Uuid,
@@ -436,7 +437,7 @@ fn serialized_bytes(value: &Value) -> usize {
         }
     }
     let mut counter = ByteCounter(0);
-    let _ = serde_json::to_writer(&mut counter, value);
+    serde_json::to_writer(&mut counter, value).expect("内存字节计数写入不应失败");
     counter.0
 }
 

@@ -648,25 +648,9 @@ async fn response_snapshot(
         .collect()
 }
 
-fn summarize_question<'a>(
-    question: Question,
-    rows: &'a [SnapshotRow],
-) -> AppResult<QuestionStatistics> {
+fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<QuestionStatistics> {
     let mut answered_count = 0u64;
     let mut skipped_count = 0u64;
-    let mut observe_row = |row: &'a SnapshotRow| -> Option<(&'a Value, u64)> {
-        if row
-            .question_states
-            .as_ref()
-            .and_then(|states| states.get(&question.id))
-            == Some(&AnswerState::Skipped)
-        {
-            skipped_count += 1;
-        }
-        let value = row.answers.get(&question.id)?;
-        answered_count += 1;
-        Some((value, answered_count))
-    };
     let is_multiple = matches!(&question.kind, QuestionKind::MultipleChoice { .. });
     let is_textarea = matches!(&question.kind, QuestionKind::Textarea { .. });
     let statistics = match question.kind {
@@ -690,7 +674,9 @@ fn summarize_question<'a>(
         QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => {
             let mut answers = Vec::new();
             for row in rows {
-                if let Some((value, _)) = observe_row(row) {
+                if let Some(value) =
+                    observe_row(row, question.id, &mut answered_count, &mut skipped_count)
+                {
                     answers.push(TextResponse {
                         receipt_id: row.receipt_id,
                         submitted_at: row.submitted_at.with_timezone(&SHANGHAI_OFFSET),
@@ -709,9 +695,11 @@ fn summarize_question<'a>(
             let mut min: Option<f64> = None;
             let mut max: Option<f64> = None;
             for row in rows {
-                if let Some((value, current_count)) = observe_row(row) {
+                if let Some(value) =
+                    observe_row(row, question.id, &mut answered_count, &mut skipped_count)
+                {
                     let value = value.as_f64().ok_or_else(invalid_stored_answer)?;
-                    update_mean(&mut mean, value, current_count);
+                    update_mean(&mut mean, value, answered_count);
                     min = Some(min.map_or(value, |previous| previous.min(value)));
                     max = Some(max.map_or(value, |previous| previous.max(value)));
                 }
@@ -726,7 +714,9 @@ fn summarize_question<'a>(
             let mut distribution = BTreeMap::<i32, u64>::new();
             let mut sum = 0.0;
             for row in rows {
-                if let Some((value, _)) = observe_row(row) {
+                if let Some(value) =
+                    observe_row(row, question.id, &mut answered_count, &mut skipped_count)
+                {
                     // 写入前已校验整数与 i32 范围；规范化 JSON 可能保存为 0.0。
                     let value = value.as_f64().ok_or_else(invalid_stored_answer)?;
                     *distribution.entry(value as i32).or_default() += 1;
@@ -754,6 +744,26 @@ fn summarize_question<'a>(
         skipped_count,
         statistics,
     })
+}
+
+// 统计单行答题状态：规则跳过单独计数，命中答案则累加有效回答数并返回答案原文。
+fn observe_row<'a>(
+    row: &'a SnapshotRow,
+    question_id: Uuid,
+    answered_count: &mut u64,
+    skipped_count: &mut u64,
+) -> Option<&'a Value> {
+    if row
+        .question_states
+        .as_ref()
+        .and_then(|states| states.get(&question_id))
+        == Some(&AnswerState::Skipped)
+    {
+        *skipped_count += 1;
+    }
+    let value = row.answers.get(&question_id)?;
+    *answered_count += 1;
+    Some(value)
 }
 
 fn summarize_choices(
@@ -830,18 +840,20 @@ fn encode_csv(
     let estimated_bytes = rows
         .len()
         .saturating_mul(document.questions.len() * 16 + 64)
-        .saturating_add(128);
+        .saturating_add(128)
+        .min(16 << 20);
+    #[track_caller]
+    fn write_cell(writer: &mut csv::Writer<Vec<u8>>, cell: &str) -> AppResult<()> {
+        writer
+            .write_field(formula_safe(cell).as_bytes())
+            .map_err(|error| AppError::internal(error))
+    }
     let mut writer = csv::WriterBuilder::new()
         .terminator(csv::Terminator::CRLF)
         .from_writer(Vec::with_capacity(estimated_bytes));
     let version_id = version_id.to_string();
     let version_number = version_number.to_string();
     let with_states = document.logic.is_some();
-    let write_cell = |writer: &mut csv::Writer<Vec<u8>>, cell: &str| -> AppResult<()> {
-        writer
-            .write_field(formula_safe(cell).as_bytes())
-            .map_err(|error| AppError::internal(error))
-    };
     for header in [
         "receipt_id",
         "version_id",

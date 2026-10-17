@@ -18,6 +18,7 @@ export class FlowInputs {
     this.#session = new FlowSession(this.#document)
     this.#snapshot = this.#session.snapshot()
   }
+  // 返回最近一次事件后缓存的只读快照，调用方不得就地修改。
   snapshot() {
     return this.#snapshot
   }

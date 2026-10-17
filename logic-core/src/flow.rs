@@ -701,7 +701,11 @@ impl<'a> FlowEvaluator<'a> {
                                     &mut trial,
                                 ) {
                                     Ok(LogicValue::Boolean(true)) => {
-                                        variables = trial;
+                                        // 此前规则可能已记录错误，当前答案随后会被回滚；
+                                        // 此时合入试算缓存会污染依赖该答案的计算变量。
+                                        if !result.errors.contains_key(id) {
+                                            variables = trial;
+                                        }
                                     }
                                     Ok(LogicValue::Missing) => {
                                         result.errors.insert(*id, LogicErrorCode::UnknownCondition);
