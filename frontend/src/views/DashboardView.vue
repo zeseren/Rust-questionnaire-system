@@ -44,14 +44,21 @@ const list = useResource(
   [page, filter, keyword],
 )
 const counts = useResource(async () => {
-  const pages = await Promise.all(
-    statuses.map((status) =>
-      api<Page<SurveySummary>>(`/api/surveys${query({ status, page_size: 1 })}`),
-    ),
+  const totals: Record<Status, number> = {
+    unpublished: 0,
+    collecting: 0,
+    closed: 0,
+    archived: 0,
+  }
+  await Promise.all(
+    statuses.map(async (status) => {
+      const result = await api<Page<SurveySummary>>(
+        `/api/surveys${query({ status, page_size: 1 })}`,
+      )
+      totals[status] = result.total
+    }),
   )
-  return Object.fromEntries(
-    statuses.map((status, index) => [status, pages[index]!.total]),
-  ) as Record<Status, number>
+  return totals
 })
 const total = computed(() =>
   counts.data.value
@@ -161,14 +168,14 @@ async function duplicate(id: string) {
     </div>
     <div class="toolbar">
       <div class="tabs" role="group" aria-label="按状态筛选">
-        <button v-if="!archived" class="tab" :aria-selected="filter === ''" @click="filter = ''">
+        <button v-if="!archived" class="tab" :aria-pressed="filter === ''" @click="filter = ''">
           全部
         </button>
         <template v-for="status in statuses" :key="status">
           <button
             v-if="!archived || status === 'archived'"
             class="tab"
-            :aria-selected="filter === status"
+            :aria-pressed="filter === status"
             @click="filter = status"
           >
             {{ statusNames[status] }}

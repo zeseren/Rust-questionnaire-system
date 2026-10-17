@@ -41,6 +41,20 @@ export function duplicateSurveyDocument(document: SurveyDocument): SurveyDocumen
   return renewDocumentIds(copy(document))
 }
 
+/** 删除题目并清理直接归属：该题的规则组与流程页面中的题目归属。
+ * 表达式中的间接引用交给编译诊断，不在此改写。 */
+export function removeQuestion(document: SurveyDocument, questionId: string) {
+  const index = document.questions.findIndex((question) => question.id === questionId)
+  if (index >= 0) document.questions.splice(index, 1)
+  const logic = document.logic
+  if (!logic) return
+  logic.rules = logic.rules.filter((entry) => entry.question_id !== questionId)
+  for (const node of logic.flow?.nodes ?? []) {
+    if (node.type !== 'page') continue
+    node.question_ids = node.question_ids.filter((id) => id !== questionId)
+  }
+}
+
 /** 单题复制保留外部依赖，并将直接引用自身的约束指向新题目。 */
 export function duplicateQuestionRule(
   document: SurveyDocument,

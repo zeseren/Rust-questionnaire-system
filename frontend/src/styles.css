@@ -873,11 +873,13 @@ h1 {
   font-size: 12px;
   font-weight: 400;
 }
-.tab[aria-selected='true'] {
+.tab[aria-selected='true'],
+.tab[aria-pressed='true'] {
   color: var(--text);
   font-weight: 600;
 }
-.tab[aria-selected='true']::after {
+.tab[aria-selected='true']::after,
+.tab[aria-pressed='true']::after {
   content: '';
   position: absolute;
   bottom: -1px;
@@ -887,7 +889,8 @@ h1 {
   background: var(--accent);
   border-radius: 9999px;
 }
-.tab[aria-selected='true'] .tab-count {
+.tab[aria-selected='true'] .tab-count,
+.tab[aria-pressed='true'] .tab-count {
   color: var(--accent);
 }
 .toolbar-right {
@@ -1709,7 +1712,8 @@ h1 {
   .nav-item.is-active,
   .theme-option[aria-pressed='true'],
   .view-control [aria-pressed='true'],
-  .tab[aria-selected='true'] {
+  .tab[aria-selected='true'],
+  .tab[aria-pressed='true'] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
