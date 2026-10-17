@@ -99,13 +99,14 @@ pub struct CompiledDocumentLogic {
     variable_paths: BTreeMap<Uuid, String>,
     order: Vec<Uuid>,
     rules: Vec<RuleExpressions>,
+    rule_indices: BTreeMap<Uuid, usize>,
     question_dependencies: BTreeMap<Uuid, BTreeSet<Uuid>>,
     pub(crate) flow: Option<crate::flow::CompiledFlow>,
 }
 
 impl CompiledDocumentLogic {
     pub(crate) fn rule(&self, id: Uuid) -> Option<&RuleExpressions> {
-        self.rules.iter().find(|rule| rule.question_id == id)
+        self.rule_indices.get(&id).map(|&index| &self.rules[index])
     }
 
     /// 已编译的计算变量；流程编译按 `variable_order` 逐个展开依赖。
@@ -126,15 +127,24 @@ impl CompiledDocumentLogic {
         result
     }
 
+    /// 当某题答案因校验失败被回滚时，仅失效传递依赖该题的计算变量缓存。
+    pub(crate) fn evict_dependent_variables(
+        &self,
+        variables: &mut BTreeMap<Uuid, LogicValue>,
+        question_id: Uuid,
+    ) {
+        variables.retain(|id, _| !self.question_dependencies[id].contains(&question_id));
+    }
+
     pub(crate) fn evaluate_expression(
         &self,
         expression: &CompiledExpression,
         answers: &BTreeMap<Uuid, Value>,
+        variables: &mut BTreeMap<Uuid, LogicValue>,
     ) -> Result<LogicValue, LogicError> {
-        // 按实际读取计算变量，短路分支不触发计算；同次求值缓存共享依赖。
-        let mut variables = BTreeMap::new();
+        // 按实际读取计算变量，短路分支不触发计算；调用方可在同一投影阶段复用缓存。
         expression.evaluate_resolving(answers, &mut |id| {
-            self.evaluate_variable(id, answers, &mut variables)
+            self.evaluate_variable(id, answers, variables)
         })
     }
 
@@ -229,7 +239,7 @@ impl DocumentLogic {
             let mut count = 0;
             check_raw_budget(Some(expression), 1, &mut count)?;
             total += count;
-            bytes += expression.to_string().len();
+            bytes += serialized_bytes(expression);
             if total > 4096 || bytes > 262_144 {
                 return Err(error(LogicErrorCode::LimitExceeded, "$.logic", None));
             }
@@ -306,6 +316,7 @@ impl DocumentLogic {
         }
         let mut seen = BTreeSet::new();
         let mut rules = Vec::with_capacity(self.rules.len());
+        let mut rule_indices = BTreeMap::new();
         for (index, rule) in self.rules.iter().enumerate() {
             let path = format!("$.logic.rules[{index}]");
             let position = positions.get(&rule.question_id).ok_or_else(|| {
@@ -360,6 +371,7 @@ impl DocumentLogic {
                 }
                 Ok(Some(expression))
             };
+            rule_indices.insert(rule.question_id, rules.len());
             rules.push(RuleExpressions {
                 question_id: rule.question_id,
                 visible_if: compile_rule(&rule.visible_if, "visible_if", false)?,
@@ -373,6 +385,7 @@ impl DocumentLogic {
             variable_paths,
             order,
             rules,
+            rule_indices,
             question_dependencies,
             flow: None,
         };
@@ -418,6 +431,23 @@ impl DocumentLogic {
             flow.renew_ids(questions, options, &variables);
         }
     }
+}
+
+/// 直接统计 JSON 序列化后的 UTF-8 字节数，不分配临时 String。
+fn serialized_bytes(value: &Value) -> usize {
+    struct ByteCounter(usize);
+    impl std::io::Write for ByteCounter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = ByteCounter(0);
+    serde_json::to_writer(&mut counter, value).expect("BUG: 内存字节计数器写入 Value 不会失败");
+    counter.0
 }
 
 pub(crate) fn rewrite(

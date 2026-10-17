@@ -545,7 +545,7 @@ impl Document {
             let question = questions
                 .get(&answer.question_id)
                 .ok_or_else(|| ValidationError::new(id, "答案包含不属于此问卷版本的题目"))?;
-            if let Some(value) = question.normalize_answer(answer.value)? {
+            if let Some(value) = question.normalize_answer(Some(&answer.value))? {
                 normalized.insert(question.id, value);
             }
         }
@@ -559,14 +559,17 @@ impl Document {
 }
 
 impl Question {
-    pub(crate) fn normalize_answer(&self, value: Value) -> Result<Option<Value>, ValidationError> {
+    pub(crate) fn normalize_answer(
+        &self,
+        value: Option<&Value>,
+    ) -> Result<Option<Value>, ValidationError> {
         let id = Some(self.id);
-        if value.is_null() {
+        let Some(value) = value.filter(|value| !value.is_null()) else {
             return Ok(None);
-        }
+        };
         match &self.kind {
             QuestionKind::SingleChoice { options } => {
-                let option_id = parse_option_id(&value, self.id)?;
+                let option_id = parse_option_id(value, self.id)?;
                 if !options.iter().any(|option| option.id == option_id) {
                     return Err(ValidationError::new(id, "选项不属于此版本的当前题目"));
                 }
@@ -589,7 +592,7 @@ impl Question {
                 let allowed: HashSet<_> = options.iter().map(|option| option.id).collect();
                 let mut selected = Vec::with_capacity(values.len());
                 for value in values {
-                    let option_id = parse_option_id(&value, self.id)?;
+                    let option_id = parse_option_id(value, self.id)?;
                     if !allowed.contains(&option_id) {
                         return Err(ValidationError::new(id, "选项不属于此版本的当前题目"));
                     }
@@ -610,7 +613,7 @@ impl Question {
                 let Value::String(text) = value else {
                     return Err(ValidationError::new(id, "文本答案必须是字符串"));
                 };
-                check_length(&text, *max_length, id, "文本答案")?;
+                check_length(text, *max_length, id, "文本答案")?;
                 if matches!(&self.kind, QuestionKind::Text { .. })
                     && text.contains([
                         '\n', '\r', '\u{000b}', '\u{000c}', '\u{0085}', '\u{2028}', '\u{2029}',
@@ -621,11 +624,11 @@ impl Question {
                 if text.trim().is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(Value::String(text)))
+                    Ok(Some(Value::String(text.clone())))
                 }
             }
             QuestionKind::Number { integer, min, max } => {
-                let number = finite_number(&value, self.id)?;
+                let number = finite_number(value, self.id)?;
                 if *integer && number.fract() != 0.0 {
                     return Err(ValidationError::new(id, "此题只接受整数"));
                 }
@@ -635,7 +638,7 @@ impl Question {
                 canonical_number(number, self.id).map(Some)
             }
             QuestionKind::Rating { min, max, .. } => {
-                let number = finite_number(&value, self.id)?;
+                let number = finite_number(value, self.id)?;
                 if number.fract() != 0.0 || number < f64::from(*min) || number > f64::from(*max) {
                     return Err(ValidationError::new(id, "评分必须是允许范围内的整数"));
                 }

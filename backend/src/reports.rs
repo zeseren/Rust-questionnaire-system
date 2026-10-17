@@ -649,25 +649,19 @@ async fn response_snapshot(
 }
 
 fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<QuestionStatistics> {
-    let answered_count = rows
-        .iter()
-        .filter(|row| row.answers.contains_key(&question.id))
-        .count() as u64;
-    let skipped_count = rows
-        .iter()
-        .filter(|row| {
-            row.question_states
-                .as_ref()
-                .and_then(|states| states.get(&question.id))
-                == Some(&AnswerState::Skipped)
-        })
-        .count() as u64;
-    let applicable_count = rows.len() as u64 - skipped_count;
+    let mut answered_count = 0u64;
+    let mut skipped_count = 0u64;
     let is_multiple = matches!(&question.kind, QuestionKind::MultipleChoice { .. });
     let is_textarea = matches!(&question.kind, QuestionKind::Textarea { .. });
     let statistics = match question.kind {
         QuestionKind::SingleChoice { options } | QuestionKind::MultipleChoice { options, .. } => {
-            let options = summarize_choices(options, question.id, answered_count, rows)?;
+            let options = summarize_choices(
+                options,
+                question.id,
+                rows,
+                &mut answered_count,
+                &mut skipped_count,
+            )?;
             if is_multiple {
                 QuestionStatisticsData::MultipleChoice {
                     options,
@@ -678,18 +672,14 @@ fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<Que
             }
         }
         QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => {
-            let mut answers = Vec::with_capacity(answered_count as usize);
-            for SnapshotRow {
-                receipt_id,
-                submitted_at,
-                answers: values,
-                ..
-            } in rows
-            {
-                if let Some(value) = values.get(&question.id) {
+            let mut answers = Vec::new();
+            for row in rows {
+                if let Some(value) =
+                    observe_row(row, question.id, &mut answered_count, &mut skipped_count)
+                {
                     answers.push(TextResponse {
-                        receipt_id: *receipt_id,
-                        submitted_at: submitted_at.with_timezone(&SHANGHAI_OFFSET),
+                        receipt_id: row.receipt_id,
+                        submitted_at: row.submitted_at.with_timezone(&SHANGHAI_OFFSET),
                         value: value.as_str().ok_or_else(invalid_stored_answer)?.to_owned(),
                     });
                 }
@@ -701,21 +691,21 @@ fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<Que
             }
         }
         QuestionKind::Number { .. } => {
-            let mut count = 0;
             let mut mean = 0.0;
             let mut min: Option<f64> = None;
             let mut max: Option<f64> = None;
             for row in rows {
-                if let Some(value) = row.answers.get(&question.id) {
+                if let Some(value) =
+                    observe_row(row, question.id, &mut answered_count, &mut skipped_count)
+                {
                     let value = value.as_f64().ok_or_else(invalid_stored_answer)?;
-                    count += 1;
-                    update_mean(&mut mean, value, count);
+                    update_mean(&mut mean, value, answered_count);
                     min = Some(min.map_or(value, |previous| previous.min(value)));
                     max = Some(max.map_or(value, |previous| previous.max(value)));
                 }
             }
             QuestionStatisticsData::Number {
-                mean: (count > 0).then_some(mean),
+                mean: (answered_count > 0).then_some(mean),
                 min,
                 max,
             }
@@ -724,7 +714,9 @@ fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<Que
             let mut distribution = BTreeMap::<i32, u64>::new();
             let mut sum = 0.0;
             for row in rows {
-                if let Some(value) = row.answers.get(&question.id) {
+                if let Some(value) =
+                    observe_row(row, question.id, &mut answered_count, &mut skipped_count)
+                {
                     // 写入前已校验整数与 i32 范围；规范化 JSON 可能保存为 0.0。
                     let value = value.as_f64().ok_or_else(invalid_stored_answer)?;
                     *distribution.entry(value as i32).or_default() += 1;
@@ -742,6 +734,7 @@ fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<Que
             }
         }
     };
+    let applicable_count = rows.len() as u64 - skipped_count;
     Ok(QuestionStatistics {
         question_id: question.id,
         title: question.title,
@@ -753,17 +746,47 @@ fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<Que
     })
 }
 
+// 统计单行答题状态：规则跳过单独计数，命中答案则累加有效回答数并返回答案原文。
+fn observe_row<'a>(
+    row: &'a SnapshotRow,
+    question_id: Uuid,
+    answered_count: &mut u64,
+    skipped_count: &mut u64,
+) -> Option<&'a Value> {
+    if row
+        .question_states
+        .as_ref()
+        .and_then(|states| states.get(&question_id))
+        == Some(&AnswerState::Skipped)
+    {
+        *skipped_count += 1;
+    }
+    let value = row.answers.get(&question_id)?;
+    *answered_count += 1;
+    Some(value)
+}
+
 fn summarize_choices(
     options: Vec<Choice>,
     question_id: Uuid,
-    answered_count: u64,
     rows: &[SnapshotRow],
+    answered_count: &mut u64,
+    skipped_count: &mut u64,
 ) -> AppResult<Vec<OptionFrequency>> {
-    let mut counts = HashMap::<&str, u64>::new();
+    let mut counts = HashMap::<&str, u64>::with_capacity(options.len());
     for row in rows {
+        if row
+            .question_states
+            .as_ref()
+            .and_then(|states| states.get(&question_id))
+            == Some(&AnswerState::Skipped)
+        {
+            *skipped_count += 1;
+        }
         let Some(value) = row.answers.get(&question_id) else {
             continue;
         };
+        *answered_count += 1;
         match value {
             Value::String(option) => *counts.entry(option.as_str()).or_default() += 1,
             Value::Array(options) => {
@@ -776,18 +799,18 @@ fn summarize_choices(
             _ => return Err(invalid_stored_answer()),
         }
     }
+    let total_answered = *answered_count;
+    let mut id_buf = Uuid::encode_buffer();
     Ok(options
         .into_iter()
         .map(|option| {
-            let count = counts
-                .get(option.id.to_string().as_str())
-                .copied()
-                .unwrap_or(0);
+            let id_str: &str = option.id.hyphenated().encode_lower(&mut id_buf);
+            let count = counts.get(id_str).copied().unwrap_or(0);
             OptionFrequency {
                 option_id: option.id,
                 label: option.label,
                 count,
-                proportion: (answered_count > 0).then(|| count as f64 / answered_count as f64),
+                proportion: (total_answered > 0).then(|| count as f64 / total_answered as f64),
             }
         })
         .collect())
@@ -814,38 +837,44 @@ fn encode_csv(
     version_number: i32,
     rows: &[SnapshotRow],
 ) -> AppResult<Vec<u8>> {
+    let estimated_bytes = rows
+        .len()
+        .saturating_mul(document.questions.len() * 16 + 64)
+        .saturating_add(128)
+        .min(16 << 20);
+    #[track_caller]
+    fn write_cell(writer: &mut csv::Writer<Vec<u8>>, cell: &str) -> AppResult<()> {
+        writer
+            .write_field(formula_safe(cell).as_bytes())
+            .map_err(|error| AppError::internal(error))
+    }
     let mut writer = csv::WriterBuilder::new()
         .terminator(csv::Terminator::CRLF)
-        .from_writer(Vec::new());
+        .from_writer(Vec::with_capacity(estimated_bytes));
     let version_id = version_id.to_string();
     let version_number = version_number.to_string();
     let with_states = document.logic.is_some();
-    let mut record: Vec<Cow<'_, str>> =
-        Vec::with_capacity(document.questions.len() * if with_states { 2 } else { 1 } + 4);
-    record.extend(
-        [
-            "receipt_id",
-            "version_id",
-            "version_number",
-            "submitted_at (Asia/Shanghai +08:00)",
-        ]
-        .into_iter()
-        .map(Cow::Borrowed),
-    );
-    for question in &document.questions {
-        record.push(Cow::Owned(format!("{} [{}]", question.title, question.id)));
-        if with_states {
-            record.push(Cow::Owned(format!("状态 [{}]", question.id)));
-        }
+    for header in [
+        "receipt_id",
+        "version_id",
+        "version_number",
+        "submitted_at (Asia/Shanghai +08:00)",
+    ] {
+        write_cell(&mut writer, header)?;
     }
-    for cell in &record {
-        writer
-            .write_field(formula_safe(cell).as_bytes())
-            .map_err(|error| AppError::internal(error))?;
+    for question in &document.questions {
+        write_cell(
+            &mut writer,
+            &format!("{} [{}]", question.title, question.id),
+        )?;
+        if with_states {
+            write_cell(&mut writer, &format!("状态 [{}]", question.id))?;
+        }
     }
     writer
         .write_record(std::iter::empty::<&[u8]>())
         .map_err(|error| AppError::internal(error))?;
+    let mut id_buf = Uuid::encode_buffer();
     for SnapshotRow {
         receipt_id,
         submitted_at,
@@ -853,23 +882,23 @@ fn encode_csv(
         question_states,
     } in rows
     {
-        record.clear();
-        record.push(Cow::Owned(receipt_id.to_string()));
-        record.push(Cow::Borrowed(&version_id));
-        record.push(Cow::Borrowed(&version_number));
-        record.push(Cow::Owned(
-            submitted_at
-                .with_timezone(&SHANGHAI_OFFSET)
-                .to_rfc3339_opts(SecondsFormat::AutoSi, false),
-        ));
+        write_cell(
+            &mut writer,
+            receipt_id.hyphenated().encode_lower(&mut id_buf),
+        )?;
+        write_cell(&mut writer, &version_id)?;
+        write_cell(&mut writer, &version_number)?;
+        let timestamp = submitted_at
+            .with_timezone(&SHANGHAI_OFFSET)
+            .to_rfc3339_opts(SecondsFormat::AutoSi, false);
+        write_cell(&mut writer, &timestamp)?;
         for question in &document.questions {
-            let cell = match answers.get(&question.id) {
-                None | Some(Value::Null) => Cow::Borrowed(""),
-                Some(Value::String(value)) => Cow::Borrowed(value.as_str()),
+            match answers.get(&question.id) {
+                None | Some(Value::Null) => write_cell(&mut writer, "")?,
+                Some(Value::String(value)) => write_cell(&mut writer, value.as_str())?,
                 // 多选保持 JSON 数组，不用逗号连接，以免丢失集合与 CSV 字段边界。
-                Some(value) => Cow::Owned(serde_json::to_string(value)?),
-            };
-            record.push(cell);
+                Some(value) => write_cell(&mut writer, &serde_json::to_string(value)?)?,
+            }
             if with_states {
                 let state = match question_states
                     .as_ref()
@@ -880,13 +909,8 @@ fn encode_csv(
                     AnswerState::Unanswered => "适用未答",
                     AnswerState::Skipped => "规则跳过",
                 };
-                record.push(Cow::Borrowed(state));
+                write_cell(&mut writer, state)?;
             }
-        }
-        for cell in &record {
-            writer
-                .write_field(formula_safe(cell).as_bytes())
-                .map_err(|error| AppError::internal(error))?;
         }
         writer
             .write_record(std::iter::empty::<&[u8]>())

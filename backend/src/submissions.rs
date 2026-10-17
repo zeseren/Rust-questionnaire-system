@@ -188,11 +188,14 @@ async fn read_public_survey(
         Some("anonymous") | None => (FillingMode::Anonymous, None),
         Some(_) => return Err(AppError::internal("unknown collection mode")),
     };
-    let publisher = user::Entity::find_by_id(survey.owner_id)
+    let publisher_disabled = user::Entity::find_by_id(survey.owner_id)
+        .select_only()
+        .column(user::Column::Disabled)
+        .into_tuple::<bool>()
         .one(&tx)
         .await?
         .ok_or_else(|| AppError::internal("survey publisher is missing"))?;
-    if publisher.disabled {
+    if publisher_disabled {
         return Err(AppError::conflict(
             "publisher_disabled",
             "发布者账号暂不可用，问卷暂停接受填写",
@@ -318,6 +321,12 @@ async fn submit_response(
     let receipt_id = Uuid::new_v4();
     // 一条记录同时存完整答案与幂等指纹；数据库还约束同问卷账号唯一，跨版本同样限次。
     // 不使用 upsert：失败不得覆盖答案、占用次数或修改已有成功记录。
+    let answers_json = serde_json::Value::Object(
+        answers
+            .into_iter()
+            .map(|(question_id, value)| (question_id.to_string(), value))
+            .collect(),
+    );
     response::Entity::insert(response::ActiveModel {
         id: Set(receipt_id),
         survey_id: Set(id),
@@ -326,7 +335,7 @@ async fn submit_response(
         scope: Set(scope),
         key_hash: Set(key_hash),
         payload_hash: Set(payload_hash),
-        answers: Set(serde_json::to_value(answers)?),
+        answers: Set(answers_json),
         submitted_at: Set(submitted_at),
     })
     .exec_without_returning(&locked.tx)
