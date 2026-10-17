@@ -20,6 +20,7 @@ const auth = useAuth()
 const id = String(route.params.id)
 const survey = shallowRef<PublicSurvey | null>(null)
 const receipt = shallowRef<Receipt | null>(null)
+const receiptPanel = ref<HTMLElement | null>(null)
 const values = ref<Inputs>({})
 const errors = ref<Record<string, string>>({})
 const error = ref('')
@@ -112,6 +113,8 @@ async function submit(flowAnswers?: Answer[]) {
     pending.value = null
     uncertain.value = false
     window.scrollTo({ top: 0 })
+    await nextTick()
+    receiptPanel.value?.focus()
   } catch (reason) {
     error.value = message(reason)
     if (reason instanceof ApiError) {
@@ -158,7 +161,14 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
 <template>
   <div class="public-container">
     <LoadingState v-if="loading" />
-    <section v-else-if="receipt && survey" class="panel receipt-panel">
+    <section
+      v-else-if="receipt && survey"
+      ref="receiptPanel"
+      class="panel receipt-panel"
+      tabindex="-1"
+      role="status"
+      aria-live="polite"
+    >
       <span class="success-mark"><Icon name="check" /></span>
       <h1>回答已收到</h1>
       <p class="plain-text subtle mt">{{ survey.document.thank_you || '感谢你的认真回答。' }}</p>

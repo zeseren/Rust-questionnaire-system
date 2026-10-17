@@ -1,11 +1,20 @@
 <!-- 草稿修订号独立保存，回收设置的响应不能掩盖其他窗口的编辑冲突。 -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, shallowRef } from 'vue'
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  provide,
+  ref,
+  shallowRef,
+  watch,
+} from 'vue'
 import { onBeforeRouteLeave, RouterLink, useRoute, useRouter } from 'vue-router'
 import { api, ApiError, message } from '../api'
 import { encode } from '../json'
 import { dateTime, localInput, questionNames, shareLink, statusNames, toTimestamp } from '../format'
-import { duplicateQuestion, newQuestion } from '../documents'
+import { duplicateQuestion, newQuestion, removeQuestion } from '../documents'
 import { useNotice } from '../stores'
 import type {
   FillingMode,
@@ -36,13 +45,15 @@ const id = String(route.params.id)
 const survey = shallowRef<SurveyDetail | null>(null)
 const draft = ref<SurveyDocument | null>(null)
 const revision = ref(0)
-const saved = ref('')
+const dirty = ref(false)
+// 加载与服务端回写期间不把程序化赋值当作编辑；同步 watcher 保证窗口内捕获全部变更。
+let applyingServerState = false
 const loading = ref(true)
 const busy = ref(false)
 const error = ref('')
 const fieldError = ref<{ id: string; message: string } | null>(null)
 const conflict = ref(false)
-const mode = ref<FillingMode>('anonymous')
+const mode = ref<FillingMode | null>(null)
 const deadline = ref('')
 const editorForm = ref<HTMLFormElement>()
 const action = ref<'publish' | 'close' | 'resume' | 'archive' | 'delete' | null>(null)
@@ -52,7 +63,13 @@ const logicEditor = ref<InstanceType<typeof LogicEditor>>()
 const editorKey = ref(0)
 const templateDialog = ref(false)
 const selectedTemplate = ref<SurveyTemplateId | null>('feedback')
-const dirty = computed(() => !!draft.value && encode(draft.value) !== saved.value)
+watch(
+  draft,
+  () => {
+    if (!applyingServerState && draft.value) dirty.value = true
+  },
+  { deep: true, flush: 'sync' },
+)
 const settingsDirty = computed(
   () =>
     !!survey.value &&
@@ -106,14 +123,19 @@ async function load() {
   fieldError.value = null
   try {
     const result = await api<SurveyDetail>(`/api/surveys/${id}`)
-    survey.value = result
-    draft.value = result.draft
-    saved.value = encode(result.draft)
-    revision.value = result.revision
-    mode.value = result.mode ?? 'anonymous'
-    deadline.value = localInput(result.deadline)
-    editorKey.value++
-    textPending.value = false
+    applyingServerState = true
+    try {
+      survey.value = result
+      draft.value = result.draft
+      revision.value = result.revision
+      mode.value = result.mode
+      deadline.value = localInput(result.deadline)
+      editorKey.value++
+      textPending.value = false
+    } finally {
+      applyingServerState = false
+    }
+    dirty.value = false
   } catch (reason) {
     await handleError(reason)
   } finally {
@@ -131,7 +153,11 @@ async function save() {
   if (!draft.value || !survey.value || locked.value || !editorForm.value) return
   if (!editorForm.value.checkValidity()) {
     const invalid = Array.from(editorForm.value.elements).find(
-      (element) => 'validity' in element && !(element as HTMLInputElement).validity.valid,
+      (element): element is HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement =>
+        (element instanceof HTMLInputElement ||
+          element instanceof HTMLSelectElement ||
+          element instanceof HTMLTextAreaElement) &&
+        !element.validity.valid,
     )
     workspace.value = invalid?.closest('#question-design')
       ? 'questions'
@@ -153,10 +179,15 @@ async function save() {
         revision: revision.value,
         document: draft.value,
       })
-      revision.value = result.revision
-      saved.value = encode(result.draft)
-      draft.value = result.draft
-      survey.value = result
+      applyingServerState = true
+      try {
+        revision.value = result.revision
+        draft.value = result.draft
+        survey.value = result
+      } finally {
+        applyingServerState = false
+      }
+      dirty.value = false
     }
     if (settingsDirty.value) {
       survey.value = await api<SurveyDetail>(`/api/surveys/${id}/collection`, 'PATCH', {
@@ -206,6 +237,7 @@ async function performAction() {
     if (requested === 'delete') {
       await api(`/api/surveys/${id}`, 'DELETE')
       draft.value = null
+      dirty.value = false
       survey.value = null
       action.value = null
       notice.show('草稿已删除。')
@@ -256,6 +288,10 @@ async function add(type: Question['type']) {
   await nextTick()
   document.getElementById(`question-${question.id}`)?.focus()
 }
+function remove(questionId: string) {
+  if (locked.value || !draft.value) return
+  removeQuestion(draft.value, questionId)
+}
 async function locateQuestion(questionId: string) {
   workspace.value = 'questions'
   await nextTick()
@@ -286,6 +322,9 @@ function move(index: number, direction: number) {
   if (next < 0 || next >= questions.length) return
   const question = questions.splice(index, 1)[0]!
   questions.splice(next, 0, question)
+}
+function selectInputText(event: FocusEvent) {
+  if (event.target instanceof HTMLInputElement) event.target.select()
 }
 function exportDraft() {
   const url = URL.createObjectURL(
@@ -456,7 +495,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
               @update:model-value="draft.questions[index] = $event"
               @move="move(index, $event)"
               @duplicate="draft.questions.splice(index + 1, 0, duplicateQuestion(question, draft))"
-              @remove="draft.questions.splice(index, 1)"
+              @remove="remove(question.id)"
               @rule="editRule(question.id)"
             />
             <div v-if="!draft.questions.length" class="empty-state mt">
@@ -554,15 +593,18 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
                 form="editor-form"
                 :disabled="locked || !!survey.current_version_id"
               >
+                <option :value="null" disabled>未设置（请选择填写模式）</option>
                 <option value="anonymous">公开匿名</option>
                 <option value="login_once">每个账号限填一次</option>
               </select>
             </label>
             <p class="hint">
               {{
-                mode === 'anonymous'
-                  ? '不关联账号，不承诺按自然人限次。'
-                  : '需登录，每个账号跨版本仅限一次；不属于完全匿名。'
+                mode === null
+                  ? '请选择填写模式（发布前必填）。'
+                  : mode === 'anonymous'
+                    ? '不关联账号，不承诺按自然人限次。'
+                    : '需登录，每个账号跨版本仅限一次；不属于完全匿名。'
               }}首次发布后不能更改。
             </p>
             <label class="field">
@@ -626,11 +668,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           <div v-if="survey.share_url" class="share-box">
             <label class="field">
               填写链接
-              <input
-                :value="shareLink(id)"
-                readonly
-                @focus="($event.target as HTMLInputElement).select()"
-              />
+              <input :value="shareLink(id)" readonly @focus="selectInputText" />
             </label>
             <div class="actions">
               <button class="text-button accent" @click="copyLink">复制链接</button>
