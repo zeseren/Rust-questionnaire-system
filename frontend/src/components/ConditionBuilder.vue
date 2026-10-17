@@ -1,6 +1,6 @@
 <!-- 常用条件使用题目和选项名称，切换高级编辑不会重建或丢弃原表达式。 -->
 <script setup lang="ts">
-import { computed, ref, useId } from 'vue'
+import { computed, inject, ref, useId } from 'vue'
 import type { ComputedVariable, Question } from '../types'
 import {
   changeConditionOperator,
@@ -8,7 +8,8 @@ import {
   groupExpression,
   readConditionGroup,
 } from '../condition-builder'
-import type { ConditionGroup, ConditionOperator, SimpleCondition } from '../condition-builder'
+import type { ConditionGroup, SimpleCondition } from '../condition-builder'
+import { editorDisabledKey } from '../editor-context'
 import ExpressionEditor from './ExpressionEditor.vue'
 import SearchSelect from './SearchSelect.vue'
 import Icon from './Icon.vue'
@@ -16,6 +17,11 @@ const expression = defineModel<unknown>({ required: true })
 const props = defineProps<{ questions: Question[]; variables: ComputedVariable[] }>()
 const advanced = ref(false)
 const id = useId()
+const locked = inject(editorDisabledKey, ref(false))
+const modes = ['always', 'never', 'all', 'any'] as const
+function isMode(value: string): value is ConditionGroup['mode'] {
+  return modes.some((mode) => mode === value)
+}
 const group = computed(() => readConditionGroup(expression.value))
 const questionOptions = computed(() =>
   props.questions.map((question, index) => ({
@@ -35,7 +41,9 @@ function defaultCondition(): SimpleCondition {
   return { questionId: props.questions[0]?.id ?? '', operator: 'answered', value: '' }
 }
 function setMode(event: Event) {
-  const mode = (event.target as HTMLSelectElement).value as ConditionGroup['mode']
+  if (!(event.currentTarget instanceof HTMLSelectElement)) return
+  const mode = event.currentTarget.value
+  if (!isMode(mode)) return
   expression.value = groupExpression({
     mode,
     conditions: group.value?.conditions.length ? group.value.conditions : [defaultCondition()],
@@ -53,7 +61,16 @@ function edit(index: number, change: Partial<SimpleCondition>) {
 function operator(index: number, value: string) {
   const condition = group.value?.conditions[index]
   if (!condition) return
-  edit(index, changeConditionOperator(condition, value as ConditionOperator, questionOf(condition)))
+  const candidates = conditionOperators(questionOf(condition))
+  const next = candidates.find((item) => item.value === value)
+  if (!next) return
+  edit(index, changeConditionOperator(condition, next.value, questionOf(condition)))
+}
+function selectValue(event: Event) {
+  return event.currentTarget instanceof HTMLSelectElement ? event.currentTarget.value : ''
+}
+function inputValue(event: Event) {
+  return event.currentTarget instanceof HTMLInputElement ? event.currentTarget.value : ''
 }
 function add() {
   if (group.value)
@@ -79,6 +96,7 @@ function remove(index: number) {
         type="button"
         class="text-button accent"
         :aria-pressed="advanced"
+        :disabled="locked"
         @click="advanced = !advanced"
       >
         {{ advanced ? '返回简洁条件' : '高级表达式' }}
@@ -93,7 +111,7 @@ function remove(index: number) {
     <template v-else>
       <label class="condition-mode">
         条件成立方式
-        <select :value="group.mode" @change="setMode">
+        <select :value="group.mode" :disabled="locked" @change="setMode">
           <option value="always">始终成立</option>
           <option value="never">始终不成立</option>
           <option value="all" :disabled="!questions.length">满足以下全部条件</option>
@@ -111,6 +129,7 @@ function remove(index: number) {
               :options="questionOptions"
               :label="`条件 ${index + 1} 的题目`"
               placeholder="搜索题目"
+              :disabled="locked"
               @update:model-value="
                 edit(index, { questionId: $event, operator: 'answered', value: '' })
               "
@@ -121,7 +140,8 @@ function remove(index: number) {
             <select
               :id="`operator-${id}-${index}`"
               :value="condition.operator"
-              @change="operator(index, ($event.target as HTMLSelectElement).value)"
+              :disabled="locked"
+              @change="operator(index, selectValue($event))"
             >
               <option
                 v-if="
@@ -148,6 +168,7 @@ function remove(index: number) {
               :options="optionChoices(condition)"
               :label="`条件 ${index + 1} 的选项`"
               placeholder="选择选项"
+              :disabled="locked"
               @update:model-value="edit(index, { value: $event })"
             />
             <input
@@ -156,13 +177,14 @@ function remove(index: number) {
               :aria-label="`条件 ${index + 1} 的比较值`"
               :inputmode="condition.valueType === 'number' ? 'decimal' : 'text'"
               :placeholder="condition.valueType === 'number' ? '输入数字' : '输入文本'"
-              @input="edit(index, { value: ($event.target as HTMLInputElement).value })"
+              :disabled="locked"
+              @input="edit(index, { value: inputValue($event) })"
             />
           </div>
           <button
             type="button"
             class="icon-button"
-            :disabled="group.conditions.length <= 1"
+            :disabled="locked || group.conditions.length <= 1"
             :aria-label="`删除条件 ${index + 1}`"
             @click="remove(index)"
           >
@@ -172,7 +194,7 @@ function remove(index: number) {
         <button
           type="button"
           class="text-button accent"
-          :disabled="!questions.length || group.conditions.length >= 64"
+          :disabled="locked || !questions.length || group.conditions.length >= 64"
           @click="add"
         >
           <Icon name="plus" />

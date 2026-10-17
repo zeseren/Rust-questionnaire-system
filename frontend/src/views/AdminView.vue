@@ -15,16 +15,35 @@ const notice = useNotice()
 const tab = ref<'users' | 'surveys' | 'audits'>('users')
 const labels = { users: '用户管理', surveys: '问卷治理', audits: '操作审计' }
 const page = ref(1)
-const list = useResource(
-  () =>
-    api<{ total: number; items: (AdminUser | AdminSurvey | Audit)[] }>(
-      `/api/admin/${tab.value}${query({ page: page.value, page_size: 20 })}`,
-    ),
-  [tab, page],
-)
-const users = computed(() => list.data.value?.items as AdminUser[] | undefined)
-const surveys = computed(() => list.data.value?.items as AdminSurvey[] | undefined)
-const audits = computed(() => list.data.value?.items as Audit[] | undefined)
+type AdminListResult =
+  | { kind: 'users'; total: number; items: AdminUser[] }
+  | { kind: 'surveys'; total: number; items: AdminSurvey[] }
+  | { kind: 'audits'; total: number; items: Audit[] }
+const list = useResource<AdminListResult>(async () => {
+  const suffix = query({ page: page.value, page_size: 20 })
+  if (tab.value === 'users') {
+    const result = await api<{ total: number; items: AdminUser[] }>(`/api/admin/users${suffix}`)
+    return { kind: 'users' as const, total: result.total, items: result.items }
+  }
+  if (tab.value === 'surveys') {
+    const result = await api<{ total: number; items: AdminSurvey[] }>(`/api/admin/surveys${suffix}`)
+    return { kind: 'surveys' as const, total: result.total, items: result.items }
+  }
+  const result = await api<{ total: number; items: Audit[] }>(`/api/admin/audits${suffix}`)
+  return { kind: 'audits' as const, total: result.total, items: result.items }
+}, [tab, page])
+const users = computed(() => {
+  const data = list.data.value
+  return data?.kind === 'users' ? data.items : undefined
+})
+const surveys = computed(() => {
+  const data = list.data.value
+  return data?.kind === 'surveys' ? data.items : undefined
+})
+const audits = computed(() => {
+  const data = list.data.value
+  return data?.kind === 'audits' ? data.items : undefined
+})
 const selected = shallowRef<
   { kind: 'users'; item: AdminUser } | { kind: 'surveys'; item: AdminSurvey } | null
 >(null)
@@ -40,7 +59,7 @@ const operation = computed(() =>
       ? '恢复问卷'
       : '下架问卷',
 )
-const document = shallowRef<{
+const detail = shallowRef<{
   survey: AdminSurvey
   published_document: SurveyDocument | null
 } | null>(null)
@@ -79,10 +98,10 @@ async function govern() {
 async function inspect(id: string) {
   inspecting.value = true
   inspectingId.value = id
-  document.value = null
+  detail.value = null
   inspectError.value = ''
   try {
-    document.value = await api(`/api/admin/surveys/${id}`)
+    detail.value = await api(`/api/admin/surveys/${id}`)
   } catch (failure) {
     inspectError.value = message(failure)
   } finally {
@@ -110,7 +129,7 @@ const actionNames: Record<string, string> = {
         v-for="(label, key) in labels"
         :key="key"
         class="tab"
-        :aria-selected="tab === key"
+        :aria-pressed="tab === key"
         @click="tab = key"
       >
         {{ label }}
@@ -258,21 +277,21 @@ const actionNames: Record<string, string> = {
   <Modal v-if="inspectingId" title="问卷治理详情" wide @close="inspectingId = ''">
     <LoadingState v-if="inspecting" />
     <ErrorNotice :message="inspectError" />
-    <template v-if="document">
-      <h2>{{ document.survey.title || '无标题问卷' }}</h2>
+    <template v-if="detail">
+      <h2>{{ detail.survey.title || '无标题问卷' }}</h2>
       <p class="hint mt">
         发布者账号 ID：
-        <code>{{ document.survey.owner_id }}</code>
+        <code>{{ detail.survey.owner_id }}</code>
       </p>
       <p class="hint mt">
-        {{ statusNames[document.survey.status] }} ·
-        {{ document.survey.taken_down ? '已下架' : '未下架' }}
+        {{ statusNames[detail.survey.status] }} ·
+        {{ detail.survey.taken_down ? '已下架' : '未下架' }}
       </p>
-      <template v-if="document.published_document">
-        <p class="plain-text subtle mt">{{ document.published_document.description }}</p>
-        <p class="plain-text hint mt">收集目的：{{ document.published_document.purpose }}</p>
+      <template v-if="detail.published_document">
+        <p class="plain-text subtle mt">{{ detail.published_document.description }}</p>
+        <p class="plain-text hint mt">收集目的：{{ detail.published_document.purpose }}</p>
         <div
-          v-for="(question, index) in document.published_document.questions"
+          v-for="(question, index) in detail.published_document.questions"
           :key="question.id"
           class="text-answer"
         >

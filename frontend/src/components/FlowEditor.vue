@@ -1,8 +1,8 @@
 <!-- 页面顺序和出口由作者显式配置，结构变化后保留失效引用供定位修复。 -->
 <script setup lang="ts">
-import { nextTick } from 'vue'
+import { computed, nextTick } from 'vue'
 import { insertFlowNode } from '../flow-tools'
-import type { ComputedVariable, FlowDefinition, FlowNode, Question } from '../types'
+import type { ComputedVariable, FlowBranch, FlowDefinition, FlowNode, Question } from '../types'
 import ConditionBuilder from './ConditionBuilder.vue'
 import FlowTarget from './FlowTarget.vue'
 import FlowOverview from './FlowOverview.vue'
@@ -25,8 +25,10 @@ function start(perQuestion = false) {
   pages.forEach((page, index) => {
     page.next = pages[index + 1]?.id ?? end
   })
+  const firstPage = pages[0]
+  if (!firstPage) return
   flow.value = {
-    entry: pages[0]!.id,
+    entry: firstPage.id,
     nodes: [...pages, { type: 'end', id: end, outcome: 'complete' }],
   }
 }
@@ -43,18 +45,22 @@ function move(index: number, direction: number) {
   if (!flow.value) return
   const to = index + direction
   if (to < 0 || to >= flow.value.nodes.length) return
-  flow.value.nodes.splice(to, 0, flow.value.nodes.splice(index, 1)[0]!)
+  const [moved] = flow.value.nodes.splice(index, 1)
+  if (!moved) return
+  flow.value.nodes.splice(to, 0, moved)
+}
+function raiseBranch(branches: FlowBranch[], index: number) {
+  const [moved] = branches.splice(index, 1)
+  if (!moved) return
+  branches.splice(index - 1, 0, moved)
 }
 function assign(questionId: string, pageId: string) {
+  const order = new Map(props.questions.map((question, position) => [question.id, position]))
   for (const node of flow.value?.nodes ?? [])
     if (node.type === 'page') {
       node.question_ids = node.question_ids.filter((id) => id !== questionId)
       if (node.id === pageId) node.question_ids.push(questionId)
-      node.question_ids.sort(
-        (a, b) =>
-          props.questions.findIndex((question) => question.id === a) -
-          props.questions.findIndex((question) => question.id === b),
-      )
+      node.question_ids.sort((a, b) => (order.get(a) ?? -1) - (order.get(b) ?? -1))
     }
 }
 function pageOf(id: string) {
@@ -62,6 +68,17 @@ function pageOf(id: string) {
     flow.value?.nodes.find((node) => node.type === 'page' && node.question_ids.includes(id))?.id ??
     ''
   )
+}
+const preceding = computed(() => {
+  const seen = new Set<string>()
+  return (flow.value?.nodes ?? []).map((node) => {
+    const available = props.questions.filter((question) => seen.has(question.id))
+    if (node.type === 'page') for (const id of node.question_ids) seen.add(id)
+    return available
+  })
+})
+function precedingQuestions(index: number) {
+  return preceding.value[index] ?? []
 }
 function removeFlow() {
   if (
@@ -222,13 +239,7 @@ function removeFlow() {
                   type="button"
                   class="text-button"
                   :disabled="branchIndex === 0"
-                  @click="
-                    node.branches.splice(
-                      branchIndex - 1,
-                      0,
-                      node.branches.splice(branchIndex, 1)[0]!,
-                    )
-                  "
+                  @click="raiseBranch(node.branches, branchIndex)"
                 >
                   提高优先级
                 </button>
@@ -244,16 +255,7 @@ function removeFlow() {
             </div>
             <ConditionBuilder
               v-model="branch.when"
-              :questions="
-                questions.filter((question) =>
-                  flow!.nodes
-                    .slice(0, index)
-                    .some(
-                      (previous) =>
-                        previous.type === 'page' && previous.question_ids.includes(question.id),
-                    ),
-                )
-              "
+              :questions="precedingQuestions(index)"
               :variables="variables"
             />
             <label class="field">

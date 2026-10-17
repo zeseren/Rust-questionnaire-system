@@ -42,10 +42,22 @@ const availableQuestions = computed(() =>
     (question) => !logic.value?.rules.some((rule) => rule.question_id === question.id),
   ),
 )
-function enable() {
-  logic.value = { dsl_version: 1, semantics_version: 1, variables: [], rules: [] }
+const configuredRuleIds = computed(
+  () => new Set(logic.value?.rules.map((rule) => rule.question_id) ?? []),
+)
+const ruleFieldKeys = ['visible_if', 'required_if', 'validate'] as const
+function enable(): DocumentLogic {
+  const created: DocumentLogic = {
+    dsl_version: 1,
+    semantics_version: 1,
+    variables: [],
+    rules: [],
+  }
+  logic.value = created
+  return created
 }
 function disable() {
+  if (props.disabled) return
   if (window.confirm('确定移除全部规则、变量和流程，恢复普通问卷吗？')) {
     logic.value = null
     textMode.value = false
@@ -53,18 +65,20 @@ function disable() {
 }
 async function addRule(questionId = availableQuestions.value[0]?.id) {
   if (!questionId || props.disabled || textPending.value) return
-  if (!logic.value) enable()
-  const existing = logic.value!.rules.find((rule) => rule.question_id === questionId)
+  const current = logic.value ?? enable()
+  const existing = current.rules.find((rule) => rule.question_id === questionId)
   if (!existing)
-    logic.value!.rules.push({ question_id: questionId, visible_if: { op: 'boolean', value: true } })
+    current.rules.push({ question_id: questionId, visible_if: { op: 'boolean', value: true } })
   textMode.value = false
   section.value = 'rules'
   await nextTick()
-  const index = logic.value!.rules.findIndex((rule) => rule.question_id === questionId)
+  const index = current.rules.findIndex((rule) => rule.question_id === questionId)
   document.getElementById(`logic-rule-${index}`)?.focus()
 }
 function addVariable() {
-  logic.value?.variables.push({
+  if (props.disabled) return
+  const current = logic.value ?? enable()
+  current.variables.push({
     id: crypto.randomUUID(),
     value_type: 'boolean',
     expression: { op: 'boolean', value: true },
@@ -73,7 +87,7 @@ function addVariable() {
 function toggleRule(rule: QuestionRule, key: keyof typeof ruleFields) {
   if (rule[key] != null) {
     delete rule[key]
-    if (!Object.keys(ruleFields).some((field) => rule[field as keyof typeof ruleFields] != null))
+    if (!ruleFieldKeys.some((field) => rule[field] != null))
       logic.value?.rules.splice(logic.value.rules.indexOf(rule), 1)
   } else rule[key] = { op: 'boolean', value: true }
 }
@@ -142,7 +156,7 @@ defineExpose({ addRule, locate })
           <p class="hint">用分页与条件分支组织不同的填写路径。</p>
         </div>
       </div>
-      <button type="button" class="button button-primary" @click="enable">
+      <button type="button" class="button button-primary" :disabled="disabled" @click="enable">
         <Icon name="plus" />
         开始配置规则
       </button>
@@ -183,154 +197,155 @@ defineExpose({ addRule, locate })
             <span>{{ logic.flow?.nodes.length ?? 0 }}</span>
           </button>
         </div>
-        <div v-if="section === 'rules'" class="form-stack">
-          <div class="actions between">
-            <div>
-              <h3>题目规则</h3>
-              <p class="hint">先选择一道题，再设置它在什么情况下显示或必填。</p>
-            </div>
-            <button
-              type="button"
-              class="button button-primary"
-              :disabled="!availableQuestions.length"
-              @click="addRule()"
-            >
-              <Icon name="plus" />
-              添加规则
-            </button>
-          </div>
-          <div v-if="!logic.rules.length" class="logic-empty">
-            <Icon name="document" />
-            <h3>每位填写者，只回答相关的问题</h3>
-            <p class="hint">例如：选中“其他”后显示补充说明，或在评分较低时追问原因。</p>
-            <button type="button" class="button" :disabled="!questions.length" @click="addRule()">
-              创建第一条规则
-            </button>
-          </div>
-          <section
-            v-for="(rule, index) in logic.rules"
-            :id="`logic-rule-${index}`"
-            :key="index"
-            tabindex="-1"
-            class="logic-block rule-card"
-          >
-            <div class="rule-card-heading">
-              <span class="rule-number">{{ String(index + 1).padStart(2, '0') }}</span>
-              <div class="grow">
-                <label class="field">
-                  作用题目
-                  <SearchSelect
-                    v-model="rule.question_id"
-                    :label="`规则 ${index + 1} 的作用题目`"
-                    :options="
-                      questions.map((question, i) => ({
-                        value: question.id,
-                        label: `${i + 1}. ${question.title || '未命名题目'}`,
-                        disabled: logic!.rules.some(
-                          (other) => other !== rule && other.question_id === question.id,
-                        ),
-                      }))
-                    "
-                  />
-                </label>
+        <fieldset :disabled="disabled" style="border: 0; padding: 0; margin: 0; min-width: 0">
+          <div v-if="section === 'rules'" class="form-stack">
+            <div class="actions between">
+              <div>
+                <h3>题目规则</h3>
+                <p class="hint">先选择一道题，再设置它在什么情况下显示或必填。</p>
               </div>
               <button
                 type="button"
-                class="icon-button danger-text"
-                :aria-label="`删除规则 ${index + 1}`"
-                @click="logic.rules.splice(index, 1)"
+                class="button button-primary"
+                :disabled="!availableQuestions.length"
+                @click="addRule()"
               >
-                <Icon name="trash" />
+                <Icon name="plus" />
+                添加规则
               </button>
             </div>
-            <div
-              v-for="(details, field) in ruleFields"
-              :key="field"
-              class="rule-field"
-              :class="{ enabled: rule[field] != null }"
+            <div v-if="!logic.rules.length" class="logic-empty">
+              <Icon name="document" />
+              <h3>每位填写者，只回答相关的问题</h3>
+              <p class="hint">例如：选中“其他”后显示补充说明，或在评分较低时追问原因。</p>
+              <button type="button" class="button" :disabled="!questions.length" @click="addRule()">
+                创建第一条规则
+              </button>
+            </div>
+            <section
+              v-for="(rule, index) in logic.rules"
+              :id="`logic-rule-${index}`"
+              :key="rule.question_id || index"
+              tabindex="-1"
+              class="logic-block rule-card"
             >
-              <label class="rule-toggle">
-                <input
-                  type="checkbox"
-                  :checked="rule[field] != null"
-                  @change="toggleRule(rule, field)"
+              <div class="rule-card-heading">
+                <span class="rule-number">{{ String(index + 1).padStart(2, '0') }}</span>
+                <div class="grow">
+                  <label class="field">
+                    作用题目
+                    <SearchSelect
+                      v-model="rule.question_id"
+                      :label="`规则 ${index + 1} 的作用题目`"
+                      :options="
+                        questions.map((question, i) => ({
+                          value: question.id,
+                          label: `${i + 1}. ${question.title || '未命名题目'}`,
+                          disabled:
+                            configuredRuleIds.has(question.id) && question.id !== rule.question_id,
+                        }))
+                      "
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  class="icon-button danger-text"
+                  :aria-label="`删除规则 ${index + 1}`"
+                  @click="logic.rules.splice(index, 1)"
+                >
+                  <Icon name="trash" />
+                </button>
+              </div>
+              <div
+                v-for="(details, field) in ruleFields"
+                :key="field"
+                class="rule-field"
+                :class="{ enabled: rule[field] != null }"
+              >
+                <label class="rule-toggle">
+                  <input
+                    type="checkbox"
+                    :checked="rule[field] != null"
+                    @change="toggleRule(rule, field)"
+                  />
+                  <span>
+                    <strong>{{ details.title }}</strong>
+                    <span class="hint">{{ details.description }}</span>
+                  </span>
+                </label>
+                <ConditionBuilder
+                  v-if="rule[field] != null"
+                  v-model="rule[field]"
+                  :questions="references(rule, field)"
+                  :variables="logic.variables"
                 />
-                <span>
-                  <strong>{{ details.title }}</strong>
-                  <span class="hint">{{ details.description }}</span>
-                </span>
-              </label>
-              <ConditionBuilder
-                v-if="rule[field] != null"
-                v-model="rule[field]"
-                :questions="references(rule, field)"
-                :variables="logic.variables"
-              />
-            </div>
-          </section>
-        </div>
-        <div v-else-if="section === 'variables'" class="form-stack">
-          <div class="actions between">
-            <div>
-              <h3>计算变量</h3>
-              <p class="hint">复用评分或判断结果。变量会按依赖顺序自动计算。</p>
-            </div>
-            <button
-              type="button"
-              class="button button-primary"
-              :disabled="logic.variables.length >= 100"
-              @click="addVariable"
-            >
-              <Icon name="plus" />
-              添加变量
-            </button>
+              </div>
+            </section>
           </div>
-          <div v-if="!logic.variables.length" class="logic-empty">
-            <Icon name="chart" />
-            <h3>把常用计算只写一次</h3>
-            <p class="hint">例如：计算总分，或判断是否需要后续回访。</p>
-          </div>
-          <section
-            v-for="(variable, index) in logic.variables"
-            :id="`logic-variable-${variable.id}`"
-            :key="variable.id"
-            tabindex="-1"
-            class="logic-block form-stack"
-          >
+          <div v-else-if="section === 'variables'" class="form-stack">
             <div class="actions between">
-              <strong>
-                变量 {{ index + 1 }}
-                <code class="hint">v{{ index + 1 }}</code>
-              </strong>
+              <div>
+                <h3>计算变量</h3>
+                <p class="hint">复用评分或判断结果。变量会按依赖顺序自动计算。</p>
+              </div>
               <button
                 type="button"
-                class="text-button danger-text"
-                @click="logic.variables.splice(index, 1)"
+                class="button button-primary"
+                :disabled="disabled || logic.variables.length >= 100"
+                @click="addVariable"
               >
-                删除变量
+                <Icon name="plus" />
+                添加变量
               </button>
             </div>
-            <label class="field">
-              值类型
-              <select v-model="variable.value_type">
-                <option v-for="(label, type) in types" :key="type" :value="type">
-                  {{ label }}
-                </option>
-              </select>
-            </label>
-            <ExpressionEditor
-              v-model="variable.expression"
-              :questions="questions"
-              :variables="logic.variables"
-            />
-          </section>
-        </div>
-        <FlowEditor
-          v-else
-          v-model="logic.flow"
-          :questions="questions"
-          :variables="logic.variables"
-        />
+            <div v-if="!logic.variables.length" class="logic-empty">
+              <Icon name="chart" />
+              <h3>把常用计算只写一次</h3>
+              <p class="hint">例如：计算总分，或判断是否需要后续回访。</p>
+            </div>
+            <section
+              v-for="(variable, index) in logic.variables"
+              :id="`logic-variable-${variable.id}`"
+              :key="variable.id"
+              tabindex="-1"
+              class="logic-block form-stack"
+            >
+              <div class="actions between">
+                <strong>
+                  变量 {{ index + 1 }}
+                  <code class="hint">v{{ index + 1 }}</code>
+                </strong>
+                <button
+                  type="button"
+                  class="text-button danger-text"
+                  @click="logic.variables.splice(index, 1)"
+                >
+                  删除变量
+                </button>
+              </div>
+              <label class="field">
+                值类型
+                <select v-model="variable.value_type">
+                  <option v-for="(label, type) in types" :key="type" :value="type">
+                    {{ label }}
+                  </option>
+                </select>
+              </label>
+              <ExpressionEditor
+                v-model="variable.expression"
+                :questions="questions"
+                :variables="logic.variables"
+              />
+            </section>
+          </div>
+          <FlowEditor
+            v-else
+            v-model="logic.flow"
+            :questions="questions"
+            :variables="logic.variables"
+          />
+        </fieldset>
       </div>
       <div class="logic-footer">
         <span class="hint">
@@ -344,7 +359,7 @@ defineExpose({ addRule, locate })
         <button
           type="button"
           class="text-button danger-text"
-          :disabled="textPending"
+          :disabled="disabled || textPending"
           @click="disable"
         >
           移除全部逻辑

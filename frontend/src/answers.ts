@@ -1,12 +1,14 @@
 //! 数字输入按原始 JSON 数字发送，最终精度与资格校验由服务器执行。
 import { LosslessNumber } from 'lossless-json'
-import type { Answer, SurveyDocument } from './types'
+import type { Answer, SurveyDocument } from './types.ts'
 import { numberError, numberInput } from './numbers.ts'
 import { isBlank, validText } from './value-contract.ts'
 export type InputValue = string | string[] | number | null
 export type Inputs = Record<string, InputValue>
 export function isAnswered(value: InputValue | undefined) {
-  return value != null && (Array.isArray(value) ? value.length > 0 : !isBlank(String(value)))
+  if (value == null) return false
+  if (Array.isArray(value)) return value.length > 0
+  return typeof value === 'string' ? !isBlank(value) : true
 }
 export function buildAnswers(document: SurveyDocument, values: Inputs) {
   const answers: Answer[] = []
@@ -40,18 +42,31 @@ export function buildAnswers(document: SurveyDocument, values: Inputs) {
           fail('请选择一个有效选项。')
         else answers.push({ question_id: question.id, value })
         break
-      case 'multiple_choice':
+      case 'multiple_choice': {
+        if (!Array.isArray(value)) {
+          fail('请选择一个或多个有效选项。')
+          break
+        }
+        const allowed = new Set(question.options.map((option) => option.id))
         if (
-          !Array.isArray(value) ||
           value.length < question.min_choices ||
-          value.length > question.max_choices
-        )
-          fail(`请选择 ${question.min_choices}–${question.max_choices} 项。`)
-        else answers.push({ question_id: question.id, value: [...value] })
+          value.length > question.max_choices ||
+          new Set(value).size !== value.length ||
+          value.some((id) => !allowed.has(id))
+        ) {
+          fail(`请选择 ${question.min_choices}–${question.max_choices} 项有效选项。`)
+          break
+        }
+        answers.push({ question_id: question.id, value: [...value] })
         break
+      }
       case 'text':
       case 'textarea':
-        answers.push({ question_id: question.id, value: String(value) })
+        if (typeof value !== 'string') {
+          fail('文本答案必须是字符串。')
+          break
+        }
+        answers.push({ question_id: question.id, value })
         break
       case 'number': {
         const raw = numberInput(String(value))

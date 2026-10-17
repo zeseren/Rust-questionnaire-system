@@ -18,6 +18,10 @@ function reset() {
   feedback.value = ''
   generation.value++
 }
+function clearErrors() {
+  errors.value = {}
+  feedback.value = ''
+}
 function validate() {
   const result = buildAnswers(props.document, values.value)
   errors.value = result.errors
@@ -66,7 +70,7 @@ function validate() {
           v-model="values"
           :document="document"
           :errors="errors"
-          @change="feedback = ''"
+          @change="clearErrors"
         />
         <div class="fill-footer">
           <span class="hint">回答仅用于试填。</span>

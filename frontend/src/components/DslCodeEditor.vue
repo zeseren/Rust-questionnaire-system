@@ -67,7 +67,7 @@ const snippets = [
     '有序条件分支',
   ],
   ['end', 'end ${节点} = complete;', '完成填写'],
-]
+] as const
 function complete(context: CompletionContext) {
   const word = context.matchBefore(/[A-Za-z_][A-Za-z_0-9]*$/)
   if (!word && !context.explicit) return null
@@ -81,7 +81,7 @@ function complete(context: CompletionContext) {
         boost: 2,
       })),
       ...snippets.map(([label, template, detail]) =>
-        snippetCompletion(template!, { label: label!, detail, type: 'keyword' }),
+        snippetCompletion(template, { label, detail, type: 'keyword' }),
       ),
       ...[
         'true',

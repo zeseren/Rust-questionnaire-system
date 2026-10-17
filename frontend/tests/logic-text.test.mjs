@@ -41,8 +41,8 @@ test('文本共享样例保留身份优先级并定位语法与语义错误', ()
 
 test('有效表达式和流程可格式化往返且解析预算生效', () => {
   const expressions = read('expressions')
-  // 使用人工预期为有效值的样例；编译意外失败时直接报告，不静默跳过。
-  for (const item of expressions.cases.filter((item) => item.expected.value)) {
+  // 使用人工预期不含错误的样例；编译意外失败时直接报告，不静默跳过。
+  for (const item of expressions.cases.filter((item) => !item.expected.error)) {
     const compiled = compileExpression(item.program, expressions.questions)
     const logic = {
       dsl_version: 1,
@@ -87,6 +87,10 @@ test('共享 format_cases 逐字节锁定格式化输出并可二次解析往返
     assert.equal(formatLogicText(item.logic, item.questions), item.expected, item.name)
     const once = parseLogicText(item.expected, item.questions)
     // 一次与二次解析必须等值，保证输出无歧义。
-    assert.deepEqual(parseLogicText(formatLogicText(once, item.questions), item.questions), once, item.name)
+    assert.deepEqual(
+      parseLogicText(formatLogicText(once, item.questions), item.questions),
+      once,
+      item.name,
+    )
   }
 })

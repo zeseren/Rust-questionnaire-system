@@ -31,8 +31,7 @@ function refresh() {
   values.value = inputs?.values() ?? {}
   for (const id of snapshot.value?.cleared ?? []) touched.value.delete(id)
 }
-function reset() {
-  if (props.disabled) return
+function initSession() {
   inputs = undefined
   error.value = ''
   touched.value = new Set()
@@ -45,7 +44,11 @@ function reset() {
   refresh()
   emit('change', 0)
 }
-watch(() => props.document, reset, { immediate: true })
+function reset() {
+  if (props.disabled) return
+  initSession()
+}
+watch(() => props.document, initSession, { immediate: true })
 const pageDocument = computed(() => {
   const current = props.document.logic?.flow?.nodes.find(
     (node) => node.id === snapshot.value?.current_node,
@@ -59,19 +62,19 @@ const pageDocument = computed(() => {
       .map((q) => ({ ...q, required: snapshot.value?.required.includes(q.id) ?? q.required })),
   }
 })
-const fieldErrors = computed(() =>
-  Object.fromEntries(
-    pageDocument.value.questions.flatMap((q) => {
-      const code = snapshot.value?.errors[q.id]
-      const text =
-        props.errors[q.id] ||
-        (code && (attempted.value || touched.value.has(q.id))
-          ? new LogicError(code, '$.answers', q.id).message
-          : '')
-      return text ? [[q.id, text]] : []
-    }),
-  ),
-)
+const fieldErrors = computed<Record<string, string>>(() => {
+  const result: Record<string, string> = {}
+  for (const q of pageDocument.value.questions) {
+    const code = snapshot.value?.errors[q.id]
+    const text =
+      props.errors[q.id] ||
+      (code && (attempted.value || touched.value.has(q.id))
+        ? new LogicError(code, '$.answers', q.id).message
+        : '')
+    if (text) result[q.id] = text
+  }
+  return result
+})
 async function focus(id?: string) {
   await nextTick()
   const first = id ?? pageDocument.value.questions.find((q) => fieldErrors.value[q.id])?.id

@@ -31,7 +31,11 @@ const from = ref('')
 const to = ref('')
 const actionError = ref('')
 const exporting = ref(false)
-const selection = ref({ version_id: '', from: null as string | null, to: null as string | null })
+const selection = ref<Pick<ReportSelection, 'version_id' | 'from' | 'to'>>({
+  version_id: '',
+  from: null,
+  to: null,
+})
 async function versions() {
   const items: Version[] = []
   let number = 1
@@ -187,10 +191,10 @@ async function openReceipt(receipt: string) {
     </form>
     <div class="toolbar">
       <div class="tabs" role="group" aria-label="报表视图">
-        <button class="tab" :aria-selected="tab === 'statistics'" @click="tab = 'statistics'">
+        <button class="tab" :aria-pressed="tab === 'statistics'" @click="tab = 'statistics'">
           统计概览
         </button>
-        <button class="tab" :aria-selected="tab === 'responses'" @click="tab = 'responses'">
+        <button class="tab" :aria-pressed="tab === 'responses'" @click="tab = 'responses'">
           答卷明细
         </button>
       </div>

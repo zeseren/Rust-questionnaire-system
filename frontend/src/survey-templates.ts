@@ -31,7 +31,9 @@ export const surveyTemplates = [
 export type SurveyTemplateId = (typeof surveyTemplates)[number]['id']
 
 function question<T extends Question['type']>(type: T, title: string) {
-  return { ...newQuestion(type), title } as Extract<Question, { type: T }>
+  const created = newQuestion(type)
+  created.title = title
+  return created
 }
 function choice(title: string, labels: string[]) {
   const result = question('single_choice', title)
@@ -48,7 +50,9 @@ export function createSurveyTemplate(template: SurveyTemplateId | null): SurveyD
     questions: [],
   }
   if (!template) return document
-  document.title = surveyTemplates.find((item) => item.id === template)!.title
+  const meta = surveyTemplates.find((item) => item.id === template)
+  if (!meta) throw new Error('未知问卷模板')
+  document.title = meta.title
   const logic: DocumentLogic = {
     dsl_version: 1,
     semantics_version: 1,
@@ -93,9 +97,12 @@ export function createSurveyTemplate(template: SurveyTemplateId | null): SurveyD
     document.description = '无论是否使用过，都欢迎分享你的体验与期待。'
     document.purpose = '收集产品使用反馈及需求，用于产品改进和规划。'
     document.questions = [used, experience, expectation, interest]
-    const [entry, branch, returning, newcomer, join, end] = Array.from({ length: 6 }, () =>
-      crypto.randomUUID(),
-    ) as [string, string, string, string, string, string]
+    const entry = crypto.randomUUID()
+    const branch = crypto.randomUUID()
+    const returning = crypto.randomUUID()
+    const newcomer = crypto.randomUUID()
+    const join = crypto.randomUUID()
+    const end = crypto.randomUUID()
     logic.flow = {
       entry,
       nodes: [
@@ -105,7 +112,11 @@ export function createSurveyTemplate(template: SurveyTemplateId | null): SurveyD
           id: branch,
           branches: [
             {
-              when: { op: 'selected', question_id: used.id, option_id: used.options[0]!.id },
+              when: {
+                op: 'selected',
+                question_id: used.id,
+                option_id: used.options[0]?.id ?? '',
+              },
               target: returning,
             },
           ],
@@ -117,12 +128,13 @@ export function createSurveyTemplate(template: SurveyTemplateId | null): SurveyD
         { type: 'end', id: end, outcome: 'complete' },
       ],
     }
-  } else {
+  } else if (template === 'registration') {
     const count = question('number', '本次共有几位参加者？')
     count.integer = true
     count.min = 1
     count.max = 10
     const transport = choice('是否需要安排接送？', ['需要接送', '自行前往'])
+    const transportOption = transport.options[0]?.id ?? ''
     const address = { ...newQuestion('text'), title: '请填写方便上车的地点', required: false }
     document.description = '请告诉我们参加人数与出行安排，以便提前准备。'
     document.purpose = '收集活动人数及接送需求，仅用于本次活动安排。'
@@ -142,15 +154,18 @@ export function createSurveyTemplate(template: SurveyTemplateId | null): SurveyD
         visible_if: {
           op: 'selected',
           question_id: transport.id,
-          option_id: transport.options[0]!.id,
+          option_id: transportOption,
         },
         required_if: {
           op: 'selected',
           question_id: transport.id,
-          option_id: transport.options[0]!.id,
+          option_id: transportOption,
         },
       },
     ]
+  } else {
+    const exhaustive: never = template
+    return exhaustive
   }
   return document
 }

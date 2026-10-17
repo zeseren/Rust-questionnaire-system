@@ -18,6 +18,9 @@ export interface TextBinding {
   id: string
   label: string
 }
+function isBindingCategory(value: string): value is TextBinding['category'] {
+  return value === 'question' || value === 'option' || value === 'variable' || value === 'node'
+}
 export function textBindings(source: string, questions: readonly Question[]): TextBinding[] {
   const result: TextBinding[] = []
   const questionNames = new Map(questions.map((question) => [question.id, question.title]))
@@ -32,10 +35,9 @@ export function textBindings(source: string, questions: readonly Question[]): Te
   const pattern =
     /\/\/[^\n]*|"(?:\\.|[^"\\])*"|\bbind\s+(question|option|variable|node)\s+([A-Za-z_][A-Za-z_0-9]*)\s*=\s*"([^"]+)"\s*;/g
   for (const match of source.matchAll(pattern)) {
-    if (!match[1]) continue
-    const category = match[1] as TextBinding['category'],
-      alias = match[2]!,
-      id = match[3]!
+    const [, rawCategory, alias, id] = match
+    if (!rawCategory || !alias || !id || !isBindingCategory(rawCategory)) continue
+    const category = rawCategory
     const label =
       category === 'question'
         ? questionNames.get(id) || '未命名或已删除题目'
@@ -53,5 +55,6 @@ export function textErrorOffset(source: string, line: number, column: number): n
   const lines = source.split('\n')
   const row = Math.max(0, Math.min(line - 1, lines.length - 1))
   const start = lines.slice(0, row).reduce((length, text) => length + text.length + 1, 0)
-  return start + [...lines[row]!].slice(0, Math.max(0, column - 1)).join('').length
+  const lineText = lines[row] ?? ''
+  return start + [...lineText].slice(0, Math.max(0, column - 1)).join('').length
 }

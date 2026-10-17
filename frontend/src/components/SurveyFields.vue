@@ -12,7 +12,9 @@ function textValue(question: Question) {
   return String(values.value[question.id] ?? '')
 }
 function update(question: Question, event: Event) {
-  change(question, (event.target as HTMLInputElement).value)
+  const target = event.currentTarget
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)
+    change(question, target.value)
 }
 function change(question: Question, value: InputValue) {
   values.value = { ...values.value, [question.id]: value }
@@ -140,6 +142,7 @@ function scores(question: Question) {
           :min="question.min"
           :max="question.max"
           :aria-labelledby="`label-${question.id}`"
+          :aria-invalid="!!errors[question.id]"
           :value="textValue(question)"
           @input="update(question, $event)"
         />

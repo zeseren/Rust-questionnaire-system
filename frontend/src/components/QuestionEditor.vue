@@ -14,10 +14,15 @@ defineProps<{
   ruleDisabled?: boolean
 }>()
 defineEmits<{ move: [direction: number]; duplicate: []; remove: []; rule: [] }>()
+function isQuestionType(value: string): value is Question['type'] {
+  return Object.hasOwn(questionNames, value)
+}
 function changeType(event: Event) {
-  const type = (event.target as HTMLSelectElement).value as Question['type']
+  if (!(event.currentTarget instanceof HTMLSelectElement)) return
+  const value = event.currentTarget.value
+  if (!isQuestionType(value)) return
   const before = question.value
-  const next = newQuestion(type)
+  const next = newQuestion(value)
   next.id = before.id
   next.title = before.title
   next.required = before.required
@@ -29,10 +34,59 @@ function addOption() {
     question.value.options.push({ id: crypto.randomUUID(), label: '' })
 }
 function bound(name: 'min' | 'max', event: Event) {
+  if (!(event.currentTarget instanceof HTMLInputElement)) return
   // 非 number 题型没有 min/max 字段，这里的判定同时是类型收窄，不能删。
   if (question.value.type !== 'number') return
-  const value = (event.target as HTMLInputElement).value
-  question.value[name] = value === '' ? null : Number(value)
+  const value = event.currentTarget.value
+  if (value.trim() === '') {
+    question.value[name] = null
+    return
+  }
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return
+  question.value[name] = parsed
+}
+function updateInteger(event: Event, apply: (value: number) => void) {
+  if (!(event.currentTarget instanceof HTMLInputElement)) return
+  if (event.currentTarget.value.trim() === '') return
+  const parsed = Number(event.currentTarget.value)
+  if (!Number.isInteger(parsed)) return
+  apply(parsed)
+}
+function setMinChoices(event: Event) {
+  const current = question.value
+  if (current.type !== 'multiple_choice') return
+  updateInteger(event, (value) => {
+    current.min_choices = value
+  })
+}
+function setMaxChoices(event: Event) {
+  const current = question.value
+  if (current.type !== 'multiple_choice') return
+  updateInteger(event, (value) => {
+    current.max_choices = value
+  })
+}
+function setMaxLength(event: Event) {
+  const current = question.value
+  if (current.type !== 'text' && current.type !== 'textarea') return
+  updateInteger(event, (value) => {
+    current.max_length = value
+  })
+}
+function setRatingMin(event: Event) {
+  const current = question.value
+  if (current.type !== 'rating') return
+  updateInteger(event, (value) => {
+    current.min = value
+  })
+}
+function setRatingMax(event: Event) {
+  const current = question.value
+  if (current.type !== 'rating') return
+  updateInteger(event, (value) => {
+    current.max = value
+  })
 }
 </script>
 <template>
@@ -128,23 +182,25 @@ function bound(name: 'min' | 'max', event: Event) {
         <label class="field">
           最少选择
           <input
-            v-model.number="question.min_choices"
+            :value="question.min_choices"
             type="number"
             min="0"
             max="50"
             step="1"
             required
+            @input="setMinChoices"
           />
         </label>
         <label class="field">
           最多选择
           <input
-            v-model.number="question.max_choices"
+            :value="question.max_choices"
             type="number"
             min="1"
             max="50"
             step="1"
             required
+            @input="setMaxChoices"
           />
         </label>
       </div>
@@ -154,12 +210,13 @@ function bound(name: 'min' | 'max', event: Event) {
       >
         字数上限
         <input
-          v-model.number="question.max_length"
+          :value="question.max_length"
           type="number"
           min="1"
           :max="TEXT_ANSWER_LIMITS[question.type]"
           step="1"
           required
+          @input="setMaxLength"
         />
         <span class="hint">最多可设置为 {{ TEXT_ANSWER_LIMITS[question.type] }} 个字符。</span>
       </label>
@@ -196,23 +253,25 @@ function bound(name: 'min' | 'max', event: Event) {
           <label class="field">
             最低分
             <input
-              v-model.number="question.min"
+              :value="question.min"
               type="number"
               step="1"
               min="-2147483648"
               max="2147483647"
               required
+              @input="setRatingMin"
             />
           </label>
           <label class="field">
             最高分
             <input
-              v-model.number="question.max"
+              :value="question.max"
               type="number"
               step="1"
               min="-2147483648"
               max="2147483647"
               required
+              @input="setRatingMax"
             />
           </label>
         </div>

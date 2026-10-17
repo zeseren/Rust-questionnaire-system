@@ -18,8 +18,12 @@ const props = withDefaults(
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 const locked = inject(editorDisabledKey, ref(false))
 const missing = computed(
-  () => props.modelValue && !props.options.some((option) => option.value === props.modelValue),
+  () =>
+    props.modelValue !== '' && !props.options.some((option) => option.value === props.modelValue),
 )
+function updateValue(value: unknown) {
+  emit('update:modelValue', typeof value === 'string' ? value : '')
+}
 </script>
 <template>
   <ElSelect
@@ -34,7 +38,7 @@ const missing = computed(
     no-match-text="没有匹配的选项"
     no-data-text="暂无可选项"
     popper-class="editor-select-popup"
-    @update:model-value="emit('update:modelValue', $event)"
+    @update:model-value="updateValue"
   >
     <ElOption v-if="missing" :value="modelValue" label="当前引用不可用，请重新选择" disabled />
     <ElOption

@@ -49,7 +49,7 @@ interface WasmFlowSession {
   evaluate_answers(answers_json: string): string
 }
 /** wasm 模块的导入模块名就是 `_bg.js`，其导出即胶水提供的导入表。 */
-interface WasmGlue extends WasmEngine {
+interface WasmGlue extends WasmEngine, Record<string, WebAssembly.ImportValue> {
   __wbg_set_wasm(exports: WebAssembly.Exports): void
 }
 
@@ -62,7 +62,9 @@ async function loadEngine(): Promise<WasmEngine> {
   // 打包器的 wasm ESM 支持（node 的 wasm 模块集成仍需实验开关），node 侧会直接加载失败。
   if (typeof process !== 'undefined' && process.versions?.node) return loadNode()
   // Vite/浏览器：胶水负责把 `.wasm` 接进模块图（Vite 的 wasm 插件会生成导入表）。
-  return (await import('./pkg/logic_wasm.js')) as unknown as WasmEngine
+  // 打包产物与 `WasmEngine` 同名同签名，动态导入的模块命名空间即满足契约。
+  const module: WasmEngine = await import('./pkg/logic_wasm.js')
+  return module
 }
 
 /** bundler 产物没有 `initSync`（按打包器契约生成），因此自己提供导入表完成实例化。 */
@@ -75,7 +77,7 @@ async function loadNode(): Promise<WasmEngine> {
   const glue = createRequire(import.meta.url)('./pkg/logic_wasm_bg.js') as WasmGlue
   const bytes = readFileSync(new URL('./pkg/logic_wasm_bg.wasm', import.meta.url))
   const { instance } = await WebAssembly.instantiate(bytes, {
-    './logic_wasm_bg.js': glue as unknown as WebAssembly.ModuleImports,
+    './logic_wasm_bg.js': glue,
   })
   glue.__wbg_set_wasm(instance.exports)
   return glue
@@ -117,14 +119,29 @@ function reviveThrown(reason: unknown): never {
 }
 
 /** 求值结果里的数字已由领域层规范化为有限 f64，还原成 TS 契约的 `number`。 */
-function plainNumbers<T>(value: T): T {
-  if (isLosslessNumber(value)) return Number(value.toString()) as unknown as T
-  if (Array.isArray(value)) return value.map((item) => plainNumbers(item)) as unknown as T
-  if (value && typeof value === 'object')
+function plainNumbers(value: unknown): unknown {
+  if (isLosslessNumber(value)) return Number(value.toString())
+  if (Array.isArray(value)) {
+    // `Array.isArray` 会把 `unknown` 宽化成元素类型未受检的数组；先落到 `readonly unknown[]` 阻断污染。
+    const items: readonly unknown[] = value
+    return items.map((item) => plainNumbers(item))
+  }
+  if (typeof value === 'object' && value !== null) {
+    // 已排除数组与 LosslessNumber；按 WASM 信封的 JSON 对象契约断言为字符串键记录。
+    const record = value as Record<string, unknown>
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, plainNumbers(item)]),
-    ) as unknown as T
+      Object.entries(record).map(([key, item]) => [key, plainNumbers(item)]),
+    )
+  }
   return value
+}
+
+/**
+ * 信封还原的单点断言：WASM 成功信封已保证 `ok` 的结构与 `T` 匹配，
+ * 且求值路径的数字已规范化为有限 f64；此后全文件不再出现裸 `as T` 之外的还原。
+ */
+function unwrapPlain<T>(text: string): T {
+  return plainNumbers(unwrap<unknown>(text)) as T
 }
 
 export interface CompiledExpression {
@@ -161,16 +178,14 @@ export function compileDocumentLogic(
 ): CompiledDocumentLogic {
   const logicJson = encode(logic),
     questionsJson = encode(questions)
-  const compiled = unwrap<{ compiled: boolean; variable_order: string[] }>(
+  const compiled = unwrap<{ variable_order: string[] }>(
     engine.compile_document_logic(logicJson, questionsJson),
   )
   return {
     variableOrder: compiled.variable_order,
     evaluate: (answers) =>
-      plainNumbers(
-        unwrap<DocumentLogicValues>(
-          engine.evaluate_document_logic(logicJson, questionsJson, encodeAnswers(answers)),
-        ),
+      unwrapPlain<DocumentLogicValues>(
+        engine.evaluate_document_logic(logicJson, questionsJson, encodeAnswers(answers)),
       ),
   }
 }
@@ -189,10 +204,8 @@ export function compileExpression(
     valueType: compiled.value_type,
     dependencies: compiled.dependencies,
     evaluate: (answers) =>
-      plainNumbers(
-        unwrap<LogicValue>(
-          engine.evaluate_expression(rawJson, questionsJson, encodeAnswers(answers)),
-        ),
+      unwrapPlain<LogicValue>(
+        engine.evaluate_expression(rawJson, questionsJson, encodeAnswers(answers)),
       ),
   }
 }
@@ -218,7 +231,7 @@ export class FlowSession {
 
   /** 返回独立快照，改动快照不会影响会话。 */
   snapshot(): FlowSnapshot {
-    return plainNumbers(unwrap<FlowSnapshot>(this.#session.snapshot()))
+    return unwrapPlain<FlowSnapshot>(this.#session.snapshot())
   }
 
   /** 事件失败不改状态。 */
@@ -228,8 +241,6 @@ export class FlowSession {
 
   /** 从最终输入重建路径，不读取或修改当前会话的历史与输入。 */
   evaluateAnswers(answers: readonly { question_id: string; value: unknown }[]): EvaluatedResponse {
-    return plainNumbers(
-      unwrap<EvaluatedResponse>(this.#session.evaluate_answers(encodeAnswers(answers))),
-    )
+    return unwrapPlain<EvaluatedResponse>(this.#session.evaluate_answers(encodeAnswers(answers)))
   }
 }

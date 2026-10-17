@@ -49,7 +49,10 @@ const visibleBindings = computed(() =>
 )
 watch(pending, (value) => emit('pending', value), { immediate: true, flush: 'sync' })
 function check(): DocumentLogic | null {
-  clearTimeout(timer)
+  if (timer) {
+    clearTimeout(timer)
+    timer = undefined
+  }
   checked.value = true
   try {
     const result = parseLogicText(text.value, props.questions)
@@ -73,7 +76,7 @@ function scheduleCheck() {
   clearTimeout(timer)
   timer = setTimeout(check, 300)
 }
-watch([text, questionSignature], scheduleCheck)
+watch([text, questionSignature], scheduleCheck, { flush: 'sync' })
 function synchronize(current = logic.value) {
   baseline.value = text.value
   syncedLogic.value = logicTextSignature(current, props.questions)
@@ -106,9 +109,10 @@ function apply() {
   importError.value = ''
 }
 function format() {
-  if (!check()) return
+  const parsed = check()
+  if (!parsed) return
   if (!window.confirm('整理文本会生成统一别名并移除注释，规则含义保持不变。是否继续？')) return
-  text.value = formatLogicText(parseLogicText(text.value, props.questions), props.questions)
+  text.value = formatLogicText(parsed, props.questions)
   check()
 }
 function download() {
@@ -120,8 +124,9 @@ function download() {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 async function importText(event: Event) {
-  const input = event.target as HTMLInputElement,
-    file = input.files?.[0]
+  const input = event.currentTarget
+  if (!(input instanceof HTMLInputElement)) return
+  const file = input.files?.[0]
   input.value = ''
   if (!file || props.disabled) return
   if (file.size > 1048576) {

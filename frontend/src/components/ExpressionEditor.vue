@@ -1,7 +1,8 @@
 <!-- 每次编辑替换 AST 节点，数字常量保留原文，引用始终绑定稳定身份。 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject, ref } from 'vue'
 import type { ComputedVariable, Question } from '../types'
+import { editorDisabledKey } from '../editor-context'
 import SearchSelect from './SearchSelect.vue'
 const props = withDefaults(
   defineProps<{
@@ -13,8 +14,18 @@ const props = withDefaults(
   { depth: 1 },
 )
 const emit = defineEmits<{ 'update:modelValue': [value: unknown] }>()
-const node = computed(
-  () => (props.modelValue ?? { op: 'boolean', value: true }) as Record<string, unknown>,
+const locked = inject(editorDisabledKey, ref(false))
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+function isUnknownArray(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value)
+}
+function asList(value: unknown): readonly unknown[] {
+  return isUnknownArray(value) ? value : []
+}
+const node = computed<Record<string, unknown>>(() =>
+  isRecord(props.modelValue) ? props.modelValue : { op: 'boolean', value: true },
 )
 const ops = {
   boolean: '布尔常量',
@@ -34,28 +45,25 @@ const ops = {
   length: '长度',
   arithmetic: '算术',
 }
-const children = computed(() => {
+const children = computed<readonly (readonly [string, string])[]>(() => {
   switch (node.value.op) {
     case 'not':
-      return [['expression', '条件']]
+      return [['expression', '条件'] as const]
     case 'length':
-      return [['value', '值']]
+      return [['value', '值'] as const]
     case 'coalesce':
-      return [
-        ['value', '值'],
-        ['fallback', '缺失时使用'],
-      ]
+      return [['value', '值'] as const, ['fallback', '缺失时使用'] as const]
     case 'compare':
     case 'arithmetic':
-      return [
-        ['left', '左值'],
-        ['right', '右值'],
-      ]
+      return [['left', '左值'] as const, ['right', '右值'] as const]
     default:
       return []
   }
 })
-const list = computed(() => (node.value.expressions ?? []) as unknown[])
+const list = computed<readonly unknown[]>(() => asList(node.value.expressions))
+const selectedOptionIds = computed<string[]>(() =>
+  asList(node.value.option_ids).filter((item): item is string => typeof item === 'string'),
+)
 const question = computed(() => props.questions.find((q) => q.id === node.value.question_id))
 const options = computed(() =>
   question.value && 'options' in question.value ? question.value.options : [],
@@ -142,8 +150,14 @@ function editList(index: number, value: unknown) {
   )
 }
 function toggleOption(id: string) {
-  const ids = (node.value.option_ids ?? []) as string[]
+  const ids = selectedOptionIds.value
   update('option_ids', ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id])
+}
+function selectValue(event: Event) {
+  return event.currentTarget instanceof HTMLSelectElement ? event.currentTarget.value : ''
+}
+function inputValue(event: Event) {
+  return event.currentTarget instanceof HTMLInputElement ? event.currentTarget.value : ''
 }
 </script>
 <template>
@@ -153,7 +167,8 @@ function toggleOption(id: string) {
       <select
         aria-label="表达式"
         :value="node.op"
-        @change="switchOp(($event.target as HTMLSelectElement).value)"
+        :disabled="locked"
+        @change="switchOp(selectValue($event))"
       >
         <option v-for="(label, op) in ops" :key="op" :value="op">{{ label }}</option>
       </select>
@@ -162,7 +177,8 @@ function toggleOption(id: string) {
       值
       <select
         :value="String(node.value)"
-        @change="update('value', ($event.target as HTMLSelectElement).value === 'true')"
+        :disabled="locked"
+        @change="update('value', selectValue($event) === 'true')"
       >
         <option value="true">成立</option>
         <option value="false">不成立</option>
@@ -170,10 +186,7 @@ function toggleOption(id: string) {
     </label>
     <label v-if="node.op === 'number' || node.op === 'text'" class="field">
       {{ node.op === 'number' ? '数字原文' : '文本' }}
-      <input
-        :value="node.value"
-        @input="update('value', ($event.target as HTMLInputElement).value)"
-      />
+      <input :value="node.value" :disabled="locked" @input="update('value', inputValue($event))" />
     </label>
     <label v-if="'question_id' in node" class="field">
       引用题目
@@ -204,18 +217,18 @@ function toggleOption(id: string) {
       <label v-for="option in options" :key="option.id">
         <input
           type="checkbox"
-          :checked="(node.option_ids as string[]).includes(option.id)"
+          :checked="selectedOptionIds.includes(option.id)"
+          :disabled="locked"
           @change="toggleOption(option.id)"
         />
         {{ option.label }}
       </label>
       <button
-        v-for="id in (node.option_ids as string[]).filter(
-          (id) => !options.some((o) => o.id === id),
-        )"
+        v-for="id in selectedOptionIds.filter((id) => !options.some((o) => o.id === id))"
         :key="id"
         type="button"
         class="text-button danger-text"
+        :disabled="locked"
         @click="toggleOption(id)"
       >
         移除失效选项 {{ id }}
@@ -239,7 +252,8 @@ function toggleOption(id: string) {
       比较方式
       <select
         :value="node.comparison"
-        @change="update('comparison', ($event.target as HTMLSelectElement).value)"
+        :disabled="locked"
+        @change="update('comparison', selectValue($event))"
       >
         <option
           v-for="(label, key) in {
@@ -261,7 +275,8 @@ function toggleOption(id: string) {
       运算
       <select
         :value="node.operator"
-        @change="update('operator', ($event.target as HTMLSelectElement).value)"
+        :disabled="locked"
+        @change="update('operator', selectValue($event))"
       >
         <option
           v-for="(label, key) in { add: '加', subtract: '减', multiply: '乘', divide: '除' }"
@@ -276,11 +291,11 @@ function toggleOption(id: string) {
       <div v-for="[key, label] in children" :key="key" class="expression-child">
         <p class="hint">{{ label }}</p>
         <ExpressionEditor
-          :model-value="node[key!]"
+          :model-value="node[key]"
           :questions="questions"
           :variables="variables"
           :depth="depth + 1"
-          @update:model-value="update(key!, $event)"
+          @update:model-value="update(key, $event)"
         />
       </div>
       <template v-if="node.op === 'all' || node.op === 'any'">
@@ -290,6 +305,7 @@ function toggleOption(id: string) {
             <button
               type="button"
               class="text-button"
+              :disabled="locked"
               @click="
                 update(
                   'expressions',
@@ -311,7 +327,7 @@ function toggleOption(id: string) {
         <button
           type="button"
           class="button"
-          :disabled="list.length >= 256"
+          :disabled="locked || list.length >= 256"
           @click="update('expressions', [...list, { op: 'boolean', value: true }])"
         >
           添加条件

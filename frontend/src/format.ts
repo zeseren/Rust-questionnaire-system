@@ -16,14 +16,15 @@ export const questionNames: Record<Question['type'], string> = {
   number: '数字题',
   rating: '评分题',
 }
+const shanghaiDateTime = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
 export function dateTime(value: string | null | undefined) {
-  return value
-    ? new Intl.DateTimeFormat('zh-CN', {
-        timeZone: 'Asia/Shanghai',
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      }).format(new Date(value))
-    : '未设置'
+  if (!value) return '未设置'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '未设置' : shanghaiDateTime.format(date)
 }
 export function exact(value: unknown): string {
   return value == null ? '暂无数据' : isLosslessNumber(value) ? value.toString() : String(value)

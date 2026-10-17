@@ -12,8 +12,9 @@ function close() {
   if (props.dismissible) emit('close')
 }
 function outside(event: MouseEvent) {
-  if (event.target !== dialog.value) return
-  const rect = dialog.value!.getBoundingClientRect()
+  const element = dialog.value
+  if (!element || event.target !== element) return
+  const rect = element.getBoundingClientRect()
   if (
     event.clientX < rect.left ||
     event.clientX > rect.right ||

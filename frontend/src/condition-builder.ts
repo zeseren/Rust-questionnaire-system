@@ -30,6 +30,17 @@ export const comparisonNames = {
   lt: '小于',
   le: '小于或等于',
 } as const
+export const comparisonOperators = [
+  'eq',
+  'ne',
+  'gt',
+  'ge',
+  'lt',
+  'le',
+] as const satisfies readonly (keyof typeof comparisonNames)[]
+function isComparisonOperator(value: string): value is (typeof comparisonOperators)[number] {
+  return comparisonOperators.some((operator) => operator === value)
+}
 
 export function changeConditionOperator(
   condition: SimpleCondition,
@@ -60,12 +71,13 @@ export function changeConditionOperator(
   }
 }
 
-function record(raw: unknown): Record<string, unknown> {
-  return raw && typeof raw === 'object' && !Array.isArray(raw)
-    ? (raw as Record<string, unknown>)
-    : {}
+function isRecord(raw: unknown): raw is Record<string, unknown> {
+  return typeof raw === 'object' && raw !== null && !Array.isArray(raw)
 }
-function keys(node: Record<string, unknown>, names: string[]) {
+function record(raw: unknown): Record<string, unknown> {
+  return isRecord(raw) ? raw : {}
+}
+function keys(node: Record<string, unknown>, names: readonly string[]) {
   return Object.keys(node).length === names.length && names.every((key) => Object.hasOwn(node, key))
 }
 function readCondition(raw: unknown): SimpleCondition | null {
@@ -94,7 +106,7 @@ function readCondition(raw: unknown): SimpleCondition | null {
     node.op === 'compare' &&
     keys(node, ['op', 'comparison', 'left', 'right']) &&
     typeof node.comparison === 'string' &&
-    Object.hasOwn(comparisonNames, node.comparison) &&
+    isComparisonOperator(node.comparison) &&
     left.op === 'answer' &&
     keys(left, ['op', 'question_id']) &&
     typeof left.question_id === 'string' &&
@@ -104,7 +116,7 @@ function readCondition(raw: unknown): SimpleCondition | null {
   )
     return {
       questionId: left.question_id,
-      operator: node.comparison as ConditionOperator,
+      operator: node.comparison,
       value: right.value,
       valueType: right.op,
     }
@@ -166,14 +178,14 @@ export function conditionOperators(
   if (question && 'options' in question)
     options.push({ value: 'selected', label: '选中了' }, { value: 'not_selected', label: '未选中' })
   else if (question)
-    for (const [value, label] of Object.entries(comparisonNames)) {
+    for (const value of comparisonOperators) {
       if (
         (question.type === 'text' || question.type === 'textarea') &&
         value !== 'eq' &&
         value !== 'ne'
       )
         continue
-      options.push({ value: value as ConditionOperator, label })
+      options.push({ value, label: comparisonNames[value] })
     }
   return options
 }

@@ -15,6 +15,11 @@ export class ApiError extends Error {
 export function message(error: unknown, fallback = '操作未完成，请稍后重试。'): string {
   return error instanceof Error ? error.message : fallback
 }
+
+/** 服务端错误响应体；字段均可选，缺失时由调用方回退到通用文案。 */
+interface ApiErrorEnvelope {
+  error?: { code?: string; message?: string; question_id?: string | null }
+}
 export function query(values: Record<string, string | number | null | undefined>): string {
   const search = new URLSearchParams()
   Object.entries(values).forEach(([key, value]) => {
@@ -44,9 +49,9 @@ async function send(
       signal: controller.signal,
     })
     if (!response.ok) {
-      let detail: { code: string; message: string; question_id?: string | null } | undefined
+      let detail: ApiErrorEnvelope['error']
       try {
-        detail = decode<{ error: typeof detail }>(await response.text()).error
+        detail = decode<ApiErrorEnvelope>(await response.text()).error
       } catch {}
       if (detail?.code === 'unauthorized' && path !== '/api/auth/me')
         window.dispatchEvent(new Event('session-expired'))
@@ -73,6 +78,7 @@ async function send(
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const { response, timer } = await send(path, method, body)
   try {
+    // 204 仅用于无响应体的写接口；调用方按 `void` 消费，`T` 不会被读取。
     if (response.status === 204) return undefined as T
     try {
       return decode<T>(await response.text())
@@ -87,7 +93,7 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
     window.clearTimeout(timer)
   }
 }
-export async function download(path: string, filename: string) {
+export async function download(path: string, filename: string): Promise<void> {
   const { response, timer } = await send(path)
   let blob: Blob
   try {

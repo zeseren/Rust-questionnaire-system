@@ -52,19 +52,16 @@ export class FlowInputs {
     const snapshot = this.snapshot()
     if (snapshot.outcome !== 'complete') throw new LogicError('invalid_event', '$.event')
     // 指数形式保证 1e20 等规范化结果在传输时不被 JS 展开成超出 u64 的裸整数。
-    return Object.keys(snapshot.answers)
-      .sort()
-      .map((question_id) => {
-        const value = snapshot.answers[question_id]!
-        return {
-          question_id,
-          value:
-            typeof value === 'number'
-              ? new LosslessNumber(value.toExponential())
-              : Array.isArray(value)
-                ? [...value]
-                : value,
-        }
-      })
+    return Object.entries(snapshot.answers)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([question_id, value]) => ({
+        question_id,
+        value:
+          typeof value === 'number'
+            ? new LosslessNumber(value.toExponential())
+            : Array.isArray(value)
+              ? [...value]
+              : value,
+      }))
   }
 }
