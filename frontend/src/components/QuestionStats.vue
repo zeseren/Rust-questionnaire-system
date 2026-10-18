@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { dateTime, exact } from '../format'
-import type { ExactNumber, QuestionStatistics } from '../types'
+import type { QuestionStatistics } from '../types'
 const props = defineProps<{ question: QuestionStatistics; index: number }>()
 defineEmits<{ receipt: [id: string] }>()
 const limit = ref(20)
@@ -11,11 +11,11 @@ const maximum = computed(() =>
     ? props.question.distribution.reduce((max, item) => Math.max(max, item.count), 1)
     : 1,
 )
-function percent(value: ExactNumber | null) {
-  return value == null ? '暂无数据' : `${(Number(String(value)) * 100).toFixed(1)}%`
+function percent(value: number | null) {
+  return value == null ? '暂无数据' : `${(value * 100).toFixed(1)}%`
 }
-function width(value: ExactNumber | null) {
-  return value == null ? '0%' : `${Math.max(0, Math.min(100, Number(String(value)) * 100))}%`
+function width(value: number | null) {
+  return value == null ? '0%' : `${Math.max(0, Math.min(100, value * 100))}%`
 }
 </script>
 <template>

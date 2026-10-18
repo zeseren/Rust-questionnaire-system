@@ -1,12 +1,10 @@
 //! wasm 引擎的唯一入口：浏览器/Vite 走 wasm-pack 的 bundler 胶水，node --test 走
 //! `_bg.js` + 手动实例化（bundler 产物里的 `.wasm` 静态导入只有打包器能解析）。
 //!
-//! 公开面与删除前的 TS 实现同名同签名：入参用 `json.ts` 的无损编解码压成 JSON
+//! 公开面与删除前的 TS 实现同名同签名：入参用 `json.ts` 的原生编解码压成 JSON
 //! 字符串传过边界，返回的信封 `{"ok":…} | {"error":…}` 再还原成领域对象或抛出既有
-//! 的错误类。数字精度由 `lossless-json` 保证——传输原文不丢，只有领域层已经规范化
-//! 为 f64 的求值结果才还原成 TS 契约里的 `number`。
-import { isLosslessNumber } from 'lossless-json'
-import { decode, encode, encodeAnswers } from '../json.ts'
+//! 的错误类。数字统一为原生 `number`（有限双精度浮点数）。
+import { decode, encode } from '../json.ts'
 import { LogicError, LogicTextError } from '../logic.ts'
 import type { LogicErrorCode } from '../logic.ts'
 import type {
@@ -118,32 +116,6 @@ function reviveThrown(reason: unknown): never {
   throw reason instanceof Error ? reason : new Error(String(reason))
 }
 
-/** 求值结果里的数字已由领域层规范化为有限 f64，还原成 TS 契约的 `number`。 */
-function plainNumbers(value: unknown): unknown {
-  if (isLosslessNumber(value)) return Number(value.toString())
-  if (Array.isArray(value)) {
-    // `Array.isArray` 会把 `unknown` 宽化成元素类型未受检的数组；先落到 `readonly unknown[]` 阻断污染。
-    const items: readonly unknown[] = value
-    return items.map((item) => plainNumbers(item))
-  }
-  if (typeof value === 'object' && value !== null) {
-    // 已排除数组与 LosslessNumber；按 WASM 信封的 JSON 对象契约断言为字符串键记录。
-    const record = value as Record<string, unknown>
-    return Object.fromEntries(
-      Object.entries(record).map(([key, item]) => [key, plainNumbers(item)]),
-    )
-  }
-  return value
-}
-
-/**
- * 信封还原的单点断言：WASM 成功信封已保证 `ok` 的结构与 `T` 匹配，
- * 且求值路径的数字已规范化为有限 f64；此后全文件不再出现裸 `as T` 之外的还原。
- */
-function unwrapPlain<T>(text: string): T {
-  return plainNumbers(unwrap<unknown>(text)) as T
-}
-
 export interface CompiledExpression {
   readonly valueType: LogicValueType
   readonly dependencies: readonly string[]
@@ -184,8 +156,8 @@ export function compileDocumentLogic(
   return {
     variableOrder: compiled.variable_order,
     evaluate: (answers) =>
-      unwrapPlain<DocumentLogicValues>(
-        engine.evaluate_document_logic(logicJson, questionsJson, encodeAnswers(answers)),
+      unwrap<DocumentLogicValues>(
+        engine.evaluate_document_logic(logicJson, questionsJson, encode(answers)),
       ),
   }
 }
@@ -204,9 +176,7 @@ export function compileExpression(
     valueType: compiled.value_type,
     dependencies: compiled.dependencies,
     evaluate: (answers) =>
-      unwrapPlain<LogicValue>(
-        engine.evaluate_expression(rawJson, questionsJson, encodeAnswers(answers)),
-      ),
+      unwrap<LogicValue>(engine.evaluate_expression(rawJson, questionsJson, encode(answers))),
   }
 }
 
@@ -231,16 +201,16 @@ export class FlowSession {
 
   /** 返回独立快照，改动快照不会影响会话。 */
   snapshot(): FlowSnapshot {
-    return unwrapPlain<FlowSnapshot>(this.#session.snapshot())
+    return unwrap<FlowSnapshot>(this.#session.snapshot())
   }
 
   /** 事件失败不改状态。 */
   dispatch(event: FlowEvent): void {
-    unwrap<null>(this.#session.dispatch(encodeAnswers(event)))
+    unwrap<null>(this.#session.dispatch(encode(event)))
   }
 
   /** 从最终输入重建路径，不读取或修改当前会话的历史与输入。 */
   evaluateAnswers(answers: readonly { question_id: string; value: unknown }[]): EvaluatedResponse {
-    return unwrapPlain<EvaluatedResponse>(this.#session.evaluate_answers(encodeAnswers(answers)))
+    return unwrap<EvaluatedResponse>(this.#session.evaluate_answers(encode(answers)))
   }
 }

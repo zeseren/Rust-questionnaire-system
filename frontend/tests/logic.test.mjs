@@ -2,7 +2,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { LosslessNumber, parse } from 'lossless-json'
 import { LogicError } from '../src/logic.ts'
 import { compileExpression } from '../src/wasm/index.ts'
 
@@ -15,39 +14,13 @@ test('两端共享样例保持编译与求值语义一致', () => {
     let actual
     try {
       const compiled = compileExpression(fixture.program, fixtures.questions)
-      actual = { value: compiled.evaluate(parse(fixture.answers_json)) }
+      actual = { value: compiled.evaluate(JSON.parse(fixture.answers_json)) }
     } catch (error) {
       assert.ok(error instanceof LogicError, `必须返回领域错误：${fixture.name}`)
       actual = { error: { code: error.code, path: error.path, question_id: error.question_id } }
     }
     assert.deepEqual(actual, fixture.expected, `语义样例：${fixture.name}`)
   }
-})
-
-test('原生大整数求值保留数值而原始失真整数仍被拒绝', () => {
-  const question_id = '00000000-0000-4000-8000-000000000001'
-  const questions = [
-    {
-      id: question_id,
-      title: '数字',
-      required: false,
-      type: 'number',
-      integer: false,
-      min: null,
-      max: null,
-    },
-  ]
-  const compiled = compileExpression(
-    { dsl_version: 1, semantics_version: 1, expression: { op: 'answer', question_id } },
-    questions,
-  )
-  for (const value of [2 ** 63, -(2 ** 63)])
-    assert.deepEqual(compiled.evaluate({ [question_id]: value }), { type: 'number', value })
-  assert.throws(
-    () => compiled.evaluate({ [question_id]: new LosslessNumber('9223372036854776000') }),
-    { code: 'invalid_answer', question_id },
-    '原生数字的传输修复不能放宽原始整数文本的精度检查',
-  )
 })
 
 test('深度和节点上限在编译之前拦截且允许边界', () => {

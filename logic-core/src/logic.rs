@@ -10,8 +10,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::domain::{
-    MAX_CHOICES, MAX_NUMBER_JSON_BYTES, MAX_QUESTIONS, MAX_TEXT_LENGTH, Question, QuestionKind,
-    finite_number,
+    MAX_CHOICES, MAX_QUESTIONS, MAX_TEXT_LENGTH, Question, QuestionKind, finite_number,
 };
 
 const MAX_NODES: usize = 256;
@@ -524,7 +523,7 @@ pub(crate) fn reference(raw: &str, path: &str) -> Result<Uuid, LogicError> {
 
 fn numeric(raw: &str) -> Option<f64> {
     // 数字常量只能是无空白的 JSON 数字；借用既有精度规则，不改变答案契约。
-    if raw.trim() != raw || raw.len() > MAX_NUMBER_JSON_BYTES {
+    if raw.trim() != raw {
         return None;
     }
     let value: Value = serde_json::from_str(raw).ok()?;

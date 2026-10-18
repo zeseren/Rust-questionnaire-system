@@ -1,8 +1,6 @@
-//! DTO 与后端字段一一对应，数字答案保留原始精度。
-import type { LosslessNumber } from 'lossless-json'
+//! DTO 与后端字段一一对应，数字统一使用原生 number（有限双精度浮点数）。
 import type { LogicErrorCode } from './logic'
 
-export type ExactNumber = number | LosslessNumber
 export type Status = 'unpublished' | 'collecting' | 'closed' | 'archived'
 export type FillingMode = 'anonymous' | 'login_once'
 export interface Choice {
@@ -89,7 +87,7 @@ export interface PublicSurvey {
     public_link_notice: string
   }
 }
-export type AnswerValue = string | string[] | ExactNumber | null
+export type AnswerValue = string | string[] | number | null
 export interface Answer {
   question_id: string
   value: AnswerValue
@@ -123,7 +121,7 @@ export interface OptionFrequency {
   option_id: string
   label: string
   count: number
-  proportion: ExactNumber | null
+  proportion: number | null
 }
 export type QuestionStatistics = {
   question_id: string
@@ -139,12 +137,12 @@ export type QuestionStatistics = {
       proportion_note?: string
     }
   | { type: 'text' | 'textarea'; answers: (ResponseSummary & { value: string })[] }
-  | { type: 'number'; mean: ExactNumber | null; min: ExactNumber | null; max: ExactNumber | null }
+  | { type: 'number'; mean: number | null; min: number | null; max: number | null }
   | {
       type: 'rating'
       min: number
       max: number
-      mean: ExactNumber | null
+      mean: number | null
       distribution: { value: number; count: number }[]
     }
 )

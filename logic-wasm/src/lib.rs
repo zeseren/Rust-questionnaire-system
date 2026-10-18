@@ -5,9 +5,7 @@
 //!
 //! - 所有导出的参数与返回值均为 String：入参是 JSON 文本，出参是信封
 //!   `{"ok":…}` 或 `{"error":{code,path,question_id,line?,column?}}`。
-//! - 数字精度经原文无损穿透：本 crate 与 `questionnaire-logic` 同用
-//!   `serde_json` 的 `arbitrary_precision` 特性（workspace 锁定同一版本），
-//!   JS 侧配合 lossless-json 即可保留数字原文。
+//! - 数字按标准有限 `f64` 语义穿透 JSON 信封，与 JS 原生 `number` 直接对应。
 //! - 错误对象由 serde 序列化 `LogicError` / `LogicTextError` 得到，不手拼 JSON，
 //!   字段与核心错误结构一一对应、无信息丢失。
 //! - 信封本身也由 `serde_json::to_string` 产生；只有「入参不是合法 JSON / 不是

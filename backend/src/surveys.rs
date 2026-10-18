@@ -372,10 +372,7 @@ async fn preview(
 ) -> AppResult<Json<SurveyPreview>> {
     let record = repository::owned_survey(&state.db, user.id, id).await?;
     let document: Document = serde_json::from_value(record.draft)?;
-    let validation_error = document
-        .validate_publish()
-        .and_then(|()| document.ensure_submission_budget())
-        .err();
+    let validation_error = document.validate_publish().err();
     Ok(Json(SurveyPreview {
         survey_id: record.id,
         revision: record.revision,
@@ -445,7 +442,7 @@ async fn delete(
 /// 首次发布前须设置填写模式且截止时间未到期。重新发布只切换当前版本；
 /// 关闭状态不会被发布操作恢复，历史版本和历史答卷始终保留。
 /// 草稿未变且内容与当前版本完全一致时按幂等重放返回现有版本，不新增版本号；
-/// 重放判定先于当前内容上限与提交预算校验，历史版本未改动内容仍可重复发布。
+/// 重放判定先于当前内容上限校验，历史版本未改动内容仍可重复发布。
 #[utoipa::path(
     post, path = "/api/surveys/{id}/publish", tag = "问卷管理", request_body = PublishSurvey,
     security(("cookieAuth" = [])), params(("id" = Uuid, Path, description = "本人问卷 ID")),
@@ -845,7 +842,6 @@ async fn publish_survey(
     // 先按当前规则校验这版内容，再判断是否为幂等重放。
     let document = Document::deserialize(&record.draft)?;
     document.validate_publish()?;
-    document.ensure_submission_budget()?;
     if record.mode.is_none() {
         return Err(AppError::conflict("mode_required", "请先设置填写模式"));
     }

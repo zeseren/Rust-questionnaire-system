@@ -193,9 +193,6 @@ importers:
       element-plus:
         specifier: 2.14.7
         version: 2.14.7(vue@3.5.42(typescript@5.9.3))
-      lossless-json:
-        specifier: 4.3.0
-        version: 4.3.0
       pinia:
         specifier: 3.0.4
         version: 3.0.4(typescript@5.9.3)(vue@3.5.42(typescript@5.9.3))
@@ -647,9 +644,6 @@ packages:
 
   lodash@4.18.1:
     resolution: {integrity: sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==}
-
-  lossless-json@4.3.0:
-    resolution: {integrity: sha512-ToxOC+SsduRmdSuoLZLYAr5zy1Qu7l5XhmPWM3zefCZ5IcrzW/h108qbJUKfOlDlhvhjUK84+8PSVX0kxnit0g==}
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
@@ -1204,8 +1198,6 @@ snapshots:
       lodash-es: 4.18.1
 
   lodash@4.18.1: {}
-
-  lossless-json@4.3.0: {}
 
   magic-string@0.30.21:
     dependencies:

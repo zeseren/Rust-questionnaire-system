@@ -3,7 +3,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { onBeforeRouteLeave, RouterLink, useRoute } from 'vue-router'
 import { api, ApiError, message } from '../api'
-import { copyPayload } from '../json'
 import { buildAnswers, isAnswered, type Inputs } from '../answers'
 import { dateTime, shareLink } from '../format'
 import { useAuth } from '../stores'
@@ -92,7 +91,10 @@ async function submit(flowAnswers?: Answer[]) {
     pending.value = {
       version_id: survey.value.version_id,
       idempotency_key: crypto.randomUUID(),
-      answers: copyPayload(result.answers),
+      answers: result.answers.map((answer) => ({
+        ...answer,
+        value: Array.isArray(answer.value) ? [...answer.value] : answer.value,
+      })),
     }
   }
   busy.value = true

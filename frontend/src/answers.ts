@@ -1,5 +1,4 @@
-//! 数字输入按原始 JSON 数字发送，最终精度与资格校验由服务器执行。
-import { LosslessNumber } from 'lossless-json'
+//! 数字输入按原生数字发送，最终精度与资格校验由服务器执行。
 import type { Answer, SurveyDocument } from './types.ts'
 import { numberError, numberInput } from './numbers.ts'
 import { isBlank, validText } from './value-contract.ts'
@@ -82,7 +81,7 @@ export function buildAnswers(document: SurveyDocument, values: Inputs) {
           (question.max != null && numeric > question.max)
         )
           fail('数值不在允许范围内。')
-        else answers.push({ question_id: question.id, value: new LosslessNumber(raw) })
+        else answers.push({ question_id: question.id, value: numeric })
         break
       }
       case 'rating': {

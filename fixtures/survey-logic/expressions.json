@@ -574,13 +574,13 @@
       }
     },
     {
-      "name": "拒绝失真裸整数常量",
+      "name": "拒绝超出有限浮点数范围的数字常量",
       "program": {
         "dsl_version": 1,
         "semantics_version": 1,
         "expression": {
           "op": "number",
-          "value": "9007199254740993"
+          "value": "1e400"
         }
       },
       "answers_json": "{}",
@@ -589,78 +589,6 @@
           "code": "invalid_number",
           "path": "$.expression",
           "question_id": null
-        }
-      }
-    },
-    {
-      "name": "保留可精确表示的大整数常量",
-      "program": {
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "expression": {
-          "op": "compare",
-          "comparison": "eq",
-          "left": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000004"
-          },
-          "right": {
-            "op": "number",
-            "value": "9007199254740994"
-          }
-        }
-      },
-      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":9007199254740994}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": true
-        }
-      }
-    },
-    {
-      "name": "拒绝整数存储范围之外的常量",
-      "program": {
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "expression": {
-          "op": "number",
-          "value": "18446744073709551616"
-        }
-      },
-      "answers_json": "{}",
-      "expected": {
-        "error": {
-          "code": "invalid_number",
-          "path": "$.expression",
-          "question_id": null
-        }
-      }
-    },
-    {
-      "name": "失真答案不能参与规则",
-      "program": {
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "expression": {
-          "op": "compare",
-          "comparison": "eq",
-          "left": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000004"
-          },
-          "right": {
-            "op": "number",
-            "value": "9007199254740992"
-          }
-        }
-      },
-      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":9007199254740993}",
-      "expected": {
-        "error": {
-          "code": "invalid_answer",
-          "path": "$.answers.00000000-0000-4000-8000-000000000004",
-          "question_id": "00000000-0000-4000-8000-000000000004"
         }
       }
     },
