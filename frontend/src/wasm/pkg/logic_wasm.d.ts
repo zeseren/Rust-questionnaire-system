@@ -21,30 +21,30 @@
  * （“function not implemented on non-wasm32 targets”），纯函数无此限制。
  */
 export class FlowSession {
-    free(): void;
-    [Symbol.dispose](): void;
-    /**
-     * 应用一个流程事件；事件 JSON 反序列化失败或流程拒绝时返回 error 信封。
-     */
-    dispatch(event_json: string): string;
-    /**
-     * 从最终答案重建整份答卷：不读取也不修改会话当前的历史与输入。
-     *
-     * 复用核心 `FlowEvaluator::evaluate_answers`（与提交路径同一段代码），因此
-     * 到达 complete 只代表可提交，不代表已经保存。
-     *
-     * # 错误
-     * 未知/重复题目、不适用答案、校验失败、未决条件或筛选结束时返回 error 信封。
-     */
-    evaluate_answers(answers_json: string): string;
-    /**
-     * 绑定文档并创建空会话；失败时返回 JSON 错误字符串（非信封，见计划约定）。
-     */
-    constructor(document_json: string);
-    /**
-     * 只读快照，序列化为 `{"ok":snapshot}`。
-     */
-    snapshot(): string;
+  free(): void
+  [Symbol.dispose](): void
+  /**
+   * 应用一个流程事件；事件 JSON 反序列化失败或流程拒绝时返回 error 信封。
+   */
+  dispatch(event_json: string): string
+  /**
+   * 从最终答案重建整份答卷：不读取也不修改会话当前的历史与输入。
+   *
+   * 复用核心 `FlowEvaluator::evaluate_answers`（与提交路径同一段代码），因此
+   * 到达 complete 只代表可提交，不代表已经保存。
+   *
+   * # 错误
+   * 未知/重复题目、不适用答案、校验失败、未决条件或筛选结束时返回 error 信封。
+   */
+  evaluate_answers(answers_json: string): string
+  /**
+   * 绑定文档并创建空会话；失败时返回 JSON 错误字符串（非信封，见计划约定）。
+   */
+  constructor(document_json: string)
+  /**
+   * 只读快照，序列化为 `{"ok":snapshot}`。
+   */
+  snapshot(): string
 }
 
 /**
@@ -53,12 +53,12 @@ export class FlowSession {
  * 成功信封同时返回 `variable_order`：计算变量的拓扑顺序，供前端在编译期展示
  * 与断言使用（`evaluate_document_logic` 只负责按答案求值）。
  */
-export function compile_document_logic(logic_json: string, questions_json: string): string;
+export function compile_document_logic(logic_json: string, questions_json: string): string
 
 /**
  * 编译单个表达式包：`{"value_type":…,"dependencies":[…]}`，供表达式编辑器提示。
  */
-export function compile_expression(raw_json: string, questions_json: string): string;
+export function compile_expression(raw_json: string, questions_json: string): string
 
 /**
  * 整份规则的求值：编译后按答案上下文计算全部计算变量与规则结果。
@@ -66,7 +66,11 @@ export function compile_expression(raw_json: string, questions_json: string): st
  * # 错误
  * 编译失败或求值中出现类型、引用、除零、溢出错误时返回 error 信封。
  */
-export function evaluate_document_logic(logic_json: string, questions_json: string, answers_json: string): string;
+export function evaluate_document_logic(
+  logic_json: string,
+  questions_json: string,
+  answers_json: string,
+): string
 
 /**
  * 单个表达式求值：入参与 `compile_expression` 一致，另收已按问卷规则规范化的答案上下文。
@@ -77,19 +81,23 @@ export function evaluate_document_logic(logic_json: string, questions_json: stri
  * # 错误
  * 入参非法、编译失败或引用答案的类型/数值不合法时返回 error 信封。
  */
-export function evaluate_expression(raw_json: string, questions_json: string, answers_json: string): string;
+export function evaluate_expression(
+  raw_json: string,
+  questions_json: string,
+  answers_json: string,
+): string
 
 /**
  * 把规则 JSON 格式化回文本 DSL。
  */
-export function format_logic_text(logic_json: string, questions_json: string): string;
+export function format_logic_text(logic_json: string, questions_json: string): string
 
 /**
  * 解析文本 DSL；失败信封额外携带 `line` / `column`。
  */
-export function parse_logic_text(source: string, questions_json: string): string;
+export function parse_logic_text(source: string, questions_json: string): string
 
 /**
  * 重写整份问卷的身份（复制问卷/规则时使用）。
  */
-export function renew_document_ids(document_json: string): string;
+export function renew_document_ids(document_json: string): string
