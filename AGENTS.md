@@ -26,7 +26,7 @@
 - 全局只有一份 `AppState { db: DatabaseConnection, config: Arc<Config>, limits: Arc<Limits> }`（`lib.rs`），通过 `.with_state(state)` 挂载一次。
 - 各业务模块暴露 `pub(crate) fn router() -> OpenApiRouter<AppState>`，用 `utoipa_axum::routes!` 从 handler 的 `#[utoipa::path]` 同时登记路由与文档，不另写 `ApiDoc` 列表。`lib.rs::router()` 合并五个业务模块与 `/health`，再用 `split_for_parts()` 取出路由和文档；文档只在组装时生成，`/api/openapi.json` 返回其副本。随后配置 404/405、`DefaultBodyLimit::max(domain::MAX_SUBMISSION_BYTES)`、`security::guard` 与共享状态；不提供 Swagger UI。结构不同的 DTO 使用不同 Schema 名称，尤其是发布者的 `SurveyPage` 与治理的 `AdminSurveyPage`。
 - handler 保持很薄：先抽取（`State` → `AuthUser` → `HeaderMap` → `ApiPath`/`ApiQuery`/`ApiJson`），再调用接收 `&AppState` 与所有者 id 的业务函数，返回 `AppResult<Json<T>>` 或 `AppResult<(StatusCode, Json<T>)>`。handler 与它的业务函数写在同一个文件里；只有跨模块的数据访问规则放进 `repository.rs`。
-- `logic-core/src/domain.rs` 是纯领域代码（无 HTTP、无 DB）；`backend/src/lib.rs` 用 `pub use questionnaire_logic::domain;` 再导出，因此业务代码与测试里的 `questionnaire_api::domain::*` 路径不变。它包含 `Document`、`Question`、`QuestionKind`、`Answer`、`validate_draft`、`validate_publish`、`validate_answers`、`renew_ids`、发布期提交预算（`estimated_submission_bytes` / `ensure_submission_budget`，与 HTTP body limit 共用 `MAX_SUBMISSION_BYTES`）以及数字规范化。`ValidationError { question_id: Option<Uuid>, message }` 以 HTTP 422 暴露。
+- `logic-core/src/domain.rs` 是纯领域代码（无 HTTP、无 DB）；`backend/src/lib.rs` 用 `pub use questionnaire_logic::domain;` 再导出，因此业务代码与测试里的 `questionnaire_api::domain::*` 路径不变。它包含 `Document`、`Question`、`QuestionKind`、`Answer`、`validate_draft`、`validate_publish`、`validate_answers`、`renew_ids` 以及数字规范化。`ValidationError { question_id: Option<Uuid>, message }` 以 HTTP 422 暴露。
 - 持久化：SeaORM entity 位于 `entities.rs`（表 `users`、`sessions`、`surveys`、`versions`、`responses`、`audits`），共享的归属查询与锁助手位于 `repository.rs`。写路径 `state.db.begin()` 后先锁发布者 `user`（Share / NoKeyUpdate），**再**锁 `survey`（Update），改完 `tx.commit()`。只读的列表与统计路径使用 `RepeatableRead` + `ReadOnly`。
 - `admin.rs`：治理问卷列表与用户/审计列表都用 `RepeatableRead` + `ReadOnly` 只读快照。治理问卷列表通过 JSONB 投影只取 `title`，并复用 `SurveyStatus` 与 `effective_status`，不逐行反序列化整份 `Document`。
 - 建表：`backend/src/schema.sql` 是唯一的 DDL 来源——原生 PostgreSQL，用 `include_str!` 嵌入并由 `migration.rs` 里那一个迁移执行。改表结构只改这里，不要再写第二份。
@@ -36,7 +36,7 @@
 
 ### 请求追踪示例
 
-`POST /api/surveys/{id}/publish`：`surveys::publish` → `publish_survey(&state, owner_id, id)` → `repository::lock_owned_survey`（user Share → survey Update，并校验归属）→ `repository::expire_survey` → `ensure_editable` + `ensure_revision`（草稿修订过期返回 409）→ `Document::deserialize` → `document.validate_publish()` + `ensure_submission_budget()`（最坏情况填充超过 `MAX_SUBMISSION_BYTES` 返回 422）→ `mode` 非空检查（未设置返回 409）→ 幂等重放判断：草稿内容与 `current_version_id` 指向的版本完全一致时返回 `200 OK` 和当前版本；否则插入 `versions` 行（`number = max + 1`）并更新 `surveys.current_version_id` → `tx.commit()` → `201 Created`。
+`POST /api/surveys/{id}/publish`：`surveys::publish` → `publish_survey(&state, owner_id, id)` → `repository::lock_owned_survey`（user Share → survey Update，并校验归属）→ `repository::expire_survey` → `ensure_editable` + `ensure_revision`（草稿修订过期返回 409）→ `Document::deserialize` → `document.validate_publish()` → `mode` 非空检查（未设置返回 409）→ 幂等重放判断：草稿内容与 `current_version_id` 指向的版本完全一致时返回 `200 OK` 和当前版本；否则插入 `versions` 行（`number = max + 1`）并更新 `surveys.current_version_id` → `tx.commit()` → `201 Created`。
 
 校验在幂等重放判断**之前**执行：无论这版内容是否与当前版本相同，都必须先满足当前发布规则。
 
@@ -136,7 +136,7 @@ Set-Location frontend; pnpm run wasm:build   # 改动 logic-core/ 或 logic-wasm
 - **并发**：只有一种锁序——先发布者 user，再 survey——集中在 `repository.rs`（`lock_user`、`lock_survey`、`lock_owned_survey`）。填写资格检查走 `ensure_collecting` / `expire_survey`；不要发明第二种锁序，也不要在事务外重复检查。
 - **密钥**：密码用 Argon2id（`Argon2::default()`，每次哈希独立盐）并在 `spawn_blocking` 内执行；session token 与提交幂等键用 SHA-256 十六进制（`hash_secret`）。携带密钥的结构体绝不派生 `Debug`。
 - **ID 与时间**：新 id 用 `Uuid::new_v4()`；时间用 `chrono::Utc::now()` / `DateTime<Utc>`；API 时间戳是 RFC3339，时间范围是半开区间 `[from, to)`。
-- **数字**：`serde_json` 特意开启 `arbitrary_precision`（保证 JSONB 数字精度），不要删掉这个 feature。
+- **数字**：前后端统一使用标准 JSON 数字与有限 `f64`（JS `number`）；`1` 与 `1.0`、正零与负零视为同一答案，负零归一为 `0.0`。
 - **响应头**：新增响应头时要保留现有的 `no-store` / `nosniff` 行为。
 
 ### 边界与反过度防御原则（禁止损伤性能与引入冗余）
@@ -203,12 +203,12 @@ Set-Location frontend; pnpm run wasm:build   # 改动 logic-core/ 或 logic-wasm
 
 - 先按 [README 第 7 节](README.md#7-开发检查)选择与改动对应的最小检查。没有统一提交门禁；同一份代码已有的通过结果直接复用，commit、改分支或整理文档不触发重跑。纯前端不跑 Rust，纯后端不跑前端；只有共享契约变更才按影响验证两端。
 - 仅调整测试时运行受影响的测试即可，不附带生产构建、Clippy 或服务联调。前端构建已包含类型检查，不再单独重复 typecheck；格式化只处理改动文件。
-- 使用内置 `cargo test`，四个独立目标：`domain` 覆盖题型、身份、规范化、文本/数字边界与提交预算；`logic` 覆盖表达式及文档依赖；`flow` 覆盖拓扑、改答清理、最终提交及配置身份；`logic_text` 覆盖文本解析。另有 `logic-wasm/tests/smoke.rs` 在原生目标覆盖同一 JSON 信封边界（随 `--workspace` 一起执行）。前端以 Node 内置运行器执行 `frontend/tests/`。具体通过数量和真实服务验证记录在 `docs/requirements-analysis.md`，不把历史数量当作当前测试清单。
-- 文本答案上限：单行 `text` 最多 200、多行 `textarea` 最多 1000 个 Unicode 标量值；问卷标题最多 200，说明与收集目的各最多 5000；整份提交预算与 HTTP body limit 共用 `MAX_SUBMISSION_BYTES`（1 MiB）。
+- 使用内置 `cargo test`，四个独立目标：`domain` 覆盖题型、身份、规范化与文本/数字边界；`logic` 覆盖表达式及文档依赖；`flow` 覆盖拓扑、改答清理、最终提交及配置身份；`logic_text` 覆盖文本解析。另有 `logic-wasm/tests/smoke.rs` 在原生目标覆盖同一 JSON 信封边界（随 `--workspace` 一起执行）。前端以 Node 内置运行器执行 `frontend/tests/`。具体通过数量和真实服务验证记录在 `docs/requirements-analysis.md`，不把历史数量当作当前测试清单。
+- 文本答案上限：单行 `text` 最多 200、多行 `textarea` 最多 1000 个 Unicode 标量值；问卷标题最多 200，说明与收集目的各最多 5000；请求体上限为 `MAX_SUBMISSION_BYTES`（1 MiB）。
 - 测试围绕当前业务契约与已确认缺陷；已有覆盖足够时不新增，不按文件、函数或覆盖率配额补测试，不锁定私有结构、元数据排列等实现细节。相同行为优先保留一处回归；共享语义样例仍由后端测试与前端（经 wasm 引擎）两侧各读一次，用于确认边界两端的语义一致。新测试名、断言说明与样例说明使用中文，Rust 测试放 `backend/tests/`（wasm 边界放 `logic-wasm/tests/`）；不新增历史答卷兼容专项测试。
 - 文本空白统一按 Unicode `White_Space`（Rust `str::trim`）：U+0085 是空白，U+FEFF 不是；非空白文本保留原文。配置的题目、选项、变量及流程身份与引用只接受非零、小写连字符 UUID；答案中的选项值仍由规范化入口处理。
 - 提交答案和改答事件的 `question_id` 同样必须使用规范题目身份；不能把选项答案值的宽松 UUID 解析复用到身份字段。
 - `cargo test --locked --workspace` **不需要数据库，也不需要环境变量**。常用过滤：`cargo test -p questionnaire-api --test domain <名称子串>`。
-- 风格：用现有助手构造输入（`id`、`question`、`choices`、`document`、`answer`）；断言看 `Result` 与 `question_id`，不断言消息措辞；数字精度重要时用 `serde_json::from_str` 解析原始 JSON 字符串。
+- 风格：用现有助手构造输入（`id`、`question`、`choices`、`document`、`answer`）；断言看 `Result` 与 `question_id`，不断言消息措辞。
 - 自动化测试保持在纯领域逻辑与必要输入适配范围。领域行为变更优先复用相关测试，只为未覆盖的实际风险补回归。HTTP/auth/SQL 行为变更只核对受影响的真实服务路径，不增设 ORM Mock 或无数据库的接线测试。
 - 没有覆盖率工具、基准测试或 mock 框架，任何成员清单里也没有 `[dev-dependencies]` 段；要加测试专用 crate 就得先建这个段。

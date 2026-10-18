@@ -45,7 +45,7 @@
 | `renewDocumentIds` | 复制问卷时重写全部身份 |
 | `FlowSession` | 页面流程会话：`dispatch`（`change` / `next` / `previous`）、`snapshot`、`evaluateAnswers` |
 
-Vite 走 wasm-pack 的 bundler 胶水，`node --test` 走 `logic_wasm_bg.js` + `readFileSync` 手动实例化，两条路径共用同一份入库产物 `frontend/src/wasm/pkg/`。数字经 `frontend/src/json.ts` 的无损编解码与 `encodeAnswers` 传输，保留最短词法原文。改动 `logic-core/` 或 `logic-wasm/` 后在 `frontend/` 运行 `pnpm run wasm:build` 重建产物；只改前端时无需 Rust 工具链。
+Vite 走 wasm-pack 的 bundler 胶水，`node --test` 走 `logic_wasm_bg.js` + `readFileSync` 手动实例化，两条路径共用同一份入库产物 `frontend/src/wasm/pkg/`。数字经 `frontend/src/json.ts` 的 `encode` / `decode` 传输，统一为有限 `f64`。改动 `logic-core/` 或 `logic-wasm/` 后在 `frontend/` 运行 `pnpm run wasm:build` 重建产物；只改前端时无需 Rust 工具链。
 
 ### 双端共读回归样例
 
@@ -131,7 +131,7 @@ Vite 走 wasm-pack 的 bundler 胶水，`node --test` 走 `logic_wasm_bg.js` + `
 
 ### 数值与文本
 
-- 数字沿用现有答案的有限 IEEE 754 binary64 语义，不承诺任意精度小数。数字常量以 JSON 字符串保留原文，按裸整数精度与 i64/u64 边界规则解析，避免浏览器先行舍入；小数与指数按 f64 规则处理，正负零等价。
+- 数字沿用现有答案的有限 IEEE 754 binary64 语义，不承诺任意精度小数。数字常量按有限 `f64` 解析，正负零等价（负零归一为 `0.0`）；超出双精度精确整数范围的数值按 `f64` 舍入。
 - 数字常量原文最多 64 字节（含正指数的补号），不能带首尾空白。
 - 比较是对规范化数值的精确比较，不隐式加容差；需要近似时由出题人自己写区间。
 - 算术每一步都检查有限性，除零报错。
