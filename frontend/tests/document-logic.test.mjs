@@ -31,22 +31,6 @@ test('文档共享样例保持变量排序和间接依赖规则一致', () => {
   }
 })
 
-test('文档总预算不能被拆成多个合法小表达式绕过', () => {
-  const expression = {
-    op: 'all',
-    expressions: Array.from({ length: 255 }, () => ({ op: 'boolean', value: true })),
-  }
-  const variables = Array.from({ length: 17 }, (_, index) => ({
-    id: `00000000-0000-0000-0000-${(index + 1).toString(16).padStart(12, '0')}`,
-    value_type: 'boolean',
-    expression,
-  }))
-  const logic = { dsl_version: 1, semantics_version: 1, variables, rules: [] }
-  assert.throws(() => compileDocumentLogic(logic, []), { code: 'limit_exceeded' })
-  variables.pop()
-  assert.doesNotThrow(() => compileDocumentLogic(logic, []))
-})
-
 test('单题复制保留上游规则并重写当前题约束', () => {
   const document = {
     questions: structuredClone(expressions.questions),

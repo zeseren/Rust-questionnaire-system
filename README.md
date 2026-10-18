@@ -213,7 +213,7 @@ try {
 
 ## 7. 开发检查
 
-检查按本次改动选择，没有统一的提交门禁：同一份代码已经通过的检查直接复用，commit、改分支和纯文档整理不触发重跑。测试保护当前业务契约与已确认缺陷，不按文件或函数数量补覆盖，纯前端改动不跑 Rust，纯后端改动不跑前端。
+检查按改动范围执行对应端的必跑门禁：同一份代码已经通过的门禁结果直接复用，commit、改分支和纯文档整理不触发重跑。测试保护当前业务契约与已确认缺陷，不按文件或函数数量补覆盖，纯前端改动不跑 Rust，纯后端改动不跑前端。
 
 | 改动范围 | 对应检查 |
 |---|---|
@@ -226,7 +226,7 @@ try {
 | 共享 DSL 契约 | 运行受影响的两端测试，避免预览与服务端语义分离 |
 | wasm 产物重建（`logic-core/` 或 `logic-wasm/`） | 在 `frontend/` 运行 `pnpm run wasm:build` 重建并同步产物（需 Rust 工具链 + `wasm32-unknown-unknown` target + wasm-pack 0.15），再跑受影响的两端测试；只改前端时无需 Rust，直接用 `frontend/src/wasm/pkg/` 里入库的产物 |
 
-只有影响确实跨越多个模块、无法合理缩小时，才使用所属端的完整测试：Rust 为 `cargo test --locked --workspace`，前端为 `pnpm run test:regression`。仅修改测试时不附带生产构建、Clippy 或服务联调。Rust 检查使用 stable + LLVM；静态检查按需运行 `cargo clippy --locked --workspace --all-targets -- -D warnings`，格式化只处理改动文件，例如 `rustfmt --edition 2024 backend/tests/domain.rs`，或在 `frontend/` 使用 `pnpm exec prettier --write tests/editor.test.mjs`。
+影响跨越多个模块时运行所属端的完整测试：Rust 为 `cargo test --locked --workspace`，前端为 `pnpm run test:regression`。修改 Rust 代码时必须运行 `cargo clippy --locked --workspace --all-targets -- -D warnings` 并对改动文件执行 `rustfmt --edition 2024`；修改前端代码时必须运行 `pnpm run typecheck`（或 `pnpm run build`）并对改动文件执行 `pnpm exec prettier --write`。
 
 Rust 的四个测试目标位于 `backend/tests/`：`domain` 约束题型与规范化，`logic` 约束表达式与变量依赖，`flow` 约束路径、身份复制和最终提交，`logic_text` 约束文本解析。它们都不启动数据库，也不需要环境变量。
 

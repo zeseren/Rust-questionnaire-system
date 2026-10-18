@@ -69,7 +69,7 @@
 | `security.rs` | CSRF、限流与安全响应头中间件 |
 | `auth.rs` | `AuthUser` 抽取器、Argon2、会话与 Cookie 装配 |
 | `logic-core/src/domain.rs` | `questionnaire-logic` 的问卷文档模型与校验；后端经 `backend/src/lib.rs` 的再导出接入 |
-| `logic-core/src/identity.rs` | 配置与作答题目 UUID 的严格反序列化；与答案值的规范化分开 |
+| `logic-core/src/identity.rs` | 配置、作答及选项身份的严格反序列化：只接受非零、小写连字符 UUID |
 | `logic-core/src/logic.rs` | 类型化表达式编译与求值、三值逻辑、数值及资源预算 |
 | `logic-core/src/logic_document.rs` | 变量依赖排序、题目规则、身份引用重写 |
 | `logic-core/src/flow.rs` | 前向流程编译、会话、改答清理与提交路径重建 |
@@ -116,7 +116,7 @@ Set-Location frontend; pnpm run wasm:build   # 改动 logic-core/ 或 logic-wasm
 | 默认开发构建与运行 | `cargo build\|run --locked -p questionnaire-api` | stable + LLVM；自己的代码 `opt-level = 0`、依赖 `opt-level = 3`，保留 debuginfo。需要断点或想评估依赖运行速度时用它。 |
 | 快速逻辑迭代 | `cargo +nightly cranelift -p questionnaire-api` | 别名定义在 `.cargo/config.toml`；需要 nightly + `rustc-codegen-cranelift-preview`（本机已安装）。实测单 crate 增量 8—12 秒，LLVM 为 17—28 秒（约 2—3 倍）；全量冷构建没有收益，因为耗时主要由依赖编译决定。生成的机器码比 LLVM 慢，**不要发布它**。 |
 | 在 Cranelift 下运行 / 测试 | `cargo +nightly run --locked -Zcodegen-backend --config .cargo/cranelift.toml -p questionnaire-api`<br>`cargo +nightly test -Zcodegen-backend --config .cargo/cranelift.toml --locked -p questionnaire-api --test domain` | 别名只包装 `build`；`.cargo/cranelift.toml` 只为 dev 与 test profile 设置 `codegen-backend`。 |
-| Rust 检查（按改动选择） | 对应的 `cargo test --locked -p questionnaire-api --test <目标>`；格式与 Clippy 按需执行 | 只覆盖受影响的 Rust 代码，使用 stable + LLVM；不是提交门禁，前端或文档改动不触发。 |
+| Rust 检查门禁 | 受影响的 `cargo test` + `cargo clippy --locked --workspace --all-targets -- -D warnings` + 改动文件 `rustfmt` | 改动 Rust 代码时的必跑门禁（使用 stable + LLVM）；纯前端或纯文档改动不触发。 |
 | 发布产物 | `cargo build --release --locked -p questionnaire-api` | `opt-level = 3` + `codegen-units = 1` + `lto = "fat"` + `strip = "symbols"` + `panic = "abort"`；本机冷构建约 5 分钟，产物 6.87 MB。不要用 Cranelift 做 release。 |
 
 - 不新增 `rust-toolchain.toml`：stable 保持默认，按需检查与发布都走 LLVM，并遵守已声明的 MSRV。
@@ -196,18 +196,17 @@ Set-Location frontend; pnpm run wasm:build   # 改动 logic-core/ 或 logic-wasm
 | `ADMIN_USERNAME`、`ADMIN_PASSWORD` | 仅 `create-admin` | — | 进程环境变量，不写入 `.env.example` |
 | `POSTGRES_PASSWORD` | 仅 Compose | — | 注入 `db` 服务 |
 
-- Rust 格式与静态检查使用默认 rustfmt / clippy；Clippy 按需运行并使用 `-D warnings`，不与测试、构建捆绑成固定提交门禁。
+- Rust 格式与静态检查使用默认 rustfmt / clippy；修改 Rust 代码后必须运行 `cargo clippy --locked --workspace --all-targets -- -D warnings` 与改动文件 `rustfmt` 作为交付门禁。
 - 没有 CI 工作流、Dockerfile、任务运行器或脚本。不要假设它们存在。
 
 ## Testing & QA
 
-- 先按 [README 第 7 节](README.md#7-开发检查)选择与改动对应的最小检查。没有统一提交门禁；同一份代码已有的通过结果直接复用，commit、改分支或整理文档不触发重跑。纯前端不跑 Rust，纯后端不跑前端；只有共享契约变更才按影响验证两端。
-- 仅调整测试时运行受影响的测试即可，不附带生产构建、Clippy 或服务联调。前端构建已包含类型检查，不再单独重复 typecheck；格式化只处理改动文件。
+- 按 [README 第 7 节](README.md#7-开发检查)执行与改动范围对应的必跑门禁：修改 Rust 代码跑受影响的 `cargo test`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 与 `rustfmt`；修改前端代码跑受影响的 `pnpm run test:regression`、`pnpm run typecheck`（或 `build`）与 `prettier`；共享契约或 `logic-core`/`logic-wasm` 变更先跑 `wasm:build` 再验证两端。
+- 同一份代码已通过的门禁结果直接复用，commit、改分支或纯文档整理不触发重跑；纯前端不跑 Rust，纯后端不跑前端。
 - 使用内置 `cargo test`，四个独立目标：`domain` 覆盖题型、身份、规范化与文本/数字边界；`logic` 覆盖表达式及文档依赖；`flow` 覆盖拓扑、改答清理、最终提交及配置身份；`logic_text` 覆盖文本解析。另有 `logic-wasm/tests/smoke.rs` 在原生目标覆盖同一 JSON 信封边界（随 `--workspace` 一起执行）。前端以 Node 内置运行器执行 `frontend/tests/`。具体通过数量和真实服务验证记录在 `docs/requirements-analysis.md`，不把历史数量当作当前测试清单。
 - 文本答案上限：单行 `text` 最多 200、多行 `textarea` 最多 1000 个 Unicode 标量值；问卷标题最多 200，说明与收集目的各最多 5000；请求体上限为 `MAX_SUBMISSION_BYTES`（1 MiB）。
 - 测试围绕当前业务契约与已确认缺陷；已有覆盖足够时不新增，不按文件、函数或覆盖率配额补测试，不锁定私有结构、元数据排列等实现细节。相同行为优先保留一处回归；共享语义样例仍由后端测试与前端（经 wasm 引擎）两侧各读一次，用于确认边界两端的语义一致。新测试名、断言说明与样例说明使用中文，Rust 测试放 `backend/tests/`（wasm 边界放 `logic-wasm/tests/`）；不新增历史答卷兼容专项测试。
-- 文本空白统一按 Unicode `White_Space`（Rust `str::trim`）：U+0085 是空白，U+FEFF 不是；非空白文本保留原文。配置的题目、选项、变量及流程身份与引用只接受非零、小写连字符 UUID；答案中的选项值仍由规范化入口处理。
-- 提交答案和改答事件的 `question_id` 同样必须使用规范题目身份；不能把选项答案值的宽松 UUID 解析复用到身份字段。
+- 文本空白统一按 Unicode `White_Space`（Rust `str::trim`）：U+0085 是空白，U+FEFF 不是；非空白文本保留原文。配置、作答及选项身份统一只接受非零、小写连字符 UUID。
 - `cargo test --locked --workspace` **不需要数据库，也不需要环境变量**。常用过滤：`cargo test -p questionnaire-api --test domain <名称子串>`。
 - 风格：用现有助手构造输入（`id`、`question`、`choices`、`document`、`answer`）；断言看 `Result` 与 `question_id`，不断言消息措辞。
 - 自动化测试保持在纯领域逻辑与必要输入适配范围。领域行为变更优先复用相关测试，只为未覆盖的实际风险补回归。HTTP/auth/SQL 行为变更只核对受影响的真实服务路径，不增设 ORM Mock 或无数据库的接线测试。

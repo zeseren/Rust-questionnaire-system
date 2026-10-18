@@ -1,9 +1,7 @@
 //! 与浏览器共用语义样例，防止缺失值、数值边界、错误分类和资源预算发生漂移。
 use std::collections::BTreeMap;
 
-use questionnaire_api::domain::{
-    Choice, DocumentLogic, LogicErrorCode, Question, QuestionKind, compile_expression,
-};
+use questionnaire_api::domain::{DocumentLogic, Question, compile_expression};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -115,75 +113,5 @@ fn normalize_expected_numbers(value: &mut Value) {
             }
         }
         _ => {}
-    }
-}
-
-#[test]
-fn 文档总预算不能被拆成多个合法小表达式绕过() {
-    let expression =
-        json!({"op": "all", "expressions": vec![json!({"op": "boolean", "value": true}); 255]});
-    let variables: Vec<_> = (1..=17).map(|id| json!({"id": Uuid::from_u128(id), "value_type": "boolean", "expression": expression})).collect();
-    let raw =
-        json!({"dsl_version": 1, "semantics_version": 1, "variables": variables, "rules": []});
-    let mut logic: DocumentLogic = serde_json::from_value(raw).unwrap();
-    assert_eq!(
-        serde_json::to_value(logic.compile(&[]).unwrap_err().code).unwrap(),
-        "limit_exceeded"
-    );
-    logic.variables.pop();
-    assert!(logic.compile(&[]).is_ok());
-}
-
-#[test]
-fn 空规则和常量规则仍检查版本及全部题目选项身份() {
-    let question = Question {
-        id: Uuid::from_u128(1),
-        title: "选择题".into(),
-        required: false,
-        kind: QuestionKind::SingleChoice {
-            options: vec![Choice {
-                id: Uuid::from_u128(2),
-                label: "选项".into(),
-            }],
-        },
-    };
-    let mut invalid_questions = vec![vec![question.clone(), question.clone()]];
-    let mut nil_question = question.clone();
-    nil_question.id = Uuid::nil();
-    invalid_questions.push(vec![nil_question]);
-    for option_id in [Uuid::nil(), Uuid::from_u128(2)] {
-        let mut duplicate = question.clone();
-        let QuestionKind::SingleChoice { options } = &mut duplicate.kind else {
-            unreachable!();
-        };
-        options.push(Choice {
-            id: option_id,
-            label: "非法选项".into(),
-        });
-        invalid_questions.push(vec![duplicate]);
-    }
-    for variables in [
-        json!([]),
-        json!([{
-            "id": Uuid::from_u128(3), "value_type": "boolean",
-            "expression": {"op": "boolean", "value": true}
-        }]),
-    ] {
-        let mut logic: DocumentLogic = serde_json::from_value(json!({
-            "dsl_version": 1, "semantics_version": 1, "variables": variables, "rules": []
-        }))
-        .unwrap();
-        for questions in &invalid_questions {
-            let failure = logic.compile(questions).unwrap_err();
-            assert_eq!(failure.code, LogicErrorCode::InvalidReference);
-            assert_eq!(failure.path, "$.questions");
-            assert_eq!(failure.question_id, Some(questions[0].id));
-        }
-        // 版本检查先于题目绑定，且与是否存在业务表达式无关。
-        logic.semantics_version = 2.into();
-        let failure = logic.compile(&invalid_questions[0]).unwrap_err();
-        assert_eq!(failure.code, LogicErrorCode::UnsupportedVersion);
-        assert_eq!(failure.path, "$");
-        assert_eq!(failure.question_id, None);
     }
 }

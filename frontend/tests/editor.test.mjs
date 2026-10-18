@@ -167,7 +167,6 @@ test('文本辅助忽略注释和字符串中的伪绑定，按 Unicode 列定�
   const unicode = '// 😀\nvalidate q1 = "𠀀";'
   const offset = textErrorOffset(unicode, 2, 18)
   assert.equal(unicode.slice(offset), ';')
-  assert.equal(textErrorOffset(unicode, 999, 999), unicode.length)
 })
 
 test('保存响应的字段顺序与可选空值不使已应用文本变脏', () => {

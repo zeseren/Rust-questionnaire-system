@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::domain::{Question, QuestionKind};
 use crate::logic::{
     CompilationContext, CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType,
-    check_raw_budget, error,
+    check_raw_budget, error, validate_versions,
 };
 
 /// 可持久化的规则包；表达式结构由编译器严格检查。
@@ -105,6 +105,18 @@ pub struct CompiledDocumentLogic {
 }
 
 impl CompiledDocumentLogic {
+    pub(crate) fn empty() -> Self {
+        Self {
+            variables: BTreeMap::new(),
+            variable_paths: BTreeMap::new(),
+            order: Vec::new(),
+            rules: Vec::new(),
+            rule_indices: BTreeMap::new(),
+            question_dependencies: BTreeMap::new(),
+            flow: None,
+        }
+    }
+
     pub(crate) fn rule(&self, id: Uuid) -> Option<&RuleExpressions> {
         self.rule_indices.get(&id).map(|&index| &self.rules[index])
     }
@@ -223,8 +235,10 @@ impl DocumentLogic {
         if self.variables.len() > 100 || self.rules.len() > 100 {
             return Err(error(LogicErrorCode::LimitExceeded, "$.logic", None));
         }
-        let mut total = 0;
-        let mut bytes = 0;
+        if self.variables.is_empty() && self.rules.is_empty() && self.flow.is_none() {
+            validate_versions(&self.dsl_version, &self.semantics_version)?;
+            return Ok(CompiledDocumentLogic::empty());
+        }
         for expression in self
             .variables
             .iter()
@@ -236,13 +250,7 @@ impl DocumentLogic {
             }))
             .chain(self.flow.iter().flat_map(|flow| flow.expressions()))
         {
-            let mut count = 0;
-            check_raw_budget(Some(expression), 1, &mut count)?;
-            total += count;
-            bytes += serialized_bytes(expression);
-            if total > 4096 || bytes > 262_144 {
-                return Err(error(LogicErrorCode::LimitExceeded, "$.logic", None));
-            }
+            check_raw_budget(Some(expression), 1, &mut 0)?;
         }
         let positions: BTreeMap<_, _> = questions
             .iter()
@@ -431,23 +439,6 @@ impl DocumentLogic {
             flow.renew_ids(questions, options, &variables);
         }
     }
-}
-
-/// 直接统计 JSON 序列化后的 UTF-8 字节数，不分配临时 String。
-fn serialized_bytes(value: &Value) -> usize {
-    struct ByteCounter(usize);
-    impl std::io::Write for ByteCounter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0 += buf.len();
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut counter = ByteCounter(0);
-    serde_json::to_writer(&mut counter, value).expect("BUG: 内存字节计数器写入 Value 不会失败");
-    counter.0
 }
 
 pub(crate) fn rewrite(

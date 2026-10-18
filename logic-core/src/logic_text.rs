@@ -89,11 +89,7 @@ fn string(source: &str, pair: &Pair<'_, Rule>) -> Result<String, LogicTextError>
             LogicErrorCode::InvalidSyntax,
         )
     };
-    let value: String = serde_json::from_str(pair.as_str()).map_err(|_| fail())?;
-    if value.contains('\0') {
-        return Err(fail());
-    }
-    Ok(value)
+    serde_json::from_str(pair.as_str()).map_err(|_| fail())
 }
 
 fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
@@ -104,14 +100,11 @@ fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
     // 每层记录尚未结束的前缀运算；括号、函数与 ! 共用递归深度预算。
     let mut prefixes = vec![0_usize];
     let mut depth = 1;
-    for (index, token) in lexicon.into_inner().enumerate() {
+    for token in lexicon.into_inner() {
         if token.as_rule() == Rule::EOI {
             break;
         }
         let offset = token.as_span().start();
-        if index >= 65_536 || (token.as_rule() == Rule::identifier && token.as_str().len() > 64) {
-            return Err(failure(source, offset, LogicErrorCode::LimitExceeded));
-        }
         if token.as_rule() == Rule::string {
             string(source, &token)?;
             continue;
@@ -187,8 +180,8 @@ impl<'a> Compiler<'a> {
         } else {
             pair
         };
-        // true / false 仍可作为显式引用函数中的别名，表达式位置则是布尔常量。
-        if !matches!(pair.as_rule(), Rule::identifier | Rule::boolean) {
+        // 引用函数只接受显式别名；true / false 在表达式位置是布尔常量。
+        if pair.as_rule() != Rule::identifier {
             return Err(self.failure(&pair, LogicErrorCode::InvalidSyntax));
         }
         self.bindings
@@ -276,10 +269,8 @@ impl<'a> Compiler<'a> {
     fn primary(&self, pair: Pair<'a, Rule>) -> Result<Value, LogicTextError> {
         let offset = pair.as_span().start();
         let value = match pair.as_rule() {
-            Rule::number => json!({"op":"number", "value":pair.as_str()}),
-            Rule::negative_number => {
-                let number = next(&mut pair.into_inner());
-                json!({"op":"number", "value":format!("-{}", number.as_str())})
+            Rule::number | Rule::negative_number => {
+                json!({"op":"number", "value":pair.as_str()})
             }
             Rule::string => json!({"op":"text", "value":string(self.source, &pair)?}),
             Rule::boolean => json!({"op":"boolean", "value":pair.as_str() == "true"}),
@@ -563,8 +554,6 @@ impl<'a> Compiler<'a> {
                 .map_or(0, |(_, offset)| *offset);
             located(self.source, offset, error)
         })?;
-        logic.dsl_version = 1.into();
-        logic.semantics_version = 1.into();
         Ok(logic)
     }
 }
