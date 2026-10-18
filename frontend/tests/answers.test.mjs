@@ -1,4 +1,4 @@
-//! 预览与正式填写共用的数字校验必须拒绝失真整数，并保留后端允许的大整数。
+//! 预览与正式填写共用的数字校验只接受有限数字，并按题型约束整数。
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
@@ -44,7 +44,7 @@ function document(integer) {
   return {
     title: '数字题回归',
     description: '',
-    purpose: '核对预览和提交的整数精度规则',
+    purpose: '核对预览和提交的数字约束',
     thank_you: '',
     questions: [
       {
@@ -60,35 +60,22 @@ function document(integer) {
   }
 }
 
-test('数字输入拒绝精度丢失及存储范围之外的裸整数', () => {
-  for (const integer of [true, false]) {
-    for (const raw of [
-      '9007199254740993',
-      '-9007199254740993',
-      '18446744073709551615',
-      '-9223372036854775809',
-      '18446744073709551616',
-    ]) {
-      const result = buildAnswers(document(integer), { [questionId]: raw })
-      assert.ok(result.errors[questionId], `应定位到非法整数所在题目：${raw}`)
-      assert.equal(result.answers.length, 0)
-    }
+test('数字输入拒绝非有限值、非法写法与非整数', () => {
+  for (const raw of ['1e400', 'abc', '1.']) {
+    const result = buildAnswers(document(false), { [questionId]: raw })
+    assert.ok(result.errors[questionId], `应定位到非法数字所在题目：${raw}`)
+    assert.equal(result.answers.length, 0)
   }
+  const fractional = buildAnswers(document(true), { [questionId]: '1.5' })
+  assert.ok(fractional.errors[questionId], '整数题应拒绝小数')
+  assert.equal(fractional.answers.length, 0)
 })
 
-test('可精确表示的大整数和指数写法均可提交', () => {
-  for (const raw of [
-    '0',
-    '-0',
-    '9007199254740992',
-    '9007199254740994',
-    '-9223372036854775808',
-    '18446744073709549568',
-    '1e+20',
-  ]) {
+test('有限数字与指数写法均可提交', () => {
+  for (const raw of ['0', '-0', '42', '1e+20', '1e20']) {
     const result = buildAnswers(document(true), { [questionId]: raw })
-    assert.deepEqual(result.errors, {}, `不应误拒绝后端支持的输入：${raw}`)
+    assert.deepEqual(result.errors, {}, `不应误拒绝有限数字：${raw}`)
     assert.equal(result.answers.length, 1)
-    assert.equal(result.answers[0].value.toString(), raw)
+    assert.equal(result.answers[0].value, Number(raw))
   }
 })

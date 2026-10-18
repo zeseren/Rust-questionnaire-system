@@ -228,7 +228,7 @@ try {
 
 只有影响确实跨越多个模块、无法合理缩小时，才使用所属端的完整测试：Rust 为 `cargo test --locked --workspace`，前端为 `pnpm run test:regression`。仅修改测试时不附带生产构建、Clippy 或服务联调。Rust 检查使用 stable + LLVM；静态检查按需运行 `cargo clippy --locked --workspace --all-targets -- -D warnings`，格式化只处理改动文件，例如 `rustfmt --edition 2024 backend/tests/domain.rs`，或在 `frontend/` 使用 `pnpm exec prettier --write tests/editor.test.mjs`。
 
-Rust 的四个测试目标位于 `backend/tests/`：`domain` 约束题型、规范化与实际提交预算，`logic` 约束表达式与变量依赖，`flow` 约束路径、身份复制和最终提交，`logic_text` 约束文本解析。它们都不启动数据库，也不需要环境变量。
+Rust 的四个测试目标位于 `backend/tests/`：`domain` 约束题型与规范化，`logic` 约束表达式与变量依赖，`flow` 约束路径、身份复制和最终提交，`logic_text` 约束文本解析。它们都不启动数据库，也不需要环境变量。
 
 前端使用 Node 内置运行器自动发现 `frontend/tests/`，命令后传文件路径即可缩小范围，无需维护脚本内的文件清单。后端测试与前端（经 wasm 引擎）共用 [fixtures/survey-logic](fixtures/survey-logic) 中的人工期望：DSL 语义只有 `logic-core` 一份实现，共享样例用于确认两端边界一致；流程行为集中在共享样例，编辑器测试只补配置转换与同步等自身行为。`logic-wasm/tests/smoke.rs` 在原生目标覆盖同一 JSON 信封边界，随 `cargo test --locked --workspace` 一起执行。项目没有新增测试框架或自动提交钩子。
 

@@ -134,38 +134,6 @@ test('整卷和单题复制重写流程引用且会话与外部修改隔离', ()
   assert.deepEqual(session.snapshot().visible, [before.questions[0].id])
 })
 
-test('会话规范化的大整数可以重新用于改答和最终提交', () => {
-  const question_id = '00000000-0000-4000-8000-000000000001'
-  const document = {
-    title: '大整数流程',
-    description: '',
-    purpose: '规范化答案可复用',
-    thank_you: '',
-    questions: [
-      {
-        id: question_id,
-        title: '数字',
-        required: true,
-        type: 'number',
-        integer: true,
-        min: null,
-        max: null,
-      },
-    ],
-  }
-  const session = new FlowSession(document)
-  session.dispatch({ type: 'change', question_id, value: decode('9223372036854775808') })
-  const value = session.snapshot().answers[question_id]
-  assert.equal(value, 2 ** 63)
-  session.dispatch({ type: 'change', question_id, value })
-  assert.deepEqual(session.snapshot().errors, {}, '复用已规范化的原生数字不能使合法答案变成错误')
-  session.dispatch({ type: 'next' })
-  assert.equal(session.snapshot().outcome, 'complete')
-  const response = session.evaluateAnswers([{ question_id, value }])
-  assert.equal(response.answers[question_id], value)
-  assert.equal(response.question_states[question_id], 'answered')
-})
-
 test('最终提交共享样例拒绝路径外输入并重建适用性', () => {
   const submissions = JSON.parse(
     readFileSync(new URL('../../fixtures/survey-logic/submissions.json', import.meta.url), 'utf8'),

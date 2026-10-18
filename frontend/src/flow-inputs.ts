@@ -1,5 +1,4 @@
-//! 界面保留原始输入，流程只接收正确 JSON 类型；提交数字不能变成超范围裸整数。
-import { LosslessNumber } from 'lossless-json'
+//! 界面保留原始输入，流程只接收正确 JSON 类型。
 import { FlowSession } from './wasm/index.ts'
 import { LogicError } from './logic.ts'
 import { copy } from './json.ts'
@@ -32,7 +31,7 @@ export class FlowInputs {
     if ((question?.type === 'number' || question?.type === 'rating') && typeof value === 'string') {
       const raw = numberInput(value)
       if (!raw) typed = null
-      else if (!numberError(raw)) typed = new LosslessNumber(raw)
+      else if (!numberError(raw)) typed = Number(raw)
       // 非法数字原文作为错误类型交给引擎，不能转成 missing 或先舍入。
     }
     this.#session.dispatch({ type: 'change', question_id: questionId, value: typed })
@@ -51,17 +50,12 @@ export class FlowInputs {
   submissionAnswers(): Answer[] {
     const snapshot = this.snapshot()
     if (snapshot.outcome !== 'complete') throw new LogicError('invalid_event', '$.event')
-    // 指数形式保证 1e20 等规范化结果在传输时不被 JS 展开成超出 u64 的裸整数。
+    // 答案统一为原生 JSON 值；数组按值克隆，避免暴露会话快照内部结构。
     return Object.entries(snapshot.answers)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([question_id, value]) => ({
         question_id,
-        value:
-          typeof value === 'number'
-            ? new LosslessNumber(value.toExponential())
-            : Array.isArray(value)
-              ? [...value]
-              : value,
+        value: Array.isArray(value) ? [...value] : value,
       }))
   }
 }

@@ -51,7 +51,7 @@
 | `main.ts`、`App.vue` | 应用入口与工作区骨架；侧边栏 / 移动导航、全局提示、会话失效弹窗 |
 | `router.ts`、`views/*.vue` | 路由表、入口守卫与站内返回地址；每个页面按需动态导入 |
 | `api.ts` | `api()` / `download()` 请求封装、`ApiError`、中文错误文案、查询串拼接；30 秒截止覆盖到响应正文读完 |
-| `json.ts` | 基于 `lossless-json` 的 `decode` / `encode` / `copy`，以及保留数字传输写法的 `copyPayload` 与 `encodeAnswers` |
+| `json.ts` | 基于原生 `JSON.parse` / `JSON.stringify` 的 `decode` / `encode` / `copy` |
 | `types.ts` | 手写 API DTO 与领域类型（`SurveyDocument`、`QuestionStatistics`、`FlowSnapshot` 等） |
 | `stores.ts` | Pinia store：`useAuth`（会话恢复、登录、退出）、`useAppearance`（浅色/深色/跟随系统）、`useNotice`（提示条） |
 | `resource.ts` | `useResource`：加载态、错误、重试，并用序号丢弃过期的筛选响应 |
@@ -66,8 +66,8 @@
 
 几个容易记混的点：
 
-- `api.ts` **不再**重导出 `json.ts` 的内容（`copy` / `decode` / `encode`）；需要无损 JSON 的模块直接从 `./json` 导入。
-- `numbers.ts` 只导出 `numberInput`（清洗输入）与 `numberError`（本地长度/格式提示）；数字的最终精度和范围由后端判定。
+- `api.ts` **不再**重导出 `json.ts` 的内容（`copy` / `decode` / `encode`）；需要 JSON 编解码的模块直接从 `./json` 导入。
+- `numbers.ts` 只导出 `numberInput`（清洗输入）与 `numberError`（本地格式提示）；数字的最终精度和范围由后端判定。
 - `stores.ts` 的 `useAuth` 不对外暴露内部 `initialized` 标志——会话恢复是否完成只在 store 内部使用，调用方只需要 `user`、`restore()`、`login()`、`logout()`。
 - 接口类型是手写 DTO；后端契约变更时需同步维护 `types.ts`。
 
@@ -101,11 +101,11 @@
 
 ## 4. 编辑器、填写与状态一致性
 
-### 4.1 文本字数与数字原文
+### 4.1 文本字数与数字语义
 
 文本题的字符数按 Unicode 标量值计数。新题默认使用上限（单行 200、多行 1000，见 `documents.ts` 的 `TEXT_ANSWER_LIMITS`），发布者可以在编辑器里调低；填写页实时显示「当前字数 / 该题上限」，不做静默截断。本地校验用 `value-contract.ts` 的 `isBlank` / `validText`，与后端规则保持一致：`U+0085` 算空白、`U+FEFF` 算内容，含 NUL 或孤立代理项的输入直接拒绝。
 
-数字答案用 `lossless-json` 发送和读取，不会先把大整数舍入再发送：普通输入保留原文，流程引擎规范化后的结果用指数形式传输，避免 `1e20` 被 JS 展开成超出范围的裸整数。题面、选项和规则文本都通过 Vue 插值渲染，不会执行里面的 HTML。
+数字答案直接使用原生 JSON 与标准 `number`：`JSON.stringify` 按双精度写出，`JSON.parse` 读回有限 `f64`；`1` 与 `1.0`、正零与负零视为同一答案（负零归一为 `0.0`）。题面、选项和规则文本都通过 Vue 插值渲染，不会执行里面的 HTML。
 
 ### 4.2 草稿修订号与冲突处理
 
@@ -177,9 +177,9 @@ frontend/src/wasm/index.ts（TypeScript 包装）
 
 导出全是同步函数，入参是 JSON 文本，出参是 `{"ok": …}` 或 `{"error": {code, path, question_id, line?, column?}}`。包装层只做三件事：
 
-1. 用 `json.ts` 的无损编解码把入参压成 JSON 字符串（`encode` / `encodeAnswers`）；
+1. 用 `json.ts` 的 `encode` 把入参序列化成 JSON 字符串；
 2. 把错误信封还原成 `logic.ts` 里既有的 `LogicError` / `LogicTextError`；
-3. 把领域层已规范化为有限 `f64` 的数字还原成 TS 的 `number`（`plainNumbers`）。
+3. 数字在 TS 中就是标准 `number`（有限 `f64`），引擎返回的规范值直接使用，不需要再做数字还原。
 
 `wasm/index.ts` 对外共六个导出：
 
@@ -196,7 +196,7 @@ frontend/src/wasm/index.ts（TypeScript 包装）
 
 ### 6.3 数字精度与运行环境
 
-- 精度策略：`encodeAnswers` 把已规范化的 JS `number` 用指数形式递给引擎，避免把浮点数的十进制显示值当成新的原始裸整数重新校验；`LosslessNumber` 则保留用户输入原文，超范围或无法精确表示的原始整数仍会被核心拒绝。包装只把领域层已规范化的结果转回 `number`，不会恢复客户端此前已经丢失的精度。
+- 精度策略：前后端都使用标准 `number` / 有限 `f64`，`JSON.stringify` 的输出直接交给引擎，数字的原始文本不参与校验。超出双精度精确整数范围的数值按 `f64` 舍入，负零归一为 `0.0`。
 - 浏览器 / Vite 走 wasm-pack 的 bundler 胶水（`pkg/logic_wasm.js`）。
 - `node --test` 走 `pkg/logic_wasm_bg.js` 加 `readFileSync` 手动实例化：bundler 产物按打包器契约生成，既不提供 `initSync`，其中的 `.wasm` 静态导入也只有打包器能解析，所以包装层自己提供导入表。
 - 入库产物为 `frontend/src/wasm/pkg/` 下的五件套：`logic_wasm.js`、`logic_wasm_bg.js`、`logic_wasm_bg.wasm`、`logic_wasm.d.ts`、`logic_wasm_bg.wasm.d.ts`。

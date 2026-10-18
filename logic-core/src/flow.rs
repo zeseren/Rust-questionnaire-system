@@ -7,7 +7,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::domain::{Answer, Document, Question, QuestionKind, canonical_number};
+use crate::domain::{Answer, Document, Question};
 use crate::logic::{
     CompilationContext, CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType,
     error,
@@ -527,38 +527,12 @@ impl<'a> FlowEvaluator<'a> {
         self.finish(&inputs)
     }
 
-    // 只用于数据库中的已规范化答案。JSONB 会展开指数，不能再次套用原始传输字节预算
-    // 或裸整数词法限制；恢复 f64 的规范表示后，仍完整重算规则、范围和路径。
+    /// 从数据库中的已规范化答案重算规则、范围和路径。
     pub fn evaluate_stored(
         &self,
-        mut answers: BTreeMap<Uuid, Value>,
+        answers: &BTreeMap<Uuid, Value>,
     ) -> Result<EvaluatedResponse, LogicError> {
-        for question in &self.document.questions {
-            if matches!(
-                question.kind,
-                QuestionKind::Number { .. } | QuestionKind::Rating { .. }
-            ) && let Some(value) = answers.get_mut(&question.id)
-            {
-                let number = value
-                    .as_f64()
-                    .filter(|number| number.is_finite())
-                    .ok_or_else(|| {
-                        error(
-                            LogicErrorCode::InvalidAnswer,
-                            "$.answers",
-                            Some(question.id),
-                        )
-                    })?;
-                *value = canonical_number(number, question.id).map_err(|_| {
-                    error(
-                        LogicErrorCode::InvalidAnswer,
-                        "$.answers",
-                        Some(question.id),
-                    )
-                })?;
-            }
-        }
-        self.finish(&answers)
+        self.finish(answers)
     }
 
     fn finish(&self, inputs: &BTreeMap<Uuid, Value>) -> Result<EvaluatedResponse, LogicError> {

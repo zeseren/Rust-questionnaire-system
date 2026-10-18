@@ -1,8 +1,7 @@
-//! 领域回归守住当前问卷的身份、答案规范化与实际提交容量。
+//! 领域回归守住当前问卷的身份与答案规范化。
 use questionnaire_api::domain::{
-    Answer, Choice, Document, DocumentLogic, FlowEvaluator, LogicErrorCode, MAX_NUMBER_JSON_BYTES,
-    MAX_QUESTIONS, MAX_SUBMISSION_BYTES, MAX_TEXT_ANSWER_LENGTH, MAX_TEXT_LENGTH,
-    MAX_TEXTAREA_ANSWER_LENGTH, Question, QuestionKind,
+    Answer, Choice, Document, DocumentLogic, FlowEvaluator, LogicErrorCode, MAX_TEXT_ANSWER_LENGTH,
+    MAX_TEXT_LENGTH, MAX_TEXTAREA_ANSWER_LENGTH, Question, QuestionKind,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -333,47 +332,7 @@ fn 问卷标题说明和目的遵守各自容量() {
 }
 
 #[test]
-fn 满题数问卷的原始文本和数字提交不超过发布预算() {
-    let count = u128::try_from(MAX_QUESTIONS).unwrap();
-    // 六字节文本转义和未规范化的 64 字节数字分别覆盖各自的预算风险。
-    for (kind, value) in [
-        (
-            QuestionKind::Textarea {
-                max_length: MAX_TEXTAREA_ANSWER_LENGTH,
-            },
-            json!("\u{0001}".repeat(MAX_TEXTAREA_ANSWER_LENGTH)),
-        ),
-        (
-            QuestionKind::Number {
-                integer: false,
-                min: None,
-                max: None,
-            },
-            serde_json::from_str(&format!("0.{}", "1".repeat(MAX_NUMBER_JSON_BYTES - 2))).unwrap(),
-        ),
-    ] {
-        let doc = document(
-            (1..=count)
-                .map(|index| question(index, true, kind.clone()))
-                .collect(),
-        );
-        doc.validate_publish().unwrap();
-        doc.ensure_submission_budget().unwrap();
-        let answers: Vec<_> = (1..=count)
-            .map(|index| answer(index, value.clone()))
-            .collect();
-        doc.validate_answers(answers.clone()).unwrap();
-        let payload = json!({
-            "version_id": id(900), "idempotency_key": id(901), "answers": answers,
-        });
-        let bytes = serde_json::to_vec(&payload).unwrap().len();
-        assert!(bytes <= doc.estimated_submission_bytes());
-        assert!(bytes <= MAX_SUBMISSION_BYTES);
-    }
-}
-
-#[test]
-fn 数值校验拒绝空整数区间与精度丢失() {
+fn 数值校验拒绝空整数区间与非整数答案() {
     let mut doc = document(vec![question(
         1,
         true,
@@ -391,25 +350,13 @@ fn 数值校验拒绝空整数区间与精度丢失() {
         min: None,
         max: None,
     };
-    // 从 JSON 原文解析，避免构造样例时先丢失精度。
-    for raw in [
-        "1.5",
-        "9007199254740993",
-        "-9223372036854775809",
-        "18446744073709551617",
-    ] {
-        assert_eq!(
-            doc.validate_answers(vec![answer(1, serde_json::from_str(raw).unwrap())])
-                .unwrap_err()
-                .question_id,
-            Some(id(1)),
-            "{raw}"
-        );
-    }
-    for (raw, expected) in [
-        ("1e20", 1e20),
-        ("9007199254740992", 9_007_199_254_740_992.0),
-    ] {
+    assert_eq!(
+        doc.validate_answers(vec![answer(1, json!(1.5))])
+            .unwrap_err()
+            .question_id,
+        Some(id(1))
+    );
+    for (raw, expected) in [("1e20", 1e20), ("42", 42.0)] {
         let normalized = doc
             .validate_answers(vec![answer(1, serde_json::from_str(raw).unwrap())])
             .unwrap();
@@ -438,34 +385,6 @@ fn 问卷和答案中的空字符在入库前拒绝() {
         .validate_answers(vec![answer(1, json!("回答\0内容"))])
         .unwrap_err();
     assert_eq!(error.question_id, Some(id(1)));
-}
-
-#[test]
-fn 数字边界经过_jsonb_数值表示后仍有效() {
-    let doc = document(vec![question(
-        1,
-        true,
-        QuestionKind::Number {
-            integer: false,
-            min: Some(-9_223_372_036_854_775_808.0),
-            max: Some(0.125),
-        },
-    )]);
-    // PostgreSQL JSONB 将 -9.223372036854776e18 输出为十进制裸整数。
-    let mut stored = serde_json::to_value(doc).unwrap();
-    stored["questions"][0]["min"] = serde_json::from_str("-9223372036854776000").unwrap();
-    let restored: Document = serde_json::from_value(stored).unwrap();
-    let accepted = restored
-        .validate_answers(vec![answer(1, json!(0.125))])
-        .unwrap();
-    assert_eq!(accepted[&id(1)].as_f64(), Some(0.125));
-    assert_eq!(
-        restored
-            .validate_answers(vec![answer(1, json!(0.25))])
-            .unwrap_err()
-            .question_id,
-        Some(id(1))
-    );
 }
 
 #[test]
@@ -509,101 +428,6 @@ fn 题目拼错或多余字段不能被静默丢弃() {
         .unwrap()
         .remove("required");
     assert!(serde_json::from_value::<Document>(missing).is_err());
-}
-
-#[test]
-fn 混合题型预算覆盖选项和_unicode_实际编码() {
-    let doc = document(vec![
-        question(
-            1,
-            true,
-            QuestionKind::Textarea {
-                max_length: MAX_TEXTAREA_ANSWER_LENGTH,
-            },
-        ),
-        question(2, true, QuestionKind::Text { max_length: 100 }),
-        question(3, true, QuestionKind::SingleChoice { options: choices() }),
-        question(
-            4,
-            true,
-            QuestionKind::MultipleChoice {
-                options: vec![
-                    Choice {
-                        id: id(103),
-                        label: "选项甲".into(),
-                    },
-                    Choice {
-                        id: id(104),
-                        label: "选项乙".into(),
-                    },
-                ],
-                min_choices: 1,
-                max_choices: 2,
-            },
-        ),
-        question(
-            5,
-            true,
-            QuestionKind::Number {
-                integer: false,
-                min: None,
-                max: None,
-            },
-        ),
-    ]);
-    // 覆盖默认编码的控制字符转义、四字节 UTF-8 和较长的 f64 表示。
-    let answers = vec![
-        answer(1, json!("\u{0001}".repeat(MAX_TEXTAREA_ANSWER_LENGTH))),
-        answer(2, json!("𝄞".repeat(100))),
-        answer(3, json!(id(101))),
-        answer(4, json!([id(103), id(104)])),
-        answer(5, json!(-1.7976931348623157e308)),
-    ];
-    doc.validate_answers(answers.clone()).unwrap();
-    let payload = json!({
-        "version_id": id(900).to_string(),
-        "idempotency_key": id(901).to_string(),
-        "answers": answers,
-    });
-    let bytes = serde_json::to_vec(&payload).unwrap().len();
-    assert!(bytes <= doc.estimated_submission_bytes());
-}
-
-#[test]
-fn 数字原文长度在规范化之前检查() {
-    for kind in [
-        QuestionKind::Number {
-            integer: false,
-            min: None,
-            max: None,
-        },
-        QuestionKind::Rating {
-            min: 0,
-            max: 5,
-            min_label: String::new(),
-            max_label: String::new(),
-        },
-    ] {
-        let doc = document(vec![question(1, true, kind)]);
-        // 小数和指数均可无限补零而不改变数值；必须检查原始表示长度。
-        for raw in [
-            format!("1.{}", "0".repeat(MAX_NUMBER_JSON_BYTES - 2)),
-            format!("1e+{}", "0".repeat(MAX_NUMBER_JSON_BYTES - 3)),
-            format!("1E{}", "0".repeat(MAX_NUMBER_JSON_BYTES - 3)),
-        ] {
-            let accepted = doc
-                .validate_answers(vec![answer(1, serde_json::from_str(&raw).unwrap())])
-                .unwrap();
-            assert_eq!(accepted[&id(1)].as_f64(), Some(1.0));
-            let rejected = doc
-                .validate_answers(vec![answer(
-                    1,
-                    serde_json::from_str(&format!("{raw}0")).unwrap(),
-                )])
-                .unwrap_err();
-            assert_eq!(rejected.question_id, Some(id(1)));
-        }
-    }
 }
 
 #[test]

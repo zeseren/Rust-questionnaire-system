@@ -1,5 +1,4 @@
-//! 时间以 Asia/Shanghai 展示，空统计值和数字原文不被转换为零。
-import { isLosslessNumber } from 'lossless-json'
+//! 时间以 Asia/Shanghai 展示，空统计值不显示为零。
 import type { AnswerValue, Question, Status } from './types'
 
 export const statusNames: Record<Status, string> = {
@@ -27,7 +26,7 @@ export function dateTime(value: string | null | undefined) {
   return Number.isNaN(date.getTime()) ? '未设置' : shanghaiDateTime.format(date)
 }
 export function exact(value: unknown): string {
-  return value == null ? '暂无数据' : isLosslessNumber(value) ? value.toString() : String(value)
+  return value == null ? '暂无数据' : String(value)
 }
 export function answerText(question: Question, answer: AnswerValue | undefined) {
   if (answer == null) return '未作答'

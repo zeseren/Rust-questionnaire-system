@@ -579,7 +579,7 @@ fn snapshot_row(
 ) -> AppResult<SnapshotRow> {
     let (answers, question_states) = if let Some(evaluator) = evaluator {
         let result = evaluator
-            .evaluate_stored(answers)
+            .evaluate_stored(&answers)
             .map_err(|error| AppError::internal(error))?;
         (result.answers, Some(result.question_states))
     } else {
