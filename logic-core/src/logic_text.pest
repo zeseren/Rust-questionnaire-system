@@ -9,11 +9,12 @@ token = _{ identifier | number | string | symbol }
 identifier_continue = _{ ASCII_ALPHANUMERIC | "_" }
 identifier = @{ (ASCII_ALPHA | "_") ~ identifier_continue* }
 number = @{ ("0" | '1'..'9' ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT+)? ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+version = @{ ASCII_DIGIT+ }
 string = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
 symbol = @{ "->" | "&&" | "||" | "==" | "!=" | "<=" | ">=" | "{" | "}" | "(" | ")" | "[" | "]" | "," | ";" | ":" | "=" | "!" | "<" | ">" | "+" | "*" | "/" | "-" }
 
 program = { SOI ~ header ~ binding* ~ statement* ~ EOI }
-header = { kw_dsl ~ number ~ kw_semantics ~ number ~ ";" }
+header = { kw_dsl ~ version ~ kw_semantics ~ version ~ ";" }
 binding = { kw_bind ~ category ~ identifier ~ "=" ~ string ~ ";" }
 category = @{ ("question" | "option" | "variable" | "node") ~ !identifier_continue }
 statement = _{ variable_definition | question_rule | entry | page | branch | end }
@@ -32,7 +33,7 @@ references = { "[" ~ (identifier ~ ("," ~ identifier)*)? ~ "]" }
 
 expression = { negation* ~ primary ~ (infix ~ negation* ~ primary)* }
 primary = _{ negative_number | number | string | boolean | call | identifier | group }
-negative_number = { "-" ~ number }
+negative_number = @{ "-" ~ number }
 boolean = @{ ("true" | "false") ~ !identifier_continue }
 call = { identifier ~ "(" ~ (argument ~ ("," ~ argument)*)? ~ ")" }
 argument = _{ references | expression }

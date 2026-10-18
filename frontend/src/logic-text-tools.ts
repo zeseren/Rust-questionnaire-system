@@ -53,8 +53,8 @@ export function textBindings(source: string, questions: readonly Question[]): Te
 
 export function textErrorOffset(source: string, line: number, column: number): number {
   const lines = source.split('\n')
-  const row = Math.max(0, Math.min(line - 1, lines.length - 1))
+  const row = line - 1
   const start = lines.slice(0, row).reduce((length, text) => length + text.length + 1, 0)
   const lineText = lines[row] ?? ''
-  return start + [...lineText].slice(0, Math.max(0, column - 1)).join('').length
+  return start + [...lineText].slice(0, column - 1).join('').length
 }

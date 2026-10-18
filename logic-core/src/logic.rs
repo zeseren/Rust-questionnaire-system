@@ -335,15 +335,11 @@ impl CompiledExpression {
         answers: &BTreeMap<Uuid, Value>,
         variable: &mut dyn FnMut(Uuid) -> Result<LogicValue, LogicError>,
     ) -> Result<LogicValue, LogicError> {
-        let mut context = BTreeMap::new();
-        for id in &self.dependencies {
-            context.insert(*id, read_answer(answers.get(id), &self.bindings[id], *id)?);
-        }
         self.root.evaluate(&mut |id| {
             if self.variable_dependencies.contains(&id) {
                 variable(id)
             } else {
-                Ok(context.get(&id).cloned().unwrap_or(LogicValue::Missing))
+                read_answer(answers.get(&id), &self.bindings[&id], id)
             }
         })
     }
@@ -375,6 +371,21 @@ pub(crate) struct CompilationContext {
     bindings: Arc<BTreeMap<Uuid, Binding>>,
 }
 
+pub(crate) fn validate_versions(
+    dsl_version: &Number,
+    semantics_version: &Number,
+) -> Result<(), LogicError> {
+    for version in [dsl_version, semantics_version] {
+        let Some(value) = version.as_u64() else {
+            return Err(error(LogicErrorCode::InvalidSyntax, "$", None));
+        };
+        if value != 1 {
+            return Err(error(LogicErrorCode::UnsupportedVersion, "$", None));
+        }
+    }
+    Ok(())
+}
+
 impl CompilationContext {
     pub(crate) fn new(
         dsl_version: &Number,
@@ -382,21 +393,7 @@ impl CompilationContext {
         questions: &[Question],
         variables: &BTreeMap<Uuid, LogicValueType>,
     ) -> Result<Self, LogicError> {
-        for version in [dsl_version, semantics_version] {
-            // 浏览器将 JSON 的 1 与 1.0 解析成同一值；版本按非负整数值检查。
-            let value = version
-                .as_f64()
-                .filter(|value| {
-                    value.is_finite()
-                        && *value >= 0.0
-                        && *value <= f64::from(u32::MAX)
-                        && positive_zero(value.fract()).total_cmp(&0.0).is_eq()
-                })
-                .ok_or_else(|| error(LogicErrorCode::InvalidSyntax, "$", None))?;
-            if !value.total_cmp(&1.0).is_eq() {
-                return Err(error(LogicErrorCode::UnsupportedVersion, "$", None));
-            }
-        }
+        validate_versions(dsl_version, semantics_version)?;
         if questions.len() > MAX_QUESTIONS {
             return Err(error(LogicErrorCode::LimitExceeded, "$.questions", None));
         }
@@ -746,13 +743,10 @@ fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<Logic
             .map(positive_zero)
             .map(LogicValue::Number)
             .map_err(|_| invalid()),
-        LogicValueType::Text => {
-            let text = raw
-                .as_str()
-                .filter(|text| !text.contains('\0'))
-                .ok_or_else(invalid)?;
-            Ok(LogicValue::Text(text.into()))
-        }
+        LogicValueType::Text => raw
+            .as_str()
+            .map(|text| LogicValue::Text(text.into()))
+            .ok_or_else(invalid),
         LogicValueType::Choice => {
             let option = raw
                 .as_str()

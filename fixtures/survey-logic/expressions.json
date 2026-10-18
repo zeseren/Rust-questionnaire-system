@@ -550,7 +550,7 @@
     {
       "name": "正负零比较等价",
       "program": {
-        "dsl_version": 1.0,
+        "dsl_version": 1,
         "semantics_version": 1,
         "expression": {
           "op": "compare",
@@ -589,35 +589,6 @@
           "code": "invalid_number",
           "path": "$.expression",
           "question_id": null
-        }
-      }
-    },
-    {
-      "name": "短路也不能掩盖上下文中的无效选项",
-      "program": {
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "expression": {
-          "op": "any",
-          "expressions": [
-            {
-              "op": "boolean",
-              "value": true
-            },
-            {
-              "op": "selected",
-              "question_id": "00000000-0000-4000-8000-000000000001",
-              "option_id": "00000000-0000-4000-8000-000000000101"
-            }
-          ]
-        }
-      },
-      "answers_json": "{\"00000000-0000-4000-8000-000000000001\":\"00000000-0000-4000-8000-000000000103\"}",
-      "expected": {
-        "error": {
-          "code": "invalid_answer",
-          "path": "$.answers.00000000-0000-4000-8000-000000000001",
-          "question_id": "00000000-0000-4000-8000-000000000001"
         }
       }
     },

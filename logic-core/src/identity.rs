@@ -1,4 +1,4 @@
-//! 配置及作答的题目身份只接受非零、小写连字符 UUID；答案值由领域层单独规范化。
+//! 配置、作答及选项身份统一只接受非零、小写连字符 UUID。
 
 use serde::{Deserialize, Deserializer, de::Error};
 use uuid::Uuid;

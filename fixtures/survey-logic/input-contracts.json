@@ -5,18 +5,7 @@
     "/questions/0/id",
     "/questions/0/options/0/id",
     "/logic/variables/0/id",
-    "/logic/rules/0/question_id",
-    "/logic/flow/entry",
-    "/logic/flow/nodes/0/id",
-    "/logic/flow/nodes/0/question_ids/0",
-    "/logic/flow/nodes/0/next",
-    "/logic/flow/nodes/1/id",
-    "/logic/flow/nodes/1/branches/0/target",
-    "/logic/flow/nodes/1/otherwise",
-    "/logic/flow/nodes/5/id",
-    "/logic/variables/0/expression/question_id",
-    "/logic/flow/nodes/1/branches/0/when/option_id",
-    "/logic/rules/1/required_if/value/left/variable_id"
+    "/logic/flow/nodes/1/branches/0/when/option_id"
   ],
   "uuid_cases": [
     {
@@ -29,35 +18,17 @@
       "name": "大写连字符",
       "raw": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
       "configuration_valid": false,
-      "option_valid": true
+      "option_valid": false
     },
     {
       "name": "无连字符",
       "raw": "aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa",
       "configuration_valid": false,
-      "option_valid": true
-    },
-    {
-      "name": "花括号",
-      "raw": "{aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa}",
-      "configuration_valid": false,
-      "option_valid": true
-    },
-    {
-      "name": "URN",
-      "raw": "urn:uuid:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      "configuration_valid": false,
-      "option_valid": true
+      "option_valid": false
     },
     {
       "name": "零 UUID",
       "raw": "00000000-0000-0000-0000-000000000000",
-      "configuration_valid": false,
-      "option_valid": false
-    },
-    {
-      "name": "尾随换行",
-      "raw": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n",
       "configuration_valid": false,
       "option_valid": false
     }

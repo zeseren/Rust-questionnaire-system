@@ -1,7 +1,6 @@
 //! 界面保留原始输入，流程只接收正确 JSON 类型。
 import { FlowSession } from './wasm/index.ts'
 import { LogicError } from './logic.ts'
-import { copy } from './json.ts'
 import { numberError, numberInput } from './numbers.ts'
 import type { Inputs, InputValue } from './answers.ts'
 import type { Answer, FlowSnapshot, SurveyDocument } from './types.ts'
@@ -13,7 +12,7 @@ export class FlowInputs {
   #values: Inputs = {}
 
   constructor(document: SurveyDocument) {
-    this.#document = copy(document)
+    this.#document = document
     this.#session = new FlowSession(this.#document)
     this.#snapshot = this.#session.snapshot()
   }

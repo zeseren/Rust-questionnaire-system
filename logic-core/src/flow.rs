@@ -12,7 +12,7 @@ use crate::logic::{
     CompilationContext, CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType,
     error,
 };
-use crate::logic_document::{CompiledDocumentLogic, DocumentLogic, rewrite};
+use crate::logic_document::{CompiledDocumentLogic, rewrite};
 
 /// 节点数组采用拓扑顺序，入口必须是第一个页面。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -464,21 +464,13 @@ impl<'a> FlowEvaluator<'a> {
     /// # 错误
     /// 草稿结构、规则或流程不合法时返回定位错误。
     pub fn new(document: &'a Document) -> Result<Self, LogicError> {
-        let empty = DocumentLogic {
-            flow: None,
-            dsl_version: 1.into(),
-            semantics_version: 1.into(),
-            variables: Vec::new(),
-            rules: Vec::new(),
-        };
-        let logic = document
-            .logic
-            .as_ref()
-            .unwrap_or(&empty)
-            .compile(&document.questions)?;
         document
             .validate_draft_fields()
             .map_err(|failure| error(LogicErrorCode::InvalidFlow, "$", failure.question_id))?;
+        let logic = match &document.logic {
+            Some(logic) => logic.compile(&document.questions)?,
+            None => CompiledDocumentLogic::empty(),
+        };
         Ok(Self::from_compiled(document, logic))
     }
 

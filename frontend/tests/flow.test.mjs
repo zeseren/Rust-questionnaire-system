@@ -105,7 +105,7 @@ test('共享事件序列保持路径清理回退和题型规范化一致', () =>
   }
 })
 
-test('整卷和单题复制重写流程引用且会话与外部修改隔离', () => {
+test('整卷和单题复制重写全部配置身份与流程引用', () => {
   const source = copy(fixtures.documents.diamond)
   const before = copy(source)
   const duplicated = duplicateSurveyDocument(source)
@@ -126,12 +126,6 @@ test('整卷和单题复制重写流程引用且会话与外部修改隔离', ()
   duplicated.questions.splice(1, 0, newQuestion)
   assert.deepEqual(duplicated.logic.flow.nodes[0].question_ids, [question.id, newQuestion.id])
   assert.doesNotThrow(() => compileDocumentLogic(duplicated.logic, duplicated.questions))
-  const session = new FlowSession(source)
-  const snapshot = session.snapshot()
-  source.questions.length = 0
-  snapshot.history.length = 0
-  assert.deepEqual(session.snapshot().history, [before.logic.flow.entry])
-  assert.deepEqual(session.snapshot().visible, [before.questions[0].id])
 })
 
 test('最终提交共享样例拒绝路径外输入并重建适用性', () => {

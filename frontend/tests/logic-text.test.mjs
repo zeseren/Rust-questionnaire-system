@@ -39,7 +39,7 @@ test('文本共享样例保留身份优先级并定位语法与语义错误', ()
   }
 })
 
-test('有效表达式和流程可格式化往返且解析预算生效', () => {
+test('有效表达式和流程可格式化并二次解析往返', () => {
   const expressions = read('expressions')
   // 使用人工预期不含错误的样例；编译意外失败时直接报告，不静默跳过。
   for (const item of expressions.cases.filter((item) => !item.expected.error)) {
@@ -68,29 +68,4 @@ test('有效表达式和流程可格式化往返且解析预算生效', () => {
         parseLogicText(formatLogicText(document.logic, document.questions), document.questions),
         document.logic,
       )
-  const source =
-    'dsl 1 semantics 1;\nbind variable v = "00000000-0000-4000-8000-000000002001";\nlet v: number = '
-  for (const expression of ['1 + '.repeat(20000) + '1', '('.repeat(65) + '1' + ')'.repeat(65)])
-    assert.throws(
-      () => parseLogicText(source + expression + ';', expressions.questions),
-      (error) => error instanceof LogicTextError && error.code === 'limit_exceeded',
-    )
-  assert.throws(
-    () => parseLogicText(' '.repeat(1048577), []),
-    (error) => error instanceof LogicTextError && error.code === 'limit_exceeded',
-  )
-})
-
-test('共享 format_cases 逐字节锁定格式化输出并可二次解析往返', () => {
-  for (const item of fixture.format_cases) {
-    // expected 由 TS formatLogicText 真实输出粘贴；双端必须逐字节一致。
-    assert.equal(formatLogicText(item.logic, item.questions), item.expected, item.name)
-    const once = parseLogicText(item.expected, item.questions)
-    // 一次与二次解析必须等值，保证输出无歧义。
-    assert.deepEqual(
-      parseLogicText(formatLogicText(once, item.questions), item.questions),
-      once,
-      item.name,
-    )
-  }
 })

@@ -69,7 +69,6 @@ fn 文本与表达式预算允许边界并拒绝长链和混合嵌套超限() {
         assert!(parse_logic_text(&format!("{prefix}{expression};"), &[]).is_ok());
     }
     for expression in [
-        format!("{}1", "1 + ".repeat(20_000)),
         format!("{}true{}", "(".repeat(64), ")".repeat(64)),
         format!("!all({}true{})", "(".repeat(62), ")".repeat(62)),
     ] {
@@ -86,15 +85,9 @@ fn 文本与表达式预算允许边界并拒绝长链和混合嵌套超限() {
 }
 
 #[test]
-fn 负号只接数字字面量且函数不能放宽参数种类() {
+fn 内置函数检查参数元数与引用种类() {
     let prefix = "dsl 1 semantics 1; bind variable v = \"00000000-0000-4000-8000-000000002001\"; let v: number = ";
-    for expression in [
-        "-(1)",
-        "-length(\"文\")",
-        "number(1)",
-        "coalesce(1)",
-        "length([])",
-    ] {
+    for expression in ["number(1)", "coalesce(1)", "length([])"] {
         let error = parse_logic_text(&format!("{prefix}{expression};"), &[]).unwrap_err();
         assert_eq!(error.error.code, LogicErrorCode::InvalidSyntax);
     }

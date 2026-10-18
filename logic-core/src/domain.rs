@@ -217,7 +217,6 @@ impl Document {
             .map_err(|error| ValidationError::new(error.question_id, error.to_string()))
     }
 
-    // 独立流程入口先编译规则，再复用字段校验，保持其原有错误优先级。
     pub(crate) fn validate_draft_fields(&self) -> Result<(), ValidationError> {
         check_length(&self.title, MAX_DOCUMENT_TITLE_LENGTH, None, "问卷标题")?;
         check_length(&self.description, MAX_TEXT_LENGTH, None, "调查说明")?;
@@ -559,14 +558,14 @@ impl Question {
                 if min.is_some_and(|min| number < min) || max.is_some_and(|max| number > max) {
                     return Err(ValidationError::new(id, "数值不在允许范围内"));
                 }
-                canonical_number(number, self.id).map(Some)
+                Ok(Some(canonical_number(number)))
             }
             QuestionKind::Rating { min, max, .. } => {
                 let number = finite_number(value, self.id)?;
                 if number.fract() != 0.0 || number < f64::from(*min) || number > f64::from(*max) {
                     return Err(ValidationError::new(id, "评分必须是允许范围内的整数"));
                 }
-                canonical_number(number, self.id).map(Some)
+                Ok(Some(canonical_number(number)))
             }
         }
     }
@@ -599,7 +598,7 @@ fn check_length(
 fn parse_option_id(value: &Value, question_id: Uuid) -> Result<Uuid, ValidationError> {
     value
         .as_str()
-        .and_then(|value| Uuid::parse_str(value).ok())
+        .and_then(crate::identity::parse)
         .ok_or_else(|| ValidationError::new(Some(question_id), "选项 ID 必须是合法的 UUID 字符串"))
 }
 
@@ -610,9 +609,10 @@ pub(crate) fn finite_number(value: &Value, question_id: Uuid) -> Result<f64, Val
         .ok_or_else(|| ValidationError::new(Some(question_id), "答案必须是有限的 JSON 数字"))
 }
 
-pub(crate) fn canonical_number(number: f64, question_id: Uuid) -> Result<Value, ValidationError> {
+pub(crate) fn canonical_number(number: f64) -> Value {
     // IEEE 754 保留负零的符号，但问卷中的正零与负零是相同答案。
-    Number::from_f64(if number == 0.0 { 0.0 } else { number })
-        .map(Value::Number)
-        .ok_or_else(|| ValidationError::new(Some(question_id), "答案必须是有限的 JSON 数字"))
+    Value::Number(
+        Number::from_f64(if number == 0.0 { 0.0 } else { number })
+            .expect("BUG: 有限 f64 必然可转换为 JSON Number"),
+    )
 }

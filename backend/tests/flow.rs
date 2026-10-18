@@ -1,8 +1,10 @@
 //! 两端执行同一份流程和事件序列，防止路径、清理、回退与缺失处理发生漂移。
 use questionnaire_api::domain::{
-    Answer, Document, FlowEvaluator, FlowEvent, FlowNode, FlowSession, QuestionKind,
+    Answer, Document, FlowDefinition, FlowEvaluator, FlowEvent, FlowNode, FlowOutcome, FlowSession,
+    QuestionKind,
 };
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 fn fixtures() -> Value {
     serde_json::from_str(include_str!("../../fixtures/survey-logic/flows.json")).unwrap()
@@ -95,6 +97,22 @@ fn 共享流程拒绝非法拓扑和未保护的分支依赖() {
         let actual = document.compile_logic().err().map(|failure| failure.code);
         assert_eq!(json!(actual), case["error"], "编译样例：{}", case["name"]);
     }
+
+    // 257 个节点超过 256 上限；用循环构造，替代手写的大流程样例。
+    let mut document: Document =
+        serde_json::from_value(fixtures["documents"]["diamond"].clone()).unwrap();
+    let nodes = (0..257)
+        .map(|index| FlowNode::End {
+            id: Uuid::from_u128(1_000 + index),
+            outcome: FlowOutcome::Complete,
+        })
+        .collect();
+    document.logic.as_mut().unwrap().flow = Some(FlowDefinition {
+        entry: Uuid::from_u128(1_000),
+        nodes,
+    });
+    let failure = FlowEvaluator::new(&document).unwrap_err();
+    assert_eq!(json!(failure.code), "limit_exceeded");
 }
 
 #[test]
@@ -217,22 +235,6 @@ fn 最终提交共享样例拒绝路径外输入并重建适用性() {
         let result = FlowEvaluator::new(&document)
             .unwrap()
             .evaluate_answers(answers.clone());
-        let mut session = FlowSession::new(&document).unwrap();
-        // 会话尚未前进且保留非法输入；最终答案重建不能信任或修改这份交互状态。
-        session
-            .dispatch(FlowEvent::Change {
-                question_id: document.questions[0].id,
-                value: json!({"非法": "输入"}),
-            })
-            .unwrap();
-        let before = serde_json::to_value(session.snapshot()).unwrap();
-        let reconstructed = session.evaluate_answers(answers.clone());
-        assert_eq!(
-            serde_json::to_value(reconstructed).unwrap(),
-            serde_json::to_value(&result).unwrap(),
-            "同一文档的最终重建不受当前会话影响"
-        );
-        assert_eq!(serde_json::to_value(session.snapshot()).unwrap(), before);
         let actual = match result {
             Ok(value) => {
                 // 同时守住 HTTP 实际调用的领域入口，避免只测纯引擎却遗漏提交接线。

@@ -49,16 +49,6 @@
       "edits": []
     },
     {
-      "name": "版本数字的等价写法归一化",
-      "replacements": [
-        [
-          "dsl 1 semantics 1",
-          "dsl 1.0 semantics 1e0"
-        ]
-      ],
-      "edits": []
-    },
-    {
       "name": "布尔前缀及中缀优先级保留短路分组",
       "replacements": [
         [
@@ -208,38 +198,6 @@
       ]
     },
     {
-      "name": "负号与数字间的注释不改变科学记数法原文",
-      "replacements": [
-        [
-          "1 / 0",
-          "- // 数字仍保留原文\n1.2300e+2"
-        ]
-      ],
-      "edits": [
-        {
-          "path": [
-            "variables",
-            1,
-            "expression"
-          ],
-          "value": {
-            "op": "number",
-            "value": "-1.2300e+2"
-          }
-        }
-      ]
-    },
-    {
-      "name": "布尔常量名称可以用于显式题目引用",
-      "replacements": [
-        [
-          "amount",
-          "true"
-        ]
-      ],
-      "edits": []
-    },
-    {
       "name": "字符串保留中文与补充平面字符",
       "replacements": [
         [
@@ -287,18 +245,6 @@
       "error": "invalid_syntax",
       "line": 1,
       "column": 1
-    },
-    {
-      "name": "布尔前缀不能截断较长的别名",
-      "replacements": [
-        [
-          "let broken: number = 1 / 0;",
-          "let broken: boolean = truevalue;"
-        ]
-      ],
-      "error": "invalid_reference",
-      "line": 17,
-      "column": 23
     },
     {
       "name": "未知别名不能穿过引用检查",

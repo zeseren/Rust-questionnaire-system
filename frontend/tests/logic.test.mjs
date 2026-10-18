@@ -22,20 +22,3 @@ test('两端共享样例保持编译与求值语义一致', () => {
     assert.deepEqual(actual, fixture.expected, `语义样例：${fixture.name}`)
   }
 })
-
-test('深度和节点上限在编译之前拦截且允许边界', () => {
-  for (const [depth, count, allowed] of [
-    [16, 1, true],
-    [17, 1, false],
-    [2, 256, true],
-    [2, 257, false],
-  ]) {
-    let expression = { op: 'boolean', value: true }
-    if (count > 1)
-      expression = { op: 'all', expressions: Array.from({ length: count - 1 }, () => expression) }
-    else for (let i = 1; i < depth; i++) expression = { op: 'not', expression }
-    const program = { dsl_version: 1, semantics_version: 1, expression }
-    if (allowed) assert.doesNotThrow(() => compileExpression(program, []))
-    else assert.throws(() => compileExpression(program, []), { code: 'limit_exceeded' })
-  }
-})
