@@ -365,8 +365,8 @@ PostgreSQL
 
 | 范围 | 内容 |
 | --- | --- |
-| Rust（`cargo test --locked --workspace`） | 38 项：`backend/tests` 的 4 个目标（`domain` 题型/身份/规范化/边界，`logic` 表达式与文档依赖，`flow` 拓扑、改答清理与最终提交，`logic_text` 文本解析）加 `logic-wasm/tests/smoke.rs` 的原生信封冒烟（其中一条用例只在 `target_arch = "wasm32"` 下编译运行） |
-| 前端（`pnpm run test:regression`） | `node --test` 运行 `frontend/tests/` 的 26 项，覆盖输入适配、数字处理、编辑器逻辑、文本 DSL、流程与 WASM 边界 |
+| Rust（`cargo test --locked --workspace`） | 30 项：`backend/tests` 的 4 个目标（`domain` 题型/身份/规范化/边界，`logic` 表达式与文档依赖，`flow` 拓扑、改答清理与最终提交，`logic_text` 文本解析）加 `logic-wasm/tests/smoke.rs` 的原生信封冒烟（其中一条用例只在 `target_arch = "wasm32"` 下编译运行） |
+| 前端（`pnpm run test:regression`） | `node --test` 运行 `frontend/tests/` 的 21 项，覆盖输入适配、数字处理、编辑器逻辑、文本 DSL、流程与 WASM 边界 |
 | 共享契约 | `fixtures/survey-logic/` 六个文件由两端同读，期望值人工指定 |
 
 **真实环境联调覆盖。** 使用 PostgreSQL 18.1 临时实例加真实 API 完成：账号与 Session 全流程（含改密撤销多设备、重复 Cookie 头拒绝、禁用后请求失效）、六题型问卷的创建/保存/预览/配置/发布/幂等提交、详情与统计三态恒等式、CSV 状态列与归属隔离、管理员治理与审计、备份与独立恢复演练（`pg_dump -Fc` / `pg_restore --exit-on-error` 恢复到独立空库后计数与统计一致）。真实浏览器（Edge + Vite + Rust API）完成可视化建题、分支配置、文本往返与错误定位、试填预览、手机宽度改答清理，以及“首次提交响应被拦截后按原载荷重试仍拿到同一回执”。报表侧另有 62 项 HTTP 断言覆盖空统计、空 CSV、状态恒等式与归属隔离。
