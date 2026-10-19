@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <!-- 与 styles.css 的 --canvas 一致；首绘脚本会在深色偏好下改写为深色值。 -->
-    <meta name="theme-color" content="#edf0f5" />
+    <meta name="theme-color" content="#f5f2eb" />
     <meta name="description" content="问序，让每一个想法都被听见。创建问卷、收集回答、发现洞察。" />
     <title>问序</title>
     <script>
@@ -19,7 +19,7 @@
         // 浏览器界面颜色也必须在首绘前确定，否则深色主题会先闪一次浅色状态栏。
         document
           .querySelector('meta[name="theme-color"]')
-          ?.setAttribute('content', dark ? '#1c2027' : '#edf0f5')
+          ?.setAttribute('content', dark ? '#121210' : '#f5f2eb')
       } catch {}
     </script>
   </head>

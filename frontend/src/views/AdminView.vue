@@ -118,6 +118,7 @@ const actionNames: Record<string, string> = {
 <template>
   <div class="page-heading">
     <div>
+      <p class="eyebrow">PLATFORM GOVERNANCE &amp; AUDIT</p>
       <h1>平台管理</h1>
       <p class="heading-note">每一次治理操作，都有据可查。</p>
     </div>

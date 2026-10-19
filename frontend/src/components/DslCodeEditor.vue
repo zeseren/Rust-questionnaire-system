@@ -128,13 +128,14 @@ const language = StreamLanguage.define({
   },
 })
 const highlight = HighlightStyle.define([
-  { tag: tags.keyword, color: 'var(--violet)' },
-  { tag: tags.string, color: 'var(--green)' },
-  { tag: tags.number, color: 'var(--teal)' },
-  { tag: tags.bool, color: 'var(--violet)' },
-  { tag: tags.typeName, color: 'var(--teal)' },
-  { tag: tags.comment, color: 'var(--text-tertiary)', fontStyle: 'italic' },
-  { tag: tags.operator, color: 'var(--accent)' },
+  { tag: tags.keyword, color: '#e4684e', fontWeight: '600' },
+  { tag: tags.string, color: '#8fd19e' },
+  { tag: tags.number, color: '#8fd19e' },
+  { tag: tags.bool, color: '#e4684e', fontWeight: '600' },
+  { tag: tags.typeName, color: '#8ab4f8' },
+  { tag: tags.variableName, color: '#8ab4f8' },
+  { tag: tags.comment, color: '#757067', fontStyle: 'italic' },
+  { tag: tags.operator, color: '#e4684e' },
 ])
 function diagnostics() {
   if (!view) return

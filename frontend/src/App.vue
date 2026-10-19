@@ -1,4 +1,4 @@
-<!-- Fluent 布局共用浅深主题；会话过期时保留当前页面与未保存输入。 -->
+<!-- 纸本与松烟墨布局共用浅深主题；会话过期时保留当前页面与未保存输入。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
@@ -62,15 +62,17 @@ watch(() => route.fullPath, closeMobile)
   <a class="skip-link" href="#main-content">跳至主要内容</a>
   <template v-if="!standalone">
     <aside class="sidebar desktop-sidebar" aria-label="工作区导航">
-      <RouterLink class="brand" to="/">
-        <span class="brand-mark"><Icon name="forms" /></span>
-        <span class="brand-name">问序</span>
-      </RouterLink>
-      <div class="workspace-switch">
-        <Icon name="person" />
-        <span>个人工作区</span>
+      <div class="brand-row">
+        <RouterLink class="brand" to="/">
+          <span class="brand-mark" aria-hidden="true">问</span>
+          <span class="brand-title">
+            <strong class="brand-name">问序工坊</strong>
+            <span class="brand-caption">WENXU · STUDIO</span>
+          </span>
+        </RouterLink>
+        <span class="edition-tag">DSL v1</span>
       </div>
-      <div class="nav-caption">工作空间</div>
+      <div class="nav-caption">WORKSPACE · 工作空间</div>
       <nav class="nav-list">
         <RouterLink
           v-for="link in links"
@@ -83,6 +85,13 @@ watch(() => route.fullPath, closeMobile)
           {{ link.label }}
         </RouterLink>
       </nav>
+      <div class="sidebar-card">
+        <div class="sidebar-card-title">
+          <span>规则引擎状态</span>
+          <span class="dot-live">WASM 已就绪</span>
+        </div>
+        <p>前后端共享同一套 Rust 领域编译器，支持三值逻辑、精确大整数与确定性路径重建。</p>
+      </div>
       <div class="sidebar-bottom">
         <div class="appearance-label">外观</div>
         <div class="theme-control" role="group" aria-label="选择外观主题">
@@ -119,7 +128,13 @@ watch(() => route.fullPath, closeMobile)
       @cancel="mobileOpen = false"
     >
       <div class="dialog-header">
-        <strong>问序</strong>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">问</span>
+          <span class="brand-title">
+            <strong class="brand-name">问序工坊</strong>
+            <span class="brand-caption">WENXU · STUDIO</span>
+          </span>
+        </div>
         <button class="icon-button" aria-label="关闭导航" @click="closeMobile">
           <Icon name="close" />
         </button>
@@ -173,8 +188,11 @@ watch(() => route.fullPath, closeMobile)
   <template v-else>
     <header class="public-header">
       <RouterLink class="brand" to="/">
-        <span class="brand-mark"><Icon name="forms" /></span>
-        <span class="brand-name">问序</span>
+        <span class="brand-mark" aria-hidden="true">问</span>
+        <span class="brand-title">
+          <strong class="brand-name">问序工坊</strong>
+          <span class="brand-caption">WENXU · STUDIO</span>
+        </span>
       </RouterLink>
       <button
         class="icon-button"

@@ -53,6 +53,7 @@ async function changePassword() {
 <template>
   <div class="page-heading">
     <div>
+      <p class="eyebrow">ACCOUNT &amp; APPEARANCE</p>
       <h1>账户设置</h1>
       <p class="heading-note">让工作区更适合你。</p>
     </div>
@@ -73,7 +74,7 @@ async function changePassword() {
     </section>
     <section class="panel">
       <h2>外观</h2>
-      <p class="subtle mt">纯色表面与清晰的排版，让内容保持专注。</p>
+      <p class="subtle mt">温润纸本与松烟墨排版，让问卷编纂与阅读保持专注。</p>
       <div class="settings-themes" role="group" aria-label="选择外观主题">
         <button
           v-for="theme in themes"

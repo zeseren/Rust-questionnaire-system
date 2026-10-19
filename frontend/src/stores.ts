@@ -43,7 +43,7 @@ export const useAuth = defineStore('auth', () => {
 })
 
 // 与 styles.css 的 --canvas 一一对应；改动主题底色时同步 index.html 的首绘脚本。
-const CANVAS_COLORS = { light: '#edf0f5', dark: '#1c2027' } as const
+const CANVAS_COLORS = { light: '#f5f2eb', dark: '#121210' } as const
 
 export type Theme = 'light' | 'dark' | 'system'
 export const useAppearance = defineStore('appearance', () => {

@@ -117,6 +117,9 @@ async function duplicate(id: string) {
 <template>
   <div class="page-heading">
     <div>
+      <p class="eyebrow">
+        {{ archived ? 'ARCHIVE · 历史案卷归档' : 'SURVEY ARCHIVE & TELEMETRY' }}
+      </p>
       <h1>{{ route.meta.title }}</h1>
       <p class="heading-note">
         {{ archived ? '查看已归档问卷与历史答卷。' : '管理问卷、查看回答，了解最新进展。' }}
@@ -227,10 +230,14 @@ async function duplicate(id: string) {
         class="survey-grid"
         :class="{ 'is-list': view === 'list' }"
       >
-        <article v-for="survey in list.data.value.items" :key="survey.id" class="survey-card">
+        <article
+          v-for="(survey, index) in list.data.value.items"
+          :key="survey.id"
+          class="survey-card"
+        >
           <div class="card-top">
-            <span class="survey-icon">
-              <Icon name="document" />
+            <span class="survey-icon" aria-hidden="true">
+              {{ String((page - 1) * 12 + index + 1).padStart(2, '0') }}
             </span>
             <span
               class="status"
