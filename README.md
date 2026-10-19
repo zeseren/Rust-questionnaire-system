@@ -1,113 +1,86 @@
-# 问卷调查系统（Rust + Vue 3）
+# 问序（Wenxu）— 动态问卷调查系统（Rust + Vue 3 + WASM）
 
-面向校园课程反馈、社团活动反馈和一般研究调查的问卷调查系统：发布者自主设计、发布和管理问卷，填写者通过链接在电脑或手机上作答，发布者查看分版本统计并导出数据，管理员处理账号与内容治理。
+面向课程反馈、活动报名与研究调研的 Web 动态问卷系统：发布者使用六类题型、计算变量、条件规则与分支跳题编纂问卷，发布不可变版本并按公开匿名或账号限次模式收集答卷，查看分版本统计与导出 CSV；平台管理员治理用户与问卷并记录审计日志。
 
-后端是 Rust + Axum + SeaORM 的 HTTP JSON API，前端是 Vue 3 + TypeScript + Vite 的工作台，采用 **Fluent 2** 视觉（圆角控件、分级阴影、带轻微色调的 Mica 基底与纯色磁贴，支持浅色、深色和跟随系统）。启动后从 `http://localhost:5173` 进入工作台。
+后端为 **Rust + Axum + SeaORM + SQLx** 的 HTTP JSON API，领域规则与流程引擎由纯 Rust crate **`logic-core`（`questionnaire-logic`）** 唯一实现，并经 **`logic-wasm`** 编译为 WebAssembly 供 **Vue 3 + TypeScript + Vite** 前端直接调用。界面采用 **Editorial Craft（纸本与松烟墨）** 视觉体系，支持宣纸浅色、玄墨深色与跟随系统。
 
-## 核心功能
+---
+
+## 1. 核心能力与架构
 
 | 领域 | 已实现能力 |
 | --- | --- |
-| 账号与权限 | 注册、登录、退出、改密；Cookie Session；发布者只能操作自己的问卷与答卷；管理员可禁用/启用账号、下架/恢复问卷并留下审计记录 |
-| 问卷编辑 | 六类基础题型：单选、多选、单行文本、多行文本、数字、评分；草稿保存、发布前校验、复制问卷 |
-| 规则与流程 | 可视化规则/跳题编辑器与文本 DSL 两种写法；条件显示与跳题；电脑/手机草稿预览、分步填写 |
-| 发布与回收 | 不可变发布版本；匿名填写或同账号跨版本限交一次；截止时间、关闭、显式恢复、不可撤销归档 |
-| 提交与报表 | 完整答卷原子写入；UUIDv4 提交秘密与幂等重试；答卷查看、按版本统计、CSV 导出 |
-| 平台治理 | 管理员禁用/启用账号、下架/恢复问卷及审计；治理接口不提供他人的答卷内容 |
-| 运维 | PostgreSQL 迁移、健康检查、OpenAPI JSON |
+| 账号与权限 | 注册、登录、退出、修改密码（全设备会话失效）；HttpOnly Cookie Session；发布者归属隔离；管理员禁用/启用账号、下架/恢复问卷并写入同事务审计 |
+| 问卷编纂 | 单选、多选、单行文本、多行文本、数字、评分六类题型；内置三套带规则模板；乐观锁草稿保存（`revision`）、整卷/单题复制 |
+| 规则与跳题 | 可视化条件构建器与文本 DSL 双向无损切换；计算变量、题目显隐（`visible_if`）、动态必填（`required_if`）、答案约束（`validate`）与前向无环页面分支（`flow`） |
+| 发布与回收 | 不可变发布版本快照；同内容重复发布幂等返回当前版本；公开匿名或同账号跨版本限填一次（`login_once`）；截止时间、手动关闭/恢复、不可撤销归档 |
+| 在线填写与提交 | 桌面/手机预览与内存试填；按规则分步渲染与回退改答自动清理；UUIDv4 提交秘密幂等重放；服务端按历史版本重建有效路径 |
+| 报表与导出 | 按版本与 `[from, to)` 时间范围筛选；区分「已答 / 适用未答 / 规则跳过」三态统计；选项占比、评分稀疏分布、数值均值与自然日趋势；UTF-8 CSV 导出（含电子表格公式注入防护） |
 
-真实接口驱动整个工作台：编辑、预览、公开填写页、答卷统计和平台管理都直接读写业务数据，没有用演示数据替代业务结果。
+### 目录与工作区结构
 
-## 架构概览
-
-根目录是三个成员的 Cargo workspace，加上一个独立的 Vue 3 前端：
-
-```
-frontend/           Vue 3 + TypeScript + Vite + Pinia + Vue Router（pnpm）
-      │  调用入库的 wasm 产物
-logic-wasm/         WASM 边界：入参出参均为 JSON 字符串信封（包名 logic-wasm）
+```text
+frontend/           Vue 3 + TypeScript + Vite + Pinia + Vue Router（固定使用 pnpm）
+      │  调用 frontend/src/wasm/pkg/ 入库产物
+logic-wasm/         WASM 边界：JSON 字符串信封 {"ok":…} / {"error":…}
       │
-logic-core/         纯领域 DSL 与流程核心（包名 questionnaire-logic）
+logic-core/         纯领域 DSL 与流程核心（questionnaire-logic，无 HTTP/DB 依赖）
       │  pub use questionnaire_logic::domain;
-backend/            HTTP JSON API 与业务用例（包名 questionnaire-api）
+backend/            HTTP JSON API、鉴权、事务与持久化（questionnaire-api）
 ```
 
-- `backend/`：HTTP 边界、业务用例与数据访问，通过 `pub use questionnaire_logic::domain;` 再导出领域核心，因此业务代码里的 `questionnaire_api::domain::*` 路径保持不变。
-- `logic-core/`：`domain.rs`、`identity.rs`、`logic.rs`、`logic_document.rs`、`logic_text.rs` + `logic_text.pest`、`flow.rs`，负责表达式、文档规则、流程与文本语法；没有 HTTP/DB 依赖，可编译到 `wasm32-unknown-unknown`。
-- `logic-wasm/`：把领域核心以泛型 `Envelope<T>` 单遍序列化成 JSON 字符串信封 `{"ok":…}` / `{"error":…}`，供浏览器调用。
-- `frontend/`：DSL 规则与流程直接调用 `frontend/src/wasm/index.ts` 包装的入库产物 `frontend/src/wasm/pkg/`，**不再有 TypeScript 镜像实现**；包管理器固定为 pnpm，锁文件是 `frontend/pnpm-lock.yaml`。
+- **单一真源**：表达式编译求值、变量拓扑排序、前向流程状态机与文本 DSL 解析/格式化仅在 `logic-core/` 实现一份。前端不再保留 TypeScript 镜像实现。
+- **更多文档**：[后端开发指南](docs/backend-guide.md)、[前端开发指南](docs/frontend-guide.md)、[DSL 与流程引擎规范](docs/survey-dsl-plan.md)、[需求与架构规格说明](docs/requirements-analysis.md)。
 
-规则引擎只有 `logic-core` 一份实现，前端与后端因而共享同一套表达式、文档和流程语义。范围与验收状态见[需求分析](docs/requirements-analysis.md)，运行与代码阅读见[后端指南](docs/backend-guide.md)和[前端指南](docs/frontend-guide.md)。`frontend/` 下的 `prototype.html` 与 `fluent-prototype.html` 保留为独立风格原型（后者对应当前 Fluent 2 视觉），不被应用引用；实际入口为 `frontend/index.html`。
+---
 
-## 1. 准备环境
+## 2. 环境要求
 
-以下命令使用 **Windows PowerShell**，从**仓库根目录（含 `Cargo.toml`、`.env.example`、`compose.yaml` 的目录）**运行，而不是 `backend/src`。
+| 工具 | 版本要求 | 说明 |
+| --- | --- | --- |
+| Rust / Cargo | **stable ≥ 1.94**（2024 edition） | 根 `Cargo.lock` 锁定依赖版本，命令建议加 `--locked` |
+| C/C++ 编译工具 | MSVC Build Tools + Windows SDK（Windows）或 GCC/Clang | 编译原生依赖（如 `ring`）所需 |
+| PostgreSQL | **PostgreSQL 18** | 唯一持久化存储，无 SQLite 或内存回退模式 |
+| Node.js / pnpm | Node.js `^22.18.0` 或 `>=24.12.0`，**pnpm**（见 `frontend/package.json` 的 `packageManager`） | 仅改前端时直接使用入库的 WASM 产物，无需安装 `wasm-pack` |
 
-| 工具 | 要求 |
-| --- | --- |
-| Rust / Cargo | Rust **1.94 或更新版本**；三个成员都使用 Rust 2024 edition，`rust-version` 声明在各自的 `Cargo.toml`，不能只按 edition 推断编译器版本 |
-| Windows 编译环境 | 安装 Rust MSVC 工具链所需的 Visual Studio C++ Build Tools 和 Windows SDK |
-| PostgreSQL | **PostgreSQL 18**；服务端与 `psql`、`createdb`、`pg_dump`、`pg_restore` 客户端均准备好，并把客户端 `bin` 目录加入 PATH |
-| Node.js / pnpm | Node.js `^22.18.0` 或 `>=24.12.0`（与 `frontend/package.json` 的 `engines` 一致）。前端依赖一律用 pnpm 安装，版本由同文件的 `packageManager` 字段固定，锁文件为 `frontend/pnpm-lock.yaml`（`package-lock.json` 已删除，npm 只用于首次安装 pnpm） |
-| PowerShell | Windows PowerShell 5.1 或 PowerShell 7；中文请求示例显式发送 UTF-8 字节 |
+---
 
-当前锁定的核心依赖为 Axum 0.8.9、SeaORM / sea-orm-migration 2.0.4、SQLx 0.9.0、Tokio 1.53.2，准确版本以 [Cargo.lock](Cargo.lock) 为准，命令加 `--locked` 避免无意更新依赖。路由与 OpenAPI 由 utoipa 6.0.0 / utoipa-axum 0.3.0 统一登记，Cookie 解析与构造使用 cookie 0.18.2，Rust DSL 文法与运算优先级使用 pest / pest_derive 2.9.2。PostgreSQL 18 是本项目的运行基线，并非对所有旧大版本作兼容保证。
+## 3. 快速启动（本地开发与联调）
+
+### 3.1 准备 PostgreSQL 数据库
+
+你可以使用本机已安装的 PostgreSQL 18，或通过仓库根目录的 `compose.yaml` 启动容器数据库。
+
+**方式 A：使用本机 PostgreSQL**
+
+创建专用角色 `questionnaire` 与 UTF-8 数据库 `questionnaire`（若已有可用实例与数据库，直接使用其连接串即可）：
 
 ```powershell
-rustc --version
-cargo --version
-psql --version
-node --version
-pnpm --version
+psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -c "CREATE ROLE questionnaire WITH LOGIN PASSWORD 'change_me';"
+createdb -h 127.0.0.1 -p 5432 -U postgres --owner=questionnaire --encoding=UTF8 --template=template0 --locale=C questionnaire
 ```
 
-本机没有 pnpm 时先安装一次；具体版本由 `frontend/package.json` 的 `packageManager` 字段承担，不需要手工挑选：
+**方式 B：使用 Docker Compose（可选）**
 
 ```powershell
-npm install --global pnpm
+$env:POSTGRES_PASSWORD = 'change_me'
+docker compose up -d db
 ```
 
-## 2. 本机数据库：创建专用账号和空库
+### 3.2 配置环境变量（`.env`）
 
-先启动已安装的 PostgreSQL 服务。下面用安装时的数据库管理员 `postgres` 建账号；`-W` 会交互提示密码，不把密码放进命令行。
-
-```powershell
-psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -W
-```
-
-进入 `psql` 后执行一次；`\password` 会提示输入你自己的新密码：
-
-```sql
-CREATE ROLE questionnaire LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
-\password questionnaire
-\q
-```
-
-回到仓库根目录的 PowerShell，创建由该账号拥有的 UTF-8 空库：
-
-```powershell
-createdb -h 127.0.0.1 -p 5432 -U postgres -W --owner=questionnaire --encoding=UTF8 --template=template0 --locale=C questionnaire
-psql -h 127.0.0.1 -p 5432 -U questionnaire -d questionnaire -W -c "SELECT current_user, current_database();"
-```
-
-应用日常只应使用这个专用账号，不要用超级用户跑服务。如果已有同名账号或数据库，沿用现有的即可，不要重复创建或删除已有数据，并同步调整连接配置。
-
-## 3. 配置、迁移和启动
-
-首次配置时复制模板；已有 `.env` 时直接编辑，不要覆盖：
+在仓库根目录复制 `.env.example` 为 `.env`：
 
 ```powershell
 Copy-Item .env.example .env
-notepad .env
 ```
 
-把 `DATABASE_URL` 的密码换成刚设置的数据库密码。密码若含 `@`、`:`、`/`、`#`、`%` 等字符，必须做 URI 百分号编码。`.env` 含数据库凭据，只保留在本机，不提交、不截图分享。
-
-仅使用 API 时可保留以下默认配置；同时运行前端时，把 `PUBLIC_ORIGIN` 改成 `http://localhost:5173`：
+编辑 `.env`（**与前端联调时，务必将 `PUBLIC_ORIGIN` 设为 `http://localhost:5173`**，否则写请求会因同源 CSRF 校验返回 `403 csrf_rejected`）：
 
 ```dotenv
+DATABASE_URL=postgres://questionnaire:change_me@127.0.0.1:5432/questionnaire
 LISTEN_ADDR=127.0.0.1:3000
-PUBLIC_ORIGIN=http://localhost:3000
+PUBLIC_ORIGIN=http://localhost:5173
 COOKIE_SECURE=false
 SESSION_TTL_SECONDS=86400
 AUTH_REQUESTS_PER_MINUTE=60
@@ -115,31 +88,39 @@ SUBMISSIONS_PER_MINUTE=600
 RUST_LOG=questionnaire_api=info
 ```
 
-应用通过 `dotenvy` 读取根目录 `.env`，已经设置的进程环境变量优先于文件。若连接到了意外的数据库，先检查当前终端是否遗留了 `DATABASE_URL` 环境变量。
+> 进程环境变量优先级高于 `.env` 文件。密码中若包含 `@`、`:`、`/`、`#`、`%` 等特殊字符，需进行 URI 百分号编码。
+
+### 3.3 启动后端 API
+
+在仓库根目录运行：
 
 ```powershell
-# 只执行迁移，然后退出
-cargo run --locked -p questionnaire-api -- migrate
-
-# 启动 HTTP 服务，保持此终端运行；Ctrl+C 停止
 cargo run --locked -p questionnaire-api
 ```
 
-默认子命令是 `serve`，也可写 `cargo run --locked -p questionnaire-api -- serve`。**服务启动本身会先运行迁移**，因此不必每次手工执行 `migrate`，迁移版本由 SeaORM 记录。数据库不可达或配置不合法会直接报错，不会自动创建数据库，也没有内存存储或 SQLite 回退。
+- 默认执行 `serve` 子命令，监听 `LISTEN_ADDR`（默认 `127.0.0.1:3000`）。
+- **每次启动会自动执行数据库迁移**（建表定义唯一位于 `backend/src/schema.sql`）。若只需执行迁移后立即退出，可运行 `cargo run --locked -p questionnaire-api -- migrate`。
+- 健康检查与 OpenAPI 文档：
+  - `GET http://localhost:3000/health` → `{"status":"ready"}`
+  - `GET http://localhost:3000/api/openapi.json` → OpenAPI 3.1 JSON
 
-另开一个仍在仓库根目录的 PowerShell 验证：
+### 3.4 创建与登录管理员账号
+
+公开注册接口（`/register`）只能创建普通用户（`user`）。管理员账号通过后端 `create-admin` 子命令初始化：
 
 ```powershell
-Invoke-RestMethod http://localhost:3000/health
-$OpenApi = Invoke-RestMethod http://localhost:3000/api/openapi.json
-$OpenApi.info
+$env:ADMIN_USERNAME = 'admin'
+$env:ADMIN_PASSWORD = 'your_strong_password'
+cargo run --locked -p questionnaire-api -- create-admin
+Remove-Item Env:ADMIN_USERNAME, Env:ADMIN_PASSWORD
 ```
 
-`/health` 成功应返回 `status = ready`，含义是数据库连接就绪。完整可复制的请求流程在[后端指南：PowerShell 最小真实闭环](docs/backend-guide.md#1-powershell-最小真实闭环)。
+- **如何登录管理员**：管理员与普通用户使用**同一个前端登录页**（`http://localhost:5173/login`）或登录接口（`POST /api/auth/login`）。
+- 登录成功后，左侧导航栏会自动出现 **「平台管理」**（`/admin`）入口，可执行账号禁用/启用、问卷下架/恢复及查看治理审计记录。
 
-### 3.1 启动前端 MVP
+### 3.5 启动前端工作台
 
-在根目录 `.env` 设置 `PUBLIC_ORIGIN=http://localhost:5173`、`COOKIE_SECURE=false`，然后启动或重启后端。另开 PowerShell，在仓库根目录运行：
+另开终端进入 `frontend/`：
 
 ```powershell
 Set-Location frontend
@@ -147,115 +128,65 @@ pnpm install --frozen-lockfile
 pnpm run dev
 ```
 
-打开 **http://localhost:5173**，注册账号后即可创建、编辑、发布问卷。发布后的填写链接为 `/s/:id`，可复制给填写者；后端响应里的 `share_url` 仍是公开 JSON 接口路径。管理员初始化沿用第 4 节，登录后会显示“平台管理”。
+浏览器访问 **http://localhost:5173** 即可使用完整工作台。
 
-开发服务器固定使用 `localhost:5173`，把 `/api` 代理到 `http://127.0.0.1:3000`，并保留浏览器的 `Origin` 和 Cookie。后端使用其他地址时，可复制 `frontend/.env.example` 为 `frontend/.env` 并修改 `API_PROXY_TARGET`，或在运行 `pnpm run dev` 的终端设置该环境变量；它只由 Vite 服务器读取，不要把密钥放进 `VITE_` 变量。
+- Vite 开发服务器固定监听 `localhost:5173`（`strictPort: true`），并将 `/api` 同源代理至 `http://127.0.0.1:3000`（可通过 `frontend/.env` 中的 `API_PROXY_TARGET` 覆盖后端地址）。
+- 请全程统一使用 `http://localhost:5173` 访问前端，勿混用 `127.0.0.1:5173`，以确保 `Origin` 请求头与 `PUBLIC_ORIGIN` 严格匹配。
 
-构建与本机预览也在 `frontend/` 中执行：
+---
+
+## 4. 生产构建与部署指南
+
+### 4.1 构建前后端产物
 
 ```powershell
+# 1. 构建后端 Release 二进制（单 codegen 单元 + fat LTO + strip symbols）
+cargo build --release --locked -p questionnaire-api
+# 产物路径：target/release/questionnaire-api（Windows 下为 questionnaire-api.exe）
+
+# 2. 构建前端静态资源（含 vue-tsc 类型检查）
+Set-Location frontend
+pnpm install --frozen-lockfile
 pnpm run build
-# 先停止 pnpm run dev，避免占用同一端口
-pnpm run preview
+# 产物路径：frontend/dist/
 ```
 
-`build` 包含 TypeScript 检查，生成 `frontend/dist/`；`preview` 使用相同的 `5173` 端口与 API 代理，仍需运行后端及数据库。前端不由 Rust 服务托管，直接双击 `dist/index.html` 也用不了实际应用。更多页面结构与调试说明见[前端指南](docs/frontend-guide.md)。
+若仅在本机预览打包后的前端产物，可先停止 `pnpm run dev`，在 `frontend/` 下执行 `pnpm run preview`（同样监听 `http://localhost:5173` 并代理 `/api`）。
 
-## 4. 按需初始化管理员
+### 4.2 生产环境部署拓扑与配置
 
-普通注册不能指定管理员角色。下面的命令**只新建管理员，不会升级或覆盖已有账号**。仍在仓库根目录运行，用交互凭据窗口输入密码，避免密码出现在命令历史或进程参数里：
+生产环境推荐通过 **Nginx / Caddy 等反向代理**统一对外提供 HTTPS 服务，将前端静态产物与后端 API 置于同一 Origin 下：
 
-```powershell
-$AdminCredential = Get-Credential -UserName admin_bootstrap -Message '输入新管理员用户名及密码（密码 8—128 个字符）'
-$env:ADMIN_USERNAME = $AdminCredential.UserName
-$env:ADMIN_PASSWORD = $AdminCredential.GetNetworkCredential().Password
-try {
-    cargo run --locked -p questionnaire-api -- create-admin
-    if ($LASTEXITCODE -ne 0) { throw '管理员创建失败，请查看上方错误' }
-} finally {
-    Remove-Item Env:ADMIN_USERNAME, Env:ADMIN_PASSWORD
-    Remove-Variable AdminCredential
-}
-```
+1. **反向代理路由**：
+   - `/api/*` 與 `/health` 反向代理至后端 `http://127.0.0.1:3000`，并透传 `Host`、`Origin`、`Cookie` 与 `X-CSRF-Protection` 请求头。
+   - 其余路径托管 `frontend/dist/` 静态文件，并对 history 路由配置 `try_files $uri $uri/ /index.html` 回退。
+2. **后端生产环境变量**：
+   - `PUBLIC_ORIGIN=https://survey.example.com`（精确填写对外 HTTPS 裸 origin，无路径、无末尾 `/`）。
+   - `COOKIE_SECURE=true`（HTTPS 环境必须开启，确保 Session Cookie 仅经加密通道传输）。
+   - `DATABASE_URL=postgres://...`（使用最小权限专用数据库账号，勿使用超级用户）。
 
-环境变量仅供这次进程读取，不要长期写进 `.env`。管理员通过同一个 `/api/auth/login` 登录；改密会撤销该账号的**所有旧 Session，包括当前 Session**，所有设备都需要重新登录。
+---
 
-## 5. 可选：用 Compose 提供本机数据库
+## 5. 安全与业务边界
 
-[compose.yaml](compose.yaml) **只提供 PostgreSQL 18，不启动 Rust 后端**。这条路径要求 Docker Engine / Docker Desktop 与 Compose 插件；当前开发机器没有 Docker，**Compose 启动路径未在本机运行验证**。
+- **同源 CSRF 防护**：所有非 `GET`/`HEAD`/`OPTIONS` 请求必须满足 `Origin == PUBLIC_ORIGIN` 且携带 `X-CSRF-Protection: 1`；服务端不开启跨域 CORS，所有响应默认附带 `Cache-Control: no-store` 与 `X-Content-Type-Options: nosniff`。
+- **固定窗口限流**：`AUTH_REQUESTS_PER_MINUTE`（认证写接口）与 `SUBMISSIONS_PER_MINUTE`（公开提交接口）为单实例全局计数，用于基础防滥用，不按 IP 识别自然人。
+- **隐私边界**：`anonymous` 模式绝不解析 Cookie、不记录账号关联；`login_once` 模式在库内记录填写者账号 ID 以执行跨版本唯一约束，但发布者的答卷列表、详情、统计和 CSV 导出均不暴露填写者身份。管理员治理接口仅可查看问卷元数据与已发布题面，不可读取他人答卷内容。
 
-不要与本机 PostgreSQL 同时占用 `5432`。启动前必须预设 `POSTGRES_PASSWORD`：
+---
 
-```powershell
-$DatabaseCredential = Get-Credential -UserName questionnaire -Message '设置容器中 questionnaire 数据库账号的密码'
-$env:POSTGRES_PASSWORD = $DatabaseCredential.GetNetworkCredential().Password
-try {
-    docker compose up -d db
-    if ($LASTEXITCODE -ne 0) { throw 'Compose 启动失败' }
-    docker compose ps
-} finally {
-    Remove-Item Env:POSTGRES_PASSWORD
-    Remove-Variable DatabaseCredential
-}
-```
+## 6. 开发检查与编译配置
 
-把 `.env` 的 `DATABASE_URL` 配成同一账号、密码、数据库和 `127.0.0.1:5432`，再按第 3 节启动后端。数据库用命名卷保存，已有卷时改变 `POSTGRES_PASSWORD` **不会重置库内密码**；需要解析 Compose 文件的命令仍要按上面的方式提供该变量。不要用删除卷来“修复”密码或连接问题，卷里可能已有答卷。
+按实际改动范围执行对应门禁：
 
-## 6. 安全与使用边界
+| 改动范围 | 必跑检查命令 |
+| --- | --- |
+| Rust 代码（`backend/`、`logic-core/`、`logic-wasm/`） | `cargo test --locked --workspace`<br>`cargo clippy --locked --workspace --all-targets -- -D warnings`<br>`cargo fmt --all -- --check` |
+| 前端代码（`frontend/`） | `pnpm run test:regression`<br>`pnpm run typecheck`（或 `pnpm run build`）<br>`pnpm run format:check` |
+| 修改 `logic-core/` 或 `logic-wasm/` 后同步前端 | 在 `frontend/` 执行 `pnpm run wasm:build`（需 `wasm32-unknown-unknown` target 与 `wasm-pack`），再跑两端回归测试 |
 
-- 所有写请求（包括注册、登录和匿名提交）都要求 `Origin` 精确等于 `PUBLIC_ORIGIN`，并带 `X-CSRF-Protection: 1`。使用 `localhost` 就全程使用 `localhost`，不要与 `127.0.0.1` 混用 Cookie 域名。
-- `.env.example` 里的 HTTP 与 `COOKIE_SECURE=false` **仅用于本机开发**。非本机部署必须使用 HTTPS，设置 `COOKIE_SECURE=true`，并把 `PUBLIC_ORIGIN` 设为真实的 HTTPS origin（无路径、无末尾 `/`）。当前 Rust 服务自身监听 HTTP；HTTPS/TLS 终止、反向代理与应用容器镜像不在项目范围内。
-- 不开放跨域 CORS。前端开发及本机预览通过 Vite 同源代理访问 `/api`，来源校验始终开启。
-- 限流是**单个服务实例的全局固定窗口**：`AUTH_REQUESTS_PER_MINUTE` 覆盖 `/api/auth/` 的写请求，`SUBMISSIONS_PER_MINUTE` 覆盖公开提交。它不是 IP 或账号身份限流，不实现严格一人一票，也不是多实例共享限流。
-- 匿名模式不关联账号，但不承诺不可追踪，公开链接不等于保密访问控制；数据库运维权限与应用管理员权限是两回事。
-- 答卷、CSV 与数据库备份含调查数据，须限制访问并安全保存；备份恢复操作及核对方法见[后端指南](docs/backend-guide.md#6-备份与独立恢复)。
-- 性能压测和面向公众长期运营的隐私合规交付不在当前范围内。
-
-## 7. 开发检查
-
-检查按改动范围执行对应端的必跑门禁：同一份代码已经通过的门禁结果直接复用，commit、改分支和纯文档整理不触发重跑。测试保护当前业务契约与已确认缺陷，不按文件或函数数量补覆盖，纯前端改动不跑 Rust，纯后端改动不跑前端。
-
-| 改动范围 | 对应检查 |
-|---|---|
-| 文档、注释、纯样式 | 审阅差异；样式按需核对受影响页面 |
-| 前端纯逻辑或测试 | 在 `frontend/` 运行相关文件，例如 `pnpm run test:regression tests/editor.test.mjs` |
-| Vue 组件或类型 | 按需运行 `pnpm run typecheck`；交互变化核对相关页面 |
-| 前端依赖、打包或懒加载 | `pnpm run build` 已含类型检查，无需再跑 typecheck |
-| Rust 领域逻辑或测试 | 从根目录运行相关目标，例如 `cargo test --locked -p questionnaire-api --test domain` |
-| HTTP、权限或 SQL 行为 | 核对受影响的真实服务路径 |
-| 共享 DSL 契约 | 运行受影响的两端测试，避免预览与服务端语义分离 |
-| wasm 产物重建（`logic-core/` 或 `logic-wasm/`） | 在 `frontend/` 运行 `pnpm run wasm:build` 重建并同步产物（需 Rust 工具链 + `wasm32-unknown-unknown` target + wasm-pack 0.15），再跑受影响的两端测试；只改前端时无需 Rust，直接用 `frontend/src/wasm/pkg/` 里入库的产物 |
-
-影响跨越多个模块时运行所属端的完整测试：Rust 为 `cargo test --locked --workspace`，前端为 `pnpm run test:regression`。修改 Rust 代码时必须运行 `cargo clippy --locked --workspace --all-targets -- -D warnings` 并对改动文件执行 `rustfmt --edition 2024`；修改前端代码时必须运行 `pnpm run typecheck`（或 `pnpm run build`）并对改动文件执行 `pnpm exec prettier --write`。
-
-Rust 的四个测试目标位于 `backend/tests/`：`domain` 约束题型与规范化，`logic` 约束表达式与变量依赖，`flow` 约束路径、身份复制和最终提交，`logic_text` 约束文本解析。它们都不启动数据库，也不需要环境变量。
-
-前端使用 Node 内置运行器自动发现 `frontend/tests/`，命令后传文件路径即可缩小范围，无需维护脚本内的文件清单。后端测试与前端（经 wasm 引擎）共用 [fixtures/survey-logic](fixtures/survey-logic) 中的人工期望：DSL 语义只有 `logic-core` 一份实现，共享样例用于确认两端边界一致；流程行为集中在共享样例，编辑器测试只补配置转换与同步等自身行为。`logic-wasm/tests/smoke.rs` 在原生目标覆盖同一 JSON 信封边界，随 `cargo test --locked --workspace` 一起执行。项目没有新增测试框架或自动提交钩子。
-
-历史验证结果见[需求与验证记录](docs/requirements-analysis.md)，其中的全量命令和通过数量是当时的实施记录，不是后续修改必须重复的清单。
-
-DSL 与流程引擎的[实施计划](docs/survey-dsl-plan.md)已完成，并在 2026-10-12 统一为 wasm 单实现：表达式、文档编译、流程与文本解析只有 `logic-core` 一份代码，`logic-wasm` 以 JSON 信封导出，`frontend/src/wasm/pkg/` 的产物入库，前端不再有 TS 镜像实现；文本语法契约见[实施计划](docs/survey-dsl-plan.md#文本语法契约阶段-6)。服务端重建有效路径，支持原提交载荷的幂等重放，并在详情、统计与 CSV 中区分跳过和未答。筛选结束的持久化策略、重复组和子流程仍留待后续，无规则问卷保持单页行为。当前尚无正式发布版本，后续开发不承担历史答卷或旧格式兼容要求。
-
-两端的[输入契约回归](fixtures/survey-logic/input-contracts.json)固定 Unicode 空白和配置 UUID 的接受集：U+0085 是空白，U+FEFF 是内容；配置 UUID 必须非零、小写、带连字符。
-
-### 7.1 编译速度配置
-
-根 `Cargo.toml` 的 profile 与 `.cargo/config.toml` 的别名用于调整编译耗时和产物；release 还把 panic 策略改为直接终止进程。默认工具链仍是 stable：
-
-```powershell
-cargo build --locked -p questionnaire-api            # 开发构建：自己的代码 O0，依赖 O3
-cargo build --release --locked -p questionnaire-api   # 发布构建：单 codegen 单元 + fat LTO + strip
-```
-
-- `dev`：自己的代码 `opt-level = 0`，第三方依赖 `opt-level = 3`。依赖几乎不改动，只有首次冷编译更慢；之后改业务代码的增量编译不受影响，同时 dev 下依赖（JSON、数据库、模板）的运行速度接近发布版。dev 保留 debuginfo，`gdb`/`lldb` 与 backtrace 照常可用。
-- `release`：`opt-level = 3`、`codegen-units = 1`、`lto = "fat"` 换跨 crate 内联与死代码消除，`strip = "symbols"` 减体积，`panic = "abort"` 禁用 panic 栈展开。本机全量冷构建实测约 5 分钟，与不开 LTO 的旧配置持平，产物从 13.7 MB 降到 6.87 MB。发生 panic 时会直接终止进程，Tokio 任务边界与 `catch_unwind` 均无法恢复；第 7 节的普通测试使用 unwind 策略，通过测试不能验证 release 的 panic 行为。
-- 需要更快的开发期反馈时，可以临时切到 nightly 的 Cranelift 后端（省掉 LLVM 优化管线，机器码更慢但语义等价）：
-
-```powershell
-rustup toolchain install nightly --component rustc-codegen-cranelift-preview
-cargo +nightly cranelift -p questionnaire-api
-```
-
-Cranelift 别名内置 `--locked`，只作开发期可选路径，不写进 `rust-toolchain.toml`：默认的 `cargo build`、`cargo test`、`cargo clippy` 与发布构建仍使用 stable + LLVM。第一次在某个 `target/` 目录里用它要重建依赖（本机实测 222 个 crate、6 分 07 秒），之后两套产物并存，来回切换几乎不花时间（实测切回 stable 重编 0 个 crate、约 2 秒），`cargo clean` 后会重新付这 6 分钟。依赖里含 C 代码（`ring`，由 `sqlx` 的 rustls 特性引入）时，Cranelift 只作用于 Rust 代码，C 部分仍由系统编译器构建。
-
-`.cargo/config.toml` 还把 cargo 子进程（build script、cc-rs、`cl.exe`）的 `TMP`/`TEMP` 固定到工作区内的 `target/`（用 `relative = true`，不写死盘符）：TMP/TEMP 指向 cargo 子进程写不了的位置（例如工作区外的目录或根本不存在的目录）时，编译 C 依赖会报 `error D8050: 无法执行 c1.dll`。临时目录需要放在别处时改这一处即可。
+- **无需数据库即可跑单测**：`cargo test --locked --workspace`（含 `domain`、`logic`、`flow`、`logic_text` 四个测试目标与 `logic-wasm` 冒烟测试）及前端 `pnpm run test:regression`（21 项 Node 测试，加载真实入库 WASM 并共读 `fixtures/survey-logic/`）均在内存中完成，不依赖外部数据库。
+- **编译调优（根 `Cargo.toml` 与 `.cargo/config.toml`）**：
+  - `dev` profile 对工作区自身代码使用 `opt-level = 0`，对第三方依赖使用 `opt-level = 3`，兼顾增量编译速度与依赖运行性能。
+  - `release` profile 启用 `opt-level = 3`、`codegen-units = 1`、`lto = "fat"`、`strip = "symbols"` 与 `panic = "abort"`。
+  - 若本机安装了 nightly 与 `rustc-codegen-cranelift-preview`，开发期可使用 `cargo +nightly cranelift -p questionnaire-api` 获得更快的单 crate 增量编译；正式检查与发布仍使用默认 stable + LLVM。
