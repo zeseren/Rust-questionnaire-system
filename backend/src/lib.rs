@@ -13,6 +13,8 @@ mod repository;
 mod security;
 mod submissions;
 mod surveys;
+#[cfg(test)]
+mod tests;
 
 use crate::{
     config::Config,

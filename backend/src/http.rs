@@ -70,10 +70,10 @@ impl<T: DeserializeOwned + Send> FromRequestParts<AppState> for ApiPath<T> {
 pub(crate) struct Pagination {
     /// 页码，从 1 开始。
     #[serde(default, deserialize_with = "optional_u64")]
-    pub page: Option<u64>,
+    pub(crate) page: Option<u64>,
     /// 每页 1..=100 条，默认 20。
     #[serde(default, deserialize_with = "optional_u64")]
-    pub page_size: Option<u64>,
+    pub(crate) page_size: Option<u64>,
 }
 
 // 查询 DTO 用 flatten 嵌入 Pagination 时，Serde 先把值缓冲成字符串，
@@ -149,57 +149,5 @@ impl<T: ToSchema> Page<T> {
             page: bounds.page,
             page_size: bounds.page_size,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{PageBounds, Pagination};
-
-    fn pagination(page: Option<u64>, page_size: Option<u64>) -> Pagination {
-        Pagination { page, page_size }
-    }
-
-    #[test]
-    fn 默认分页从第一页开始且每页二十条() {
-        assert_eq!(
-            pagination(None, None).bounds().expect("默认分页合法"),
-            PageBounds {
-                page: 1,
-                page_size: 20,
-                offset: 0,
-                limit: 20,
-            }
-        );
-    }
-
-    #[test]
-    fn 分页参数按一与一百的边界换算偏移() {
-        assert_eq!(
-            pagination(Some(5), Some(100)).bounds().expect("上界合法"),
-            PageBounds {
-                page: 5,
-                page_size: 100,
-                offset: 400,
-                limit: 100,
-            }
-        );
-        assert_eq!(
-            pagination(Some(1), Some(1)).bounds().expect("下界合法"),
-            PageBounds {
-                page: 1,
-                page_size: 1,
-                offset: 0,
-                limit: 1,
-            }
-        );
-    }
-
-    #[test]
-    fn 非法页码与页大小被拦截() {
-        assert!(pagination(Some(0), Some(20)).bounds().is_err());
-        assert!(pagination(Some(1), Some(0)).bounds().is_err());
-        assert!(pagination(Some(1), Some(101)).bounds().is_err());
-        assert!(pagination(Some(u64::MAX), Some(100)).bounds().is_err());
     }
 }

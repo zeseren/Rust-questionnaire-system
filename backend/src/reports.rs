@@ -948,7 +948,7 @@ fn encode_csv(
         .map_err(|error| AppError::internal(error))
 }
 
-fn formula_safe(value: &str) -> Cow<'_, str> {
+pub(crate) fn formula_safe(value: &str) -> Cow<'_, str> {
     // 只检查前缀，不删除用户原文。除了空白和控制字符，还覆盖 BOM 与常见不可见格式符。
     let visible = value.trim_start_matches(|ch: char| {
         ch.is_whitespace()
@@ -962,61 +962,5 @@ fn formula_safe(value: &str) -> Cow<'_, str> {
         Cow::Owned(format!("'{value}"))
     } else {
         Cow::Borrowed(value)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::formula_safe;
-    use crate::entities::SurveyStatus;
-    use chrono::{Duration, Utc};
-    use std::borrow::Cow;
-
-    #[test]
-    fn 普通文本直接借用不分配() {
-        assert!(matches!(formula_safe("答卷标题"), Cow::Borrowed(_)));
-        assert!(matches!(formula_safe(""), Cow::Borrowed(_)));
-        assert!(matches!(formula_safe("a=b"), Cow::Borrowed(_)));
-    }
-
-    #[test]
-    fn 公式前缀与前导不可见字符被加单引号() {
-        assert_eq!(formula_safe("=SUM(A1)"), "'=SUM(A1)");
-        assert_eq!(formula_safe("+1"), "'+1");
-        assert_eq!(formula_safe("-1"), "'-1");
-        assert_eq!(formula_safe("@cmd"), "'@cmd");
-        assert_eq!(formula_safe(" \t=1"), "' \t=1");
-        assert_eq!(formula_safe("\u{feff}-2"), "'\u{feff}-2");
-    }
-
-    #[test]
-    fn 到期问卷在读取时视为已关闭() {
-        let now = Utc::now();
-        let past = now - Duration::seconds(1);
-        let future = now + Duration::seconds(60);
-        assert_eq!(
-            SurveyStatus::Collecting.effective(Some(past), now),
-            SurveyStatus::Closed
-        );
-        assert_eq!(
-            SurveyStatus::Collecting.effective(Some(future), now),
-            SurveyStatus::Collecting
-        );
-        assert_eq!(
-            SurveyStatus::Collecting.effective(None, now),
-            SurveyStatus::Collecting
-        );
-        assert_eq!(
-            SurveyStatus::Closed.effective(Some(past), now),
-            SurveyStatus::Closed
-        );
-        assert_eq!(
-            SurveyStatus::Unpublished.effective(Some(past), now),
-            SurveyStatus::Unpublished
-        );
-        assert_eq!(
-            SurveyStatus::Archived.effective(Some(past), now),
-            SurveyStatus::Archived
-        );
     }
 }
