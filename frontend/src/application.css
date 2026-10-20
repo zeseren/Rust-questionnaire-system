@@ -1,4 +1,9 @@
 /* 业务界面沿用「纸本与松烟墨」编辑部质感：暖灰微边框、衬线标题与等宽数字。 */
+/*
+ * [入口在哪] 独立填写/预览页由公共顶栏进入，底部固定栏承载推进操作
+ * [用户在第 1 步后悔了怎么删/退] 固定底栏左侧常驻返回/重置/取消逃生口，公共顶栏可退回工作台
+ * [主提交通道在哪] 固定底栏右侧的唯一主按钮
+ */
 button,
 input,
 select,
@@ -105,6 +110,7 @@ a:hover {
 .accent {
   color: var(--accent);
 }
+/* 静态红色警告文本（span/p）保持朱红；按钮上的幽灵破坏态由 styles.css 更高特异性规则接管 */
 .danger-text {
   color: var(--rose);
 }
@@ -136,12 +142,16 @@ a:hover {
   width: 17px;
   height: 17px;
 }
+/* Rule 3：破坏性按钮静止态保持低饱和，悬停/聚焦才转为朱砂色，避免误触主 CTA */
 .button-danger {
-  border-color: var(--rose);
-  color: var(--rose);
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
 }
-[data-theme='dark'] .button-danger {
+.button-danger:hover:not(:disabled),
+.button-danger:focus-visible:not(:disabled) {
   border-color: var(--rose);
+  background: var(--rose-soft);
   color: var(--rose);
 }
 .button-block {
@@ -361,6 +371,21 @@ a:hover {
 }
 .public-header .brand {
   padding: 0;
+}
+/* Rule 1：预览页顶栏固定，实体状态与唯一主操作常驻可见 */
+.preview-toolbar {
+  position: sticky;
+  top: 56px;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: color-mix(in srgb, var(--bg-canvas) 94%, transparent);
+  backdrop-filter: blur(8px);
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-hairline);
 }
 .auth-layout {
   max-width: 1040px;
@@ -758,16 +783,41 @@ a:hover {
   font-size: 12px;
   color: var(--text-secondary);
 }
+/*
+ * Rule 1 & 2：填写/预览页底部固定栏。左侧常驻逃生口、重置与进度提示，
+ * 右侧只放唯一主 CTA；滚动时吸附底部，任何一步都能退出或提交。
+ */
 .fill-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 12;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
   margin-top: 18px;
   padding: 18px 24px;
-  background: var(--bg-subtle);
+  background: color-mix(in srgb, var(--bg-surface) 94%, transparent);
+  backdrop-filter: blur(8px);
   border: 1px solid var(--border-hairline);
+  border-top: 1px solid var(--border-default);
   border-radius: var(--radius-md);
+  box-shadow: 0 -4px 16px rgba(18, 18, 16, 0.05);
+}
+.fill-footer-left,
+.fill-footer-right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.fill-footer-left {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.fill-footer-right {
+  margin-left: auto;
+  justify-content: flex-end;
 }
 .fill-footer .button {
   min-width: 136px;
@@ -1174,6 +1224,13 @@ tbody tr:hover {
     align-items: flex-start;
     flex-direction: column;
     padding: 16px;
+  }
+  .fill-footer-left,
+  .fill-footer-right {
+    width: 100%;
+  }
+  .fill-footer-right {
+    margin-left: 0;
   }
   .fill-footer .button {
     width: 100%;

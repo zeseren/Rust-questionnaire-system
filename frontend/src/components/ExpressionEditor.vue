@@ -1,3 +1,6 @@
+<!-- [入口在哪] 变量、规则条件或流程分支切换到「高级表达式」后，在此逐层编辑 AST。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 每个子条件右侧常驻低饱和「删除条件」幽灵按钮，悬停变红；切换顶层表达式类型即可整体重建。 -->
+<!-- [主提交通道在哪] 表达式编辑不设主按钮，修改即时写回模型；保存与发布由编辑器顶部固定栏统一承担。 -->
 <!-- 每次编辑替换 AST 节点，数字常量保留原文，引用始终绑定稳定身份。 -->
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
@@ -304,7 +307,7 @@ function inputValue(event: Event) {
             <span class="hint">条件 {{ index + 1 }}</span>
             <button
               type="button"
-              class="text-button"
+              class="text-button danger-text"
               :disabled="locked"
               @click="
                 update(

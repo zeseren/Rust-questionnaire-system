@@ -1,3 +1,6 @@
+<!-- [入口在哪] 编辑器「题目设计」工作区逐题渲染，也可从右侧「题目大纲」定位到指定题目卡片。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 每张题目卡片工具栏最右侧常驻「删除题目」幽灵按钮，悬停变红；删除前由编辑器父级弹窗确认，误删可放弃修改。 -->
+<!-- [主提交通道在哪] 题目卡片内不设主按钮；保存与发布统一由编辑器顶部固定栏承担，卡片内「设置规则」为次级操作。 -->
 <!-- 题型配置按契约编辑，服务器负责草稿容量和发布规则的最终校验。 -->
 <script setup lang="ts">
 import { newQuestion, TEXT_ANSWER_LIMITS } from '../documents'
@@ -140,6 +143,7 @@ function setRatingMax(event: Event) {
         <button
           type="button"
           class="icon-button danger-text"
+          style="margin-left: 8px"
           :aria-label="`删除第 ${index + 1} 题`"
           @click="$emit('remove')"
         >
@@ -161,7 +165,7 @@ function setRatingMax(event: Event) {
           <input :id="option.id" v-model="option.label" :placeholder="`选项 ${optionIndex + 1}`" />
           <button
             type="button"
-            class="icon-button"
+            class="icon-button danger-text"
             :aria-label="`删除选项 ${optionIndex + 1}`"
             @click="question.options.splice(optionIndex, 1)"
           >

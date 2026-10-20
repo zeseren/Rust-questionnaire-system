@@ -1,10 +1,13 @@
+<!-- [入口在哪] 登录后首页与归档页的问卷卡片行，卡片底部操作列直接管理该问卷生命周期。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 草稿卡片行内常驻「删除草稿」幽灵按钮（悬停变红 + 二次确认）；已发布卡片行内可直接关闭/恢复回收或归档，无需进入编辑器第 4 步。 -->
+<!-- [主提交通道在哪] 页头「新建问卷」是唯一主按钮；空态按钮降级为次级，创建弹窗内右侧单独承载「创建草稿」。 -->
 <!-- 列表和状态总数来自 API，不用示例答卷数填充界面。 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { api, message, query } from '../api'
 import { useResource } from '../resource'
-import { dateTime, statusNames } from '../format'
+import { dateTime, shareLink, statusNames } from '../format'
 import { useNotice } from '../stores'
 import type { Page, Status, SurveyDetail, SurveySummary } from '../types'
 import Icon from '../components/Icon.vue'
@@ -111,6 +114,58 @@ async function duplicate(id: string) {
     actionError.value = message(error)
   } finally {
     busy.value = false
+  }
+}
+type CardAction = 'delete' | 'close' | 'resume' | 'archive'
+const pendingAction = ref<{ survey: SurveySummary; action: CardAction } | null>(null)
+const actionNames: Record<CardAction, string> = {
+  delete: '删除草稿',
+  close: '关闭回收',
+  resume: '恢复回收',
+  archive: '归档问卷',
+}
+const actionDescriptions: Record<CardAction, string> = {
+  delete: '这份未发布草稿将被永久删除，无法恢复。',
+  close: '关闭后停止接收新答卷，已有答卷和统计仍然保留。',
+  resume: '恢复后重新接受当前版本的答卷。请确认截止时间尚未到达。',
+  archive: '归档不可撤销。归档后不能编辑或再次发布，历史答卷和统计仍可查看。',
+}
+// Rule 1：卡片行只在该状态确有可执行操作时渲染操作列，避免归档卡片出现空行。
+function hasCardActions(survey: SurveySummary) {
+  return survey.status !== 'archived'
+}
+function confirmAction(survey: SurveySummary, act: CardAction) {
+  if (busy.value) return
+  actionError.value = ''
+  pendingAction.value = { survey, action: act }
+}
+function closeAction() {
+  pendingAction.value = null
+  actionError.value = ''
+}
+async function performAction() {
+  if (!pendingAction.value || busy.value) return
+  const { survey, action: act } = pendingAction.value
+  busy.value = true
+  actionError.value = ''
+  try {
+    if (act === 'delete') await api(`/api/surveys/${survey.id}`, 'DELETE')
+    else await api<SurveyDetail>(`/api/surveys/${survey.id}/${act}`, 'POST')
+    notice.show(act === 'delete' ? '草稿已删除。' : `${actionNames[act]}成功。`)
+    pendingAction.value = null
+    refresh()
+  } catch (error) {
+    actionError.value = message(error)
+  } finally {
+    busy.value = false
+  }
+}
+async function copySurveyLink(survey: SurveySummary) {
+  try {
+    await navigator.clipboard.writeText(shareLink(survey.id))
+    notice.show('填写链接已复制。')
+  } catch {
+    notice.show('请选中链接后手动复制。')
   }
 }
 </script>
@@ -250,7 +305,7 @@ async function duplicate(id: string) {
             </span>
             <button
               class="icon-button card-more"
-              :aria-label="`复制${survey.title || '无标题问卷'}`"
+              :aria-label="`复制问卷：${survey.title || '无标题问卷'}`"
               title="复制问卷"
               :disabled="busy"
               @click="duplicate(survey.id)"
@@ -290,6 +345,52 @@ async function duplicate(id: string) {
             <span class="meta-dot">·</span>
             <span>修订 {{ survey.revision }}</span>
           </div>
+          <div v-if="hasCardActions(survey)" class="card-actions">
+            <button
+              v-if="!survey.current_version_id"
+              type="button"
+              class="text-button danger-text"
+              :disabled="busy"
+              @click="confirmAction(survey, 'delete')"
+            >
+              删除草稿
+            </button>
+            <button
+              v-if="survey.current_version_id"
+              type="button"
+              class="text-button"
+              @click="copySurveyLink(survey)"
+            >
+              复制链接
+            </button>
+            <button
+              v-if="survey.status === 'collecting'"
+              type="button"
+              class="text-button"
+              :disabled="busy"
+              @click="confirmAction(survey, 'close')"
+            >
+              关闭回收
+            </button>
+            <button
+              v-if="survey.status === 'closed' && !survey.taken_down"
+              type="button"
+              class="text-button"
+              :disabled="busy"
+              @click="confirmAction(survey, 'resume')"
+            >
+              恢复回收
+            </button>
+            <button
+              v-if="survey.current_version_id && survey.status !== 'archived'"
+              type="button"
+              class="text-button danger-text"
+              :disabled="busy"
+              @click="confirmAction(survey, 'archive')"
+            >
+              归档
+            </button>
+          </div>
           <div class="card-footer">
             <RouterLink
               class="draft-footer"
@@ -308,9 +409,7 @@ async function duplicate(id: string) {
         <p>
           {{ keyword || filter ? '试试其他关键词或问卷状态。' : '创建问卷，收集你关心的答案。' }}
         </p>
-        <button v-if="!keyword && !filter" class="button button-primary" @click="openCreate">
-          新建问卷
-        </button>
+        <button v-if="!keyword && !filter" class="button" @click="openCreate">新建问卷</button>
       </div>
       <Pagination
         :page="page"
@@ -343,7 +442,7 @@ async function duplicate(id: string) {
             : '创建后可添加题目、配置规则并选择回收方式。'
         }}
       </p>
-      <div class="actions end">
+      <div class="actions between">
         <button type="button" class="button" :disabled="busy" @click="creating = false">
           取消
         </button>
@@ -352,5 +451,32 @@ async function duplicate(id: string) {
         </button>
       </div>
     </form>
+  </Modal>
+  <Modal
+    v-if="pendingAction"
+    :title="actionNames[pendingAction.action]"
+    :dismissible="!busy"
+    @close="closeAction"
+  >
+    <ErrorNotice :message="actionError" />
+    <p class="subtle mb">{{ actionDescriptions[pendingAction.action] }}</p>
+    <p class="subtle mb">问卷：{{ pendingAction.survey.title || '无标题问卷' }}</p>
+    <div class="actions between">
+      <button class="button" :disabled="busy" @click="closeAction">取消</button>
+      <button
+        class="button"
+        :class="
+          pendingAction.action === 'delete' ||
+          pendingAction.action === 'archive' ||
+          pendingAction.action === 'close'
+            ? 'button-danger'
+            : 'button-primary'
+        "
+        :disabled="busy"
+        @click="performAction"
+      >
+        {{ busy ? '正在处理…' : `确认${actionNames[pendingAction.action]}` }}
+      </button>
+    </div>
   </Modal>
 </template>

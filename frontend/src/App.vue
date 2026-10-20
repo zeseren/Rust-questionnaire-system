@@ -1,3 +1,6 @@
+<!-- [入口在哪] 应用外壳进入工作台/问卷/归档/设置；standalone 路由使用公共顶栏 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 公共顶栏常驻“返回工作台”，工作台顶栏与移动导航常驻退出登录；会话过期弹窗底栏左侧提供“退出并稍后处理” -->
+<!-- [主提交通道在哪] 各视图页头右侧与固定底栏右侧的唯一主按钮；重新登录弹窗由表单主按钮提交 -->
 <!-- 纸本与松烟墨布局共用浅深主题；会话过期时保留当前页面与未保存输入。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -16,6 +19,8 @@ const notice = useNotice()
 const mobileOpen = ref(false)
 const mobileDialog = ref<HTMLDialogElement>()
 const standalone = computed(() => Boolean(route.meta.standalone))
+// 填写页与已登录用户都可在公共顶栏随时返回工作台，避免被困在独立流程中。
+const showWorkspaceExit = computed(() => route.path.startsWith('/s/') || Boolean(auth.user))
 const links = computed(() => [
   { to: '/', label: '工作台', icon: 'home' },
   { to: '/surveys', label: '我的问卷', icon: 'forms' },
@@ -46,6 +51,11 @@ async function logout() {
   } catch (error) {
     notice.show(message(error))
   }
+}
+// 会话过期弹窗不可用右上角关闭，必须保留“退出并稍后处理”逃生口。
+async function dismissExpired() {
+  await logout()
+  auth.expired = false
 }
 function closeMobile() {
   mobileOpen.value = false
@@ -194,13 +204,19 @@ watch(() => route.fullPath, closeMobile)
           <span class="brand-caption">WENXU · STUDIO</span>
         </span>
       </RouterLink>
-      <button
-        class="icon-button"
-        :aria-label="appearance.dark ? '切换浅色模式' : '切换深色模式'"
-        @click="appearance.setTheme(appearance.dark ? 'light' : 'dark')"
-      >
-        <Icon :name="appearance.dark ? 'sun' : 'moon'" />
-      </button>
+      <div class="actions">
+        <RouterLink v-if="showWorkspaceExit" class="text-button" to="/">
+          <Icon name="home" />
+          返回工作台
+        </RouterLink>
+        <button
+          class="icon-button"
+          :aria-label="appearance.dark ? '切换浅色模式' : '切换深色模式'"
+          @click="appearance.setTheme(appearance.dark ? 'light' : 'dark')"
+        >
+          <Icon :name="appearance.dark ? 'sun' : 'moon'" />
+        </button>
+      </div>
     </header>
     <main id="main-content" tabindex="-1">
       <RouterView :key="String(route.name) + String(route.params.id || '')" />
@@ -216,5 +232,10 @@ watch(() => route.fullPath, closeMobile)
   <Modal v-if="auth.expired && route.meta.auth" title="请重新登录" :dismissible="false">
     <p class="subtle mb">会话已过期，当前页面的输入仍然保留。登录后可继续操作。</p>
     <AuthForm :initial-username="auth.user?.username" />
+    <template #footer>
+      <button type="button" class="text-button danger-text" @click="dismissExpired">
+        退出并稍后处理
+      </button>
+    </template>
   </Modal>
 </template>

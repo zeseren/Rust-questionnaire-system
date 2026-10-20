@@ -1,3 +1,6 @@
+<!-- [入口在哪] 填写页与预览页的流程会话；每一页只渲染当前节点可见的题目。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 底栏左侧常驻「上一步」与「清空重填/重新预览」，核对页每道题旁可就地「修改」。 -->
+<!-- [主提交通道在哪] 底栏右侧唯一主操作：「下一步」或「确认提交答卷/确认预览结果」。 -->
 <!-- 预览和填写共用同一会话；只有显式确认才交付当前有效答案。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, watch } from 'vue'
@@ -15,8 +18,9 @@ const props = withDefaults(
     submitDisabled?: boolean
     preview?: boolean
     errors?: Record<string, string>
+    hideFooter?: boolean
   }>(),
-  { errors: () => ({}) },
+  { errors: () => ({}), hideFooter: false },
 )
 const emit = defineEmits<{ submit: [answers: Answer[]]; change: [count: number] }>()
 let inputs: FlowInputs | undefined
@@ -47,6 +51,14 @@ function initSession() {
 function reset() {
   if (props.disabled) return
   initSession()
+}
+function confirmReset() {
+  if (props.disabled) return
+  const hasAnswers = Object.values(values.value).some(isAnswered)
+  if (!props.preview && (hasAnswers || (snapshot.value?.history.length ?? 0) > 1)) {
+    if (!window.confirm('确定清空当前已填写的回答并从头开始吗？')) return
+  }
+  reset()
 }
 watch(() => props.document, initSession, { immediate: true })
 const pageDocument = computed(() => {
@@ -144,7 +156,7 @@ async function focusQuestion(id: string) {
   attempted.value = true
   await focus(id)
 }
-defineExpose({ submissionAnswers, focusQuestion })
+defineExpose({ submissionAnswers, focusQuestion, reset })
 </script>
 <template>
   <div ref="root" tabindex="-1" class="flow-fields">
@@ -180,40 +192,60 @@ defineExpose({ submissionAnswers, focusQuestion })
             :key="question.id"
           >
             <dt>{{ question.title }}</dt>
-            <dd>{{ answerLabel(question) }}</dd>
+            <dd>
+              <span>{{ answerLabel(question) }}</span>
+              <button
+                type="button"
+                class="text-button accent"
+                :disabled="disabled"
+                @click="focusQuestion(question.id)"
+              >
+                修改
+              </button>
+            </dd>
           </template>
         </dl>
       </section>
-      <div class="fill-footer">
-        <button
-          type="button"
-          class="button"
-          :disabled="disabled || snapshot.history.length <= 1"
-          @click="navigate('previous')"
-        >
-          上一步
-        </button>
-        <button
-          v-if="!snapshot.outcome"
-          type="button"
-          class="button button-primary"
-          :disabled="disabled"
-          @click="navigate('next')"
-        >
-          下一步
-        </button>
-        <button
-          v-else-if="snapshot.outcome === 'complete'"
-          type="button"
-          class="button button-primary"
-          :disabled="disabled || submitDisabled"
-          @click="confirm"
-        >
-          {{ preview ? '确认预览结果' : '确认提交答卷' }}
-        </button>
-        <button v-if="preview" type="button" class="button" :disabled="disabled" @click="reset">
-          重新预览
-        </button>
+      <div v-if="!hideFooter" class="fill-footer actions between">
+        <div class="actions fill-footer-left">
+          <button
+            v-if="snapshot.history.length > 1"
+            type="button"
+            class="button"
+            :disabled="disabled"
+            @click="navigate('previous')"
+          >
+            上一步
+          </button>
+          <button
+            type="button"
+            class="text-button danger-text"
+            :disabled="disabled"
+            @click="confirmReset"
+          >
+            {{ preview ? '重新预览' : '清空重填' }}
+          </button>
+        </div>
+        <div class="actions fill-footer-right">
+          <button
+            v-if="!snapshot.outcome"
+            type="button"
+            class="button button-primary"
+            :disabled="disabled"
+            @click="navigate('next')"
+          >
+            下一步
+          </button>
+          <button
+            v-else-if="snapshot.outcome === 'complete'"
+            type="button"
+            class="button button-primary"
+            :disabled="disabled || submitDisabled"
+            @click="confirm"
+          >
+            {{ preview ? '确认预览结果' : '确认提交答卷' }}
+          </button>
+        </div>
       </div>
     </template>
   </div>

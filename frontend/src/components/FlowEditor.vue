@@ -1,3 +1,6 @@
+<!-- [入口在哪] 规则与跳题工作区的「页面流程」分类内，从概览或节点卡片直接进入编辑。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 顶部右侧常驻低饱和「移除页面流程」幽灵按钮可整体退回单页；每个节点右侧的「删除节点」悬停变红并二次确认，随时可撤销单点改动。 -->
+<!-- [主提交通道在哪] 流程编辑不设主按钮，修改即时写回；顶部唯一主按钮仍是编辑器固定栏的「发布问卷」。 -->
 <!-- 页面顺序和出口由作者显式配置，结构变化后保留失效引用供定位修复。 -->
 <script setup lang="ts">
 import { computed, nextTick } from 'vue'
@@ -80,6 +83,11 @@ const preceding = computed(() => {
 function precedingQuestions(index: number) {
   return preceding.value[index] ?? []
 }
+function removeNode(index: number) {
+  if (!flow.value) return
+  if (!window.confirm('确定删除该流程节点吗？')) return
+  flow.value.nodes.splice(index, 1)
+}
 function removeFlow() {
   if (
     window.confirm('移除分页与分支后，所有可见题目将在同一页填写。题目规则和变量会保留，是否继续？')
@@ -103,12 +111,7 @@ function removeFlow() {
       <h3>把问卷分成轻松的几个步骤</h3>
       <p class="hint">目前全部可见题目在同一页。可以先分页，再添加条件分支。</p>
       <div class="actions">
-        <button
-          type="button"
-          class="button button-primary"
-          :disabled="!questions.length"
-          @click="start(true)"
-        >
+        <button type="button" class="button" :disabled="!questions.length" @click="start(true)">
           每题一页
         </button>
         <button type="button" class="button" :disabled="!questions.length" @click="start()">
@@ -189,8 +192,9 @@ function removeFlow() {
             <button
               type="button"
               class="icon-button danger-text"
+              style="margin-left: 8px"
               :aria-label="`删除节点 ${index + 1}`"
-              @click="flow.nodes.splice(index, 1)"
+              @click="removeNode(index)"
             >
               <Icon name="trash" />
             </button>

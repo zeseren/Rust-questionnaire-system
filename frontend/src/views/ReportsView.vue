@@ -1,3 +1,6 @@
+<!-- [入口在哪] 问卷的答卷与统计页；顶栏常驻「刷新数据 / 查看问卷 / 导出 CSV」并标明当前筛选版本。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 筛选栏与空结果区都有「重置筛选」，一次清空时间范围并恢复最新版本。 -->
+<!-- [主提交通道在哪] 筛选栏右侧唯一主按钮「应用筛选」；长答卷详情弹窗底部固定「关闭」。 -->
 <!-- 统计、答卷列表与 CSV 使用同一组已应用的版本及时间筛选。 -->
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue'
@@ -77,6 +80,12 @@ const responses = useResource(
 const maximum = computed(
   () => statistics.data.value?.trend.reduce((max, day) => Math.max(max, day.count), 1) ?? 1,
 )
+const exportLabel = computed(() => {
+  const number = metadata.data.value?.history.find(
+    (version) => version.id === selection.value.version_id,
+  )?.number
+  return number == null ? '导出 CSV' : `导出 V${number} CSV`
+})
 const detailId = ref('')
 const detail = shallowRef<ResponseDetail | null>(null)
 const detailError = ref('')
@@ -99,6 +108,13 @@ function apply() {
   }
   page.value = 1
   selection.value = { version_id: selectedVersion.value, from: start, to: end }
+}
+function resetFilters() {
+  actionError.value = ''
+  from.value = ''
+  to.value = ''
+  selectedVersion.value = metadata.data.value?.survey.current_version_id ?? ''
+  apply()
 }
 async function exportCsv() {
   exporting.value = true
@@ -138,14 +154,11 @@ async function openReceipt(receipt: string) {
       <p class="heading-note">按发布版本查看，每一份回答都有自己的来处。</p>
     </div>
     <div class="actions">
+      <button class="button" :disabled="metadata.loading.value" @click="refresh">刷新数据</button>
       <RouterLink class="button" :to="`/surveys/${id}/edit`">查看问卷</RouterLink>
-      <button
-        class="button button-primary"
-        :disabled="!selection.version_id || exporting"
-        @click="exportCsv"
-      >
+      <button class="button" :disabled="!selection.version_id || exporting" @click="exportCsv">
         <Icon name="collect" />
-        {{ exporting ? '正在导出…' : '导出 CSV' }}
+        {{ exporting ? '正在导出…' : exportLabel }}
       </button>
     </div>
   </div>
@@ -184,6 +197,7 @@ async function openReceipt(receipt: string) {
         结束时间（不含）
         <input v-model="to" type="datetime-local" />
       </label>
+      <button type="button" class="text-button danger-text" @click="resetFilters">重置筛选</button>
       <button class="button button-primary">应用筛选</button>
       <p class="hint" style="flex-basis: 100%">
         时间均为北京时间（Asia/Shanghai）。统计和导出使用已应用的筛选；刷新与稍后导出可能因新增答卷而不同。
@@ -198,7 +212,6 @@ async function openReceipt(receipt: string) {
           答卷明细
         </button>
       </div>
-      <button class="text-button" @click="refresh">刷新数据</button>
     </div>
     <template v-if="tab === 'statistics'">
       <ErrorNotice :message="statistics.error.value" retry @retry="statistics.refresh" />
@@ -237,7 +250,12 @@ async function openReceipt(receipt: string) {
               <span>{{ day.date.slice(5) }}</span>
             </div>
           </div>
-          <p v-else class="hint mt">当前版本和时间范围内暂无答卷。</p>
+          <div v-else class="actions mt">
+            <span class="hint">当前版本和时间范围内暂无答卷。</span>
+            <button type="button" class="text-button danger-text" @click="resetFilters">
+              重置筛选
+            </button>
+          </div>
         </section>
         <QuestionStats
           v-for="(question, index) in statistics.data.value.questions"
@@ -287,6 +305,9 @@ async function openReceipt(receipt: string) {
         <div v-else class="empty-state">
           <h3>当前范围内暂无答卷</h3>
           <p>可以调整版本或时间范围后再查看。</p>
+          <button type="button" class="text-button danger-text" @click="resetFilters">
+            重置筛选
+          </button>
         </div>
         <Pagination :page="page" :total="responses.data.value.total" @change="page = $event" />
       </template>
@@ -316,6 +337,12 @@ async function openReceipt(receipt: string) {
                 : answerText(question, detail.answers[question.id])
           }}
         </p>
+      </div>
+    </template>
+    <template #footer>
+      <div class="actions between">
+        <span class="hint">回执号：{{ detail?.receipt_id || detailId }}</span>
+        <button type="button" class="button" @click="detailId = ''">关闭</button>
       </div>
     </template>
   </Modal>

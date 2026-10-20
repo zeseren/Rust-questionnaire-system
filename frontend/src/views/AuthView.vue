@@ -1,3 +1,6 @@
+<!-- [入口在哪] /login 与 /register 共用此页；卡片眉题行右侧即可在登录/注册间切换。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 卡片底部常驻「← 返回首页」，不依赖登录态，随时可退出认证流程。 -->
+<!-- [主提交通道在哪] 表单内唯一主按钮「登录/创建账号」；切换入口与返回首页均为低权重文本链接。 -->
 <!-- 注册后使用同一登录流程；返回地址仅允许应用内部路径。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
@@ -45,22 +48,24 @@ function success() {
       </div>
     </section>
     <section class="auth-card">
-      <p class="eyebrow">欢迎来到问序</p>
+      <div class="actions between">
+        <p class="eyebrow">欢迎来到问序</p>
+        <RouterLink
+          class="text-button"
+          :to="{ name: register ? 'login' : 'register', query: { redirect: route.query.redirect } }"
+        >
+          {{ register ? '去登录' : '创建账号' }}
+        </RouterLink>
+      </div>
       <h2>{{ register ? '创建你的账号' : '欢迎回来' }}</h2>
       <p class="subtle mb">
         {{ register ? '让你的第一个好问题，从这里开始。' : '登录后，继续你未完成的发现。' }}
       </p>
       <ErrorNotice :message="auth.restoreError" />
       <AuthForm :mode="register ? 'register' : 'login'" @success="success" />
-      <p class="auth-switch">
-        {{ register ? '已经有账号？' : '还没有账号？' }}
-        <RouterLink
-          :to="{ name: register ? 'login' : 'register', query: { redirect: route.query.redirect } }"
-        >
-          {{ register ? '去登录' : '创建账号' }}
-        </RouterLink>
-      </p>
-      <RouterLink v-if="auth.user" class="text-button" to="/">返回工作台</RouterLink>
+      <div class="actions mt">
+        <RouterLink class="text-button" to="/">← 返回首页</RouterLink>
+      </div>
     </section>
   </div>
 </template>

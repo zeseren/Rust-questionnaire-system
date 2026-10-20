@@ -1,3 +1,6 @@
+<!-- [入口在哪] 父视图触发模态框打开 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 顶栏右上关闭按钮、Esc 键、点击遮罩或底栏左侧取消按钮随时退出 -->
+<!-- [主提交通道在哪] 模态框底部或表单末尾右侧的主操作按钮 -->
 <!-- 原生对话框管理焦点，关闭时交还给触发控件。 -->
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from 'vue'
@@ -48,5 +51,6 @@ onBeforeUnmount(() => dialog.value?.close())
       </button>
     </div>
     <div class="dialog-body"><slot /></div>
+    <footer v-if="$slots.footer" class="dialog-footer"><slot name="footer" /></footer>
   </dialog>
 </template>

@@ -1,3 +1,6 @@
+<!-- [入口在哪] 规则与跳题工作区顶部切换到「文本 DSL」即进入，左侧编辑、右侧引用速查。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 底部固定栏最左侧常驻低饱和「恢复当前规则文本」幽灵按钮（悬停变红并二次确认），随时丢弃未应用的文本。 -->
+<!-- [主提交通道在哪] 底部固定栏右侧「应用文本规则」是面板内次级提交（class="button"），全局唯一主按钮仍是编辑器固定栏的「发布问卷」。 -->
 <!-- 错误或尚未应用的文本不覆盖草稿；工作区切换保留缓冲区并阻止误保存。 -->
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
@@ -267,23 +270,25 @@ onBeforeUnmount(() => {
     </div>
     <div class="dsl-actions">
       <div>
-        <p :class="pending ? 'accent' : 'hint'" role="status">
-          {{ pending ? '文本尚未应用，请应用后保存草稿。' : '文本已与当前规则同步。' }}
-        </p>
+        <div class="actions">
+          <button
+            type="button"
+            class="text-button danger-text"
+            :disabled="disabled"
+            @click="restore"
+          >
+            恢复当前规则文本
+          </button>
+          <p :class="pending ? 'accent' : 'hint'" role="status">
+            {{ pending ? '文本尚未应用，请应用后保存草稿。' : '文本已与当前规则同步。' }}
+          </p>
+        </div>
         <p id="dsl-editor-help" class="hint">
           Ctrl / ⌘ + Enter 应用 · Ctrl + Space 补全 · Ctrl / ⌘ + F 查找 · Tab 移至下一控件
         </p>
       </div>
       <div class="actions">
-        <button type="button" class="button" :disabled="disabled" @click="restore">
-          恢复当前规则文本
-        </button>
-        <button
-          type="button"
-          class="button button-primary"
-          :disabled="disabled || !pending"
-          @click="apply"
-        >
+        <button type="button" class="button" :disabled="disabled || !pending" @click="apply">
           应用文本规则
         </button>
       </div>

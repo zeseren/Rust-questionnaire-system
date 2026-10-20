@@ -1,3 +1,6 @@
+<!-- [入口在哪] 填写页/预览页逐题渲染的题面卡片，每题自带「清除此题回答」。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 非必填题可就地清除本题回答；整卷退出与重置由外层固定栏负责。 -->
+<!-- [主提交通道在哪] 本组件不提交，唯一主提交在页面底部固定栏右侧。 -->
 <!-- 同一题型组件用于预览和填写，文本始终通过 Vue 转义展示。 -->
 <script setup lang="ts">
 import type { Question, SurveyDocument } from '../types'
@@ -154,7 +157,7 @@ function scores(question: Question) {
       <button
         v-if="!question.required && values[question.id] != null"
         type="button"
-        class="text-button mt"
+        class="text-button danger-text mt"
         @click="change(question, null)"
       >
         清除此题回答

@@ -1,3 +1,6 @@
+<!-- [入口在哪] 列表页「继续编辑」或新建成功后进入，顶部固定栏常驻返回列表与草稿实体操作。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 顶部固定栏左侧常驻「← 返回问卷列表」；草稿未发布时同区常驻「删除草稿」幽灵按钮（悬停变红 + 二次确认），任何一步都能退或删。 -->
+<!-- [主提交通道在哪] 顶部固定栏最右侧「发布问卷 / 发布新版本」是全视图唯一主按钮，左侧紧邻次级「保存修改」。 -->
 <!-- 草稿修订号独立保存，回收设置的响应不能掩盖其他窗口的编辑冲突。 -->
 <script setup lang="ts">
 import {
@@ -290,6 +293,13 @@ async function add(type: Question['type']) {
 }
 function remove(questionId: string) {
   if (locked.value || !draft.value) return
+  const question = draft.value.questions.find((item) => item.id === questionId)
+  const referenced = !!draft.value.logic?.rules.some((rule) => rule.question_id === questionId)
+  if (
+    (question?.title.trim() || referenced) &&
+    !window.confirm('确定删除这道题目吗？相关规则引用也会一并清理。')
+  )
+    return
   removeQuestion(draft.value, questionId)
 }
 async function locateQuestion(questionId: string) {
@@ -362,6 +372,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
   <div v-else class="survey-editor">
     <div class="page-heading editor-heading">
       <div>
+        <RouterLink class="text-button" to="/surveys">← 返回问卷列表</RouterLink>
         <p class="eyebrow">问卷编辑</p>
         <h1>{{ draft?.title || '无标题问卷' }}</h1>
         <p v-if="survey" class="heading-note">
@@ -369,10 +380,68 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           {{ changed ? '有未保存的修改' : '已保存' }}
         </p>
       </div>
-      <div v-if="survey" class="actions">
-        <RouterLink class="button" :to="`/surveys/${id}/preview`" target="_blank" rel="noopener">
+      <div v-if="survey" class="actions editor-entity-actions">
+        <button
+          v-if="!survey.current_version_id"
+          type="button"
+          class="text-button danger-text"
+          :disabled="busy"
+          @click="action = 'delete'"
+        >
+          删除草稿
+        </button>
+        <button
+          v-if="survey.current_version_id && survey.status !== 'archived'"
+          type="button"
+          class="text-button danger-text"
+          :disabled="busy || changed"
+          @click="action = 'archive'"
+        >
+          归档问卷
+        </button>
+        <button type="button" class="text-button" @click="exportDraft">导出草稿</button>
+        <RouterLink
+          class="text-button"
+          :to="`/surveys/${id}/preview`"
+          target="_blank"
+          rel="noopener"
+        >
           预览已保存草稿
         </RouterLink>
+        <button v-if="survey.share_url" type="button" class="text-button" @click="copyLink">
+          <Icon name="copy" />
+          复制链接
+        </button>
+        <RouterLink
+          v-if="survey.current_version_id"
+          class="text-button"
+          :to="`/surveys/${id}/reports`"
+        >
+          <Icon name="chart" />
+          答卷与统计
+        </RouterLink>
+        <button
+          v-if="survey.status === 'collecting'"
+          type="button"
+          class="text-button"
+          :disabled="busy || changed"
+          @click="action = 'close'"
+        >
+          关闭回收
+        </button>
+        <button
+          v-if="survey.status === 'closed' && !survey.taken_down"
+          type="button"
+          class="text-button"
+          :disabled="busy || changed"
+          @click="action = 'resume'"
+        >
+          恢复回收
+        </button>
+        <button type="button" class="text-button" :disabled="busy || changed" @click="duplicate">
+          <Icon name="copy" />
+          复制问卷
+        </button>
         <button class="button" :disabled="locked || !changed || textPending" @click="save">
           {{ busy ? '正在处理…' : '保存修改' }}
         </button>
@@ -619,52 +688,9 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
             <p class="hint">留空表示不设截止时间。延长截止时间后，已关闭问卷需手动恢复回收。</p>
             <p v-if="changed" class="accent hint">保存修改后即可发布。</p>
           </div>
-          <div class="aside-actions">
-            <RouterLink
-              v-if="survey.current_version_id"
-              class="button"
-              :to="`/surveys/${id}/reports`"
-            >
-              <Icon name="chart" />
-              答卷与统计
-            </RouterLink>
-            <button
-              v-if="survey.status === 'collecting'"
-              class="button"
-              :disabled="busy || changed"
-              @click="action = 'close'"
-            >
-              关闭回收
-            </button>
-            <button
-              v-if="survey.status === 'closed'"
-              class="button"
-              :disabled="busy || changed || survey.taken_down"
-              @click="action = 'resume'"
-            >
-              恢复回收
-            </button>
-            <button class="button" :disabled="busy || changed" @click="duplicate">
-              <Icon name="copy" />
-              复制问卷
-            </button>
-            <button
-              v-if="survey.current_version_id && survey.status !== 'archived'"
-              class="button"
-              :disabled="busy || changed"
-              @click="action = 'archive'"
-            >
-              归档问卷
-            </button>
-            <button
-              v-if="!survey.current_version_id"
-              class="text-button danger-text"
-              :disabled="busy"
-              @click="action = 'delete'"
-            >
-              删除草稿
-            </button>
-          </div>
+          <p class="hint">
+            状态管理、导出与删除草稿常驻在本页顶部固定栏，无需回到本步骤；这里只调整回收参数。
+          </p>
           <div v-if="survey.share_url" class="share-box">
             <label class="field">
               填写链接
@@ -693,10 +719,11 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           : '应用后可在“规则与跳题”查看配置，在“试填预览”体验效果。'
       }}
     </p>
-    <div class="actions end mt">
+    <div class="actions between mt">
       <button class="button" @click="templateDialog = false">取消</button>
       <button
-        class="button button-primary"
+        class="button"
+        :class="draft?.questions.length ? 'button-danger' : 'button-primary'"
         :disabled="locked || !selectedTemplate || textPending"
         @click="applyTemplate"
       >
@@ -709,11 +736,15 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
     <p v-if="action === 'publish'" class="notice">
       将发布修订 {{ revision }}，共 {{ draft?.questions.length }} 道题。
     </p>
-    <div class="actions end">
+    <div class="actions between">
       <button class="button" :disabled="busy" @click="action = null">取消</button>
       <button
         class="button"
-        :class="action === 'delete' || action === 'archive' ? 'button-danger' : 'button-primary'"
+        :class="
+          action === 'delete' || action === 'archive' || action === 'close'
+            ? 'button-danger'
+            : 'button-primary'
+        "
         :disabled="busy"
         @click="performAction"
       >

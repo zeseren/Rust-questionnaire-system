@@ -1,3 +1,6 @@
+<!-- [入口在哪] 账户设置页：个人账户面板右侧就地提供「退出当前登录」，密码表单独立成卡。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 密码表单底部左侧「清空输入」随时撤销本次编辑；退出登录无需进入任何子流程。 -->
+<!-- [主提交通道在哪] 密码表单底部右侧全页唯一主按钮「更新密码」；退出登录使用低饱和幽灵按钮。 -->
 <!-- 修改密码成功后撤销前端登录态，与后端的全设备会话失效保持一致。 -->
 <script setup lang="ts">
 import { ref } from 'vue'
@@ -20,6 +23,21 @@ const themes: { value: Theme; label: string; icon: string }[] = [
   { value: 'dark', label: '深色', icon: 'moon' },
   { value: 'system', label: '跟随系统', icon: 'desktop' },
 ]
+function resetForm() {
+  oldPassword.value = ''
+  newPassword.value = ''
+  confirmation.value = ''
+  error.value = ''
+}
+async function logoutCurrent() {
+  try {
+    await auth.logout()
+  } catch (reason) {
+    error.value = message(reason)
+    return
+  }
+  await router.replace('/login')
+}
 async function changePassword() {
   error.value = ''
   if ([...newPassword.value].length < 8 || [...newPassword.value].length > 128) {
@@ -60,7 +78,12 @@ async function changePassword() {
   </div>
   <div class="settings-layout">
     <section class="panel">
-      <div class="panel-header"><h2>个人账户</h2></div>
+      <div class="panel-header">
+        <h2>个人账户</h2>
+        <button type="button" class="text-button danger-text" @click="logoutCurrent">
+          退出当前登录
+        </button>
+      </div>
       <div class="account-grid">
         <div>
           <span class="hint">用户名</span>
@@ -125,7 +148,15 @@ async function changePassword() {
             />
           </label>
         </div>
-        <div>
+        <div class="actions between">
+          <button
+            type="button"
+            class="text-button danger-text"
+            :disabled="busy || (!oldPassword && !newPassword && !confirmation)"
+            @click="resetForm"
+          >
+            清空输入
+          </button>
           <button class="button button-primary" :disabled="busy">
             {{ busy ? '正在修改…' : '更新密码' }}
           </button>

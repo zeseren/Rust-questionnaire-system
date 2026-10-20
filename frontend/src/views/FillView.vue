@@ -1,3 +1,6 @@
+<!-- [入口在哪] 公开填写链接 /s/:id；上方是问卷题面与说明，流程题逐页展示。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 底部固定栏左侧常驻「清空重填」；不可关闭的重新登录弹窗也提供「先返回首页」。 -->
+<!-- [主提交通道在哪] 底部固定栏右侧唯一主按钮：「下一步/提交答卷/重试原提交/加载最新题面重填」。 -->
 <!-- 提交结果未知时冻结原载荷与幂等标识，重试不会悄悄创建第二次提交。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
@@ -46,12 +49,26 @@ async function load() {
   error.value = ''
   try {
     survey.value = await api<PublicSurvey>(`/api/public/surveys/${id}`)
+    versionChanged.value = false
+    pending.value = null
+    values.value = {}
+    errors.value = {}
+    flowAnswered.value = 0
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) loginNeeded.value = true
     else error.value = message(reason)
   } finally {
     loading.value = false
   }
+}
+function resetFill() {
+  if (busy.value || !answered.value) return
+  if (!window.confirm('确定清空当前已填写的回答吗？')) return
+  error.value = ''
+  values.value = {}
+  errors.value = {}
+  flowAnswered.value = 0
+  flowFields.value?.reset()
 }
 async function loginSuccess() {
   if (account.value && auth.user?.id !== account.value.id) {
@@ -176,6 +193,9 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
       <p class="plain-text subtle mt">{{ survey.document.thank_you || '感谢你的认真回答。' }}</p>
       <code class="receipt">回执编号：{{ receipt.receipt_id }}</code>
       <p class="hint mt">你的回答已成功提交，可以关闭此页面。</p>
+      <div class="actions mt">
+        <RouterLink class="button" to="/">返回工作台</RouterLink>
+      </div>
     </section>
     <template v-else>
       <ErrorNotice :message="error" :retry="!survey && !loginNeeded" @retry="load" />
@@ -233,6 +253,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           :errors="errors"
           :disabled="busy || uncertain || versionChanged"
           :submit-disabled="loginNeeded"
+          :hide-footer="uncertain || versionChanged"
           @change="flowChanged"
           @submit="submit"
         />
@@ -243,14 +264,50 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           :errors="errors"
           :disabled="busy || uncertain || versionChanged"
         />
-        <div v-if="!survey.document.logic || uncertain" class="fill-footer">
-          <span class="hint">
-            已回答 {{ answered }} / {{ survey.document.questions.length }} 题 ·
-            标注“必填”的题目必须回答
-          </span>
-          <button class="button button-primary" :disabled="busy || versionChanged || loginNeeded">
-            {{ busy ? '正在提交…' : uncertain ? '重试原提交' : '提交答卷' }}
-          </button>
+        <div
+          v-if="!survey.document.logic || uncertain || versionChanged"
+          class="fill-footer actions between"
+        >
+          <div class="actions fill-footer-left">
+            <template v-if="!uncertain && !versionChanged">
+              <button
+                type="button"
+                class="text-button danger-text"
+                :disabled="busy || !answered"
+                @click="resetFill"
+              >
+                清空重填
+              </button>
+              <span class="hint">
+                已回答 {{ answered }} / {{ survey.document.questions.length }} 题 ·
+                标注“必填”的题目必须回答
+              </span>
+            </template>
+            <a
+              v-else-if="versionChanged"
+              :href="shareLink(id)"
+              target="_blank"
+              rel="noopener"
+              class="text-button accent"
+            >
+              打开新窗口核对
+            </a>
+            <span v-else class="hint">当前回答已锁定，请重试原提交以获取结果。</span>
+          </div>
+          <div class="actions fill-footer-right">
+            <button
+              v-if="versionChanged"
+              type="button"
+              class="button button-primary"
+              :disabled="busy"
+              @click="load"
+            >
+              加载最新题面重填
+            </button>
+            <button v-else class="button button-primary" :disabled="busy || loginNeeded">
+              {{ busy ? '正在提交…' : uncertain ? '重试原提交' : '提交答卷' }}
+            </button>
+          </div>
         </div>
       </form>
     </template>
@@ -264,5 +321,8 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
       :initial-username="account?.username || auth.user?.username"
       @success="loginSuccess"
     />
+    <div class="actions between mt">
+      <RouterLink class="text-button" to="/">先返回首页</RouterLink>
+    </div>
   </Modal>
 </template>

@@ -1,4 +1,43 @@
 /* 编辑与规则工坊：纸本卡片、靛青分支、松石绿校验与松烟墨 DSL 控制台。 */
+/*
+ * [入口在哪] 编辑页从工作台卡片行进入，顶部固定栏承载实体级操作
+ * [用户在第 1 步后悔了怎么删/退] 顶栏左侧常驻取消/返回与删除草稿，DSL 底栏左侧可恢复文本
+ * [主提交通道在哪] 顶栏右侧与 DSL 底栏右侧的唯一主按钮
+ */
+/*
+ * Rule 1 & 2：编辑页顶部固定栏。左侧常驻取消/返回与低饱和“删除草稿”逃生口，
+ * 右侧放状态操作与唯一主按钮；滚动编辑长表单时始终可见，无需翻到页尾。
+ */
+.editor-heading {
+  position: sticky;
+  top: 56px;
+  z-index: 16;
+  background: color-mix(in srgb, var(--bg-canvas) 94%, transparent);
+  backdrop-filter: blur(8px);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-hairline);
+}
+.editor-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+}
+.editor-header-bar > :first-child {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.editor-entity-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
 .workspace-nav {
   display: flex;
   align-items: center;
@@ -775,15 +814,24 @@
   border-top: 1px solid var(--amber-border);
   font-size: 13px;
 }
+/* Rule 2 & 3：DSL 控制台固定底栏，左侧逃生口/诊断，右侧唯一主操作 */
 .dsl-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 12;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 18px;
-  background: var(--bg-surface);
-  border-top: 1px solid var(--border-hairline);
+  padding: 12px 18px;
+  background: color-mix(in srgb, var(--bg-ink-panel) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: #ede9df;
+}
+.dsl-actions .hint {
+  color: #a8a298;
 }
 .dsl-actions > div:first-child {
   display: grid;
@@ -808,6 +856,10 @@
   }
 }
 @media (max-width: 900px) {
+  /* 移动端顶栏更矮，编辑器固定栏跟随其高度 */
+  .editor-heading {
+    top: 52px;
+  }
   .question-outline {
     display: none;
   }

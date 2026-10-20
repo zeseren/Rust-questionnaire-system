@@ -1,3 +1,6 @@
+<!-- [入口在哪] 平台管理页的用户/问卷/审计表格；每行操作列就近提供启停、下架、查看题面。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 治理确认弹窗左侧「取消」可随时退出；长题面弹窗底部固定「关闭」。 -->
+<!-- [主提交通道在哪] 确认弹窗右侧唯一主按钮：破坏性操作使用朱红 button-danger，正向恢复才用 button-primary。 -->
 <!-- 管理员只访问治理接口；不通过此页面读取他人的答卷。 -->
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue'
@@ -59,6 +62,11 @@ const operation = computed(() =>
       ? '恢复问卷'
       : '下架问卷',
 )
+const destructive = computed(() => {
+  const target = selected.value
+  if (!target) return false
+  return target.kind === 'users' ? !target.item.disabled : !target.item.taken_down
+})
 const detail = shallowRef<{
   survey: AdminSurvey
   published_document: SurveyDocument | null
@@ -200,6 +208,7 @@ const actionNames: Record<string, string> = {
                 >
                   查看题面
                 </button>
+                <span class="grow" aria-hidden="true"></span>
                 <button
                   class="text-button"
                   :class="{ 'danger-text': !survey.taken_down }"
@@ -267,9 +276,12 @@ const actionNames: Record<string, string> = {
           placeholder="说明本次操作的原因"
         />
       </label>
-      <div class="actions end">
+      <div class="actions between">
         <button type="button" class="button" :disabled="busy" @click="selected = null">取消</button>
-        <button class="button button-primary" :disabled="busy || !reason.trim()">
+        <button
+          :class="destructive ? 'button button-danger' : 'button button-primary'"
+          :disabled="busy || !reason.trim()"
+        >
           {{ busy ? '正在处理…' : `确认${operation}` }}
         </button>
       </div>
@@ -303,6 +315,12 @@ const actionNames: Record<string, string> = {
         </div>
       </template>
       <p v-else class="hint mt">尚无发布版本，暂无公开题面。</p>
+    </template>
+    <template #footer>
+      <div class="actions between">
+        <span class="hint">只读查看，不会改变问卷状态。</span>
+        <button type="button" class="button" @click="inspectingId = ''">关闭</button>
+      </div>
     </template>
   </Modal>
 </template>

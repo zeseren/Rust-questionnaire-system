@@ -1,5 +1,10 @@
 /* 问序 · Editorial Craft 纸本与松烟墨视觉体系（Warm Paper & Charcoal Ink） */
 /* 告别蓝灰毛玻璃，采用宣纸/玄墨基底、中文衬线标题阶梯、等宽数据指标与朱砂印泥点睛。 */
+/*
+ * [入口在哪] 工作台以问卷入口卡片行呈现实体，编辑器与预览页各有固定顶栏
+ * [用户在第 1 步后悔了怎么删/退] 卡片操作列的“删除草稿”与顶栏/底栏逃生口常驻可见，无需滚到页尾
+ * [主提交通道在哪] 每个视图仅一个最高权重主按钮，位于页头右侧或固定底栏右侧
+ */
 :root {
   color-scheme: light;
   --bg-canvas: #f5f2eb;
@@ -24,6 +29,7 @@
   --sidebar: var(--bg-surface);
   --header: color-mix(in srgb, var(--bg-canvas) 86%, transparent);
   --content-layer: transparent;
+  --border-default: var(--border-hairline);
   --layer-stroke: var(--border-hairline);
   --card-stroke: var(--border-hairline);
   --nav-hover: var(--bg-subtle);
@@ -686,6 +692,41 @@ svg {
 .text-button:hover {
   color: var(--accent);
 }
+
+/*
+ * Rule 3：破坏性操作与主 CTA 空间分离，采用低饱和幽灵按钮。
+ * 静止态仅呈现次要文本色，悬停/键盘聚焦才转为朱砂色并铺上淡朱底，防止误触。
+ * 仅作用于可交互按钮；span/p 等静态 .danger-text 仍保持红色可读性。
+ */
+button.danger-text,
+button.ghost-danger,
+.text-button.danger-text,
+.text-button.ghost-danger,
+.icon-button.danger-text,
+.icon-button.ghost-danger,
+.ghost-danger {
+  color: var(--text-muted);
+  background: transparent;
+  border-color: transparent;
+}
+button.danger-text:hover:not(:disabled),
+button.ghost-danger:hover:not(:disabled),
+button.danger-text:focus-visible:not(:disabled),
+button.ghost-danger:focus-visible:not(:disabled),
+.text-button.danger-text:hover:not(:disabled),
+.text-button.ghost-danger:hover:not(:disabled),
+.text-button.danger-text:focus-visible:not(:disabled),
+.text-button.ghost-danger:focus-visible:not(:disabled),
+.icon-button.danger-text:hover:not(:disabled),
+.icon-button.ghost-danger:hover:not(:disabled),
+.icon-button.danger-text:focus-visible:not(:disabled),
+.icon-button.ghost-danger:focus-visible:not(:disabled),
+.ghost-danger:hover:not(:disabled),
+.ghost-danger:focus-visible:not(:disabled) {
+  color: var(--rose);
+  background: var(--rose-soft);
+  border-color: transparent;
+}
 .main-content {
   max-width: 1260px;
   width: 100%;
@@ -1295,6 +1336,28 @@ h1 {
   padding-top: 12px;
   border-top: 1px solid var(--border-hairline);
 }
+/*
+ * Rule 1：实体级管理操作（复制链接/关闭/归档）就近绑定在问卷卡片行内，
+ * 破坏性“删除草稿”以低饱和幽灵按钮固定在操作列最左端，与主操作保持距离。
+ */
+.card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-hairline);
+}
+.card-actions .text-button {
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.card-actions .danger-text,
+.card-actions .ghost-danger {
+  margin-right: auto;
+}
 .response-count {
   display: flex;
   align-items: baseline;
@@ -1379,6 +1442,22 @@ h1 {
   margin: 0;
   padding: 0;
   border: 0;
+}
+/* 列表模式下操作列作为案卷第二行，避开固定四列布局的换行塌陷 */
+.is-list .card-actions {
+  grid-column: 2 / -1;
+  grid-row: 2;
+  margin-top: 0;
+  padding-top: 8px;
+  border-top: 0;
+}
+@media (max-width: 760px) {
+  .is-list .card-actions {
+    grid-column: 1;
+    grid-row: auto;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-hairline);
+  }
 }
 .is-list .response-count strong {
   font-size: 16px;
@@ -1467,6 +1546,21 @@ h1 {
 }
 .dialog-body {
   padding: 24px 28px 28px;
+}
+/*
+ * Rule 2 & 3：对话框底栏常驻，左侧逃生口、右侧唯一主操作；
+ * 内容滚动时底栏吸附在可视区底部，破坏性退出不被主按钮遮蔽。
+ */
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--border-hairline);
+  background: var(--bg-surface);
+  position: sticky;
+  bottom: 0;
 }
 .toast {
   position: fixed;

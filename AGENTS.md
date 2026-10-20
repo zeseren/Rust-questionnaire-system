@@ -82,6 +82,13 @@ pnpm run wasm:build                                           # 仅在改动 log
 - **工具与包管理**：固定使用 `pnpm`（`frontend/pnpm-lock.yaml`）；开发与预览端口固定为 `http://localhost:5173`，通过 Vite 同源代理 `/api` 到后端。
 - **按需加载**：Element Plus 仅在 `SearchSelect.vue` 按需引入 `ElSelect`/`ElOption`；CodeMirror 6 仅在 `LogicTextEditor.vue` 通过 `defineAsyncComponent` 懒加载 `DslCodeEditor.vue`。
 
+### 交互与操作布局规范（Interaction & Action Placement Rules）
+
+1. **对象与操作就近绑定**：实体级管理操作（删除草稿、重命名、导出、切换状态等）必须绑定在该实体的入口卡片行（List Item Row）或编辑器顶部固定栏（Sticky Top Header）；严禁塞进分步表单的最后一步或页面流式末尾。
+2. **全流程随时可退**：多步向导或长表单中，「保存草稿」「丢弃/删除草稿」「取消返回」属于全局逃生口（Escape Hatches），必须在每一步的顶栏或固定底栏左侧常驻可见，绝不能要求用户翻到流程终点才能删除或取消。
+3. **主次与破坏性操作分离**：每个视图只允许 1 个最高视觉权重的主按钮（Primary CTA，置于主操作区右侧）。破坏性操作（如「删除草稿」）必须与主提交按钮在空间上拉开距离（顶栏右上角更多菜单、卡片操作列或固定栏最左端），使用低饱和度幽灵按钮（`.text-button.danger-text`、`.ghost-danger` 等）并在悬停/键盘聚焦时变为朱红 `--rose`，防止误触。
+4. **写代码前先过动线自检**：生成任何带状态界面之前，先用三行注释写明 `[入口在哪] -> [用户在第 1 步后悔了怎么删/退] -> [主提交通道在哪]`；每个视图文件顶部第 1–3 行必须保留这三行自检注释。
+
 ## Testing & QA
 
 - 修改 Rust 代码必跑：受影响的 `cargo test`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 与 `rustfmt`。

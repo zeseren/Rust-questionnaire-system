@@ -1,3 +1,6 @@
+<!-- [入口在哪] 编辑器「规则与跳题」工作区直接渲染可视化配置或文本 DSL。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 顶部标题栏常驻低饱和「移除全部逻辑」幽灵按钮（悬停变红并二次确认），规则/变量行内各自带删除入口，不必滚到页尾。 -->
+<!-- [主提交通道在哪] 工作台内不设主按钮；唯一主按钮是编辑器固定栏的「发布问卷」，本地「应用文本规则」仅用于提交文本缓冲。 -->
 <!-- 可视化配置和文本共用统一模型，未应用的文本在工作区切换时继续保留。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
@@ -117,25 +120,35 @@ defineExpose({ addRule, locate })
         <h2>规则与跳题</h2>
         <p class="hint">根据回答显示问题、计算结果，并安排填写路径。</p>
       </div>
-      <div v-if="logic" class="view-control" role="group" aria-label="规则编辑方式">
+      <div v-if="logic" class="actions">
         <button
           type="button"
-          class="button"
-          :disabled="textPending"
-          :aria-pressed="!textMode"
-          @click="textMode = false"
+          class="text-button danger-text"
+          :disabled="disabled || textPending"
+          @click="disable"
         >
-          可视化配置
+          移除全部逻辑
         </button>
-        <button
-          type="button"
-          class="button"
-          :disabled="!!diagnostic && !textMode"
-          :aria-pressed="textMode"
-          @click="textMode = true"
-        >
-          文本 DSL
-        </button>
+        <div class="view-control" role="group" aria-label="规则编辑方式">
+          <button
+            type="button"
+            class="button"
+            :disabled="textPending"
+            :aria-pressed="!textMode"
+            @click="textMode = false"
+          >
+            可视化配置
+          </button>
+          <button
+            type="button"
+            class="button"
+            :disabled="!!diagnostic && !textMode"
+            :aria-pressed="textMode"
+            @click="textMode = true"
+          >
+            文本 DSL
+          </button>
+        </div>
       </div>
     </div>
     <div v-if="!logic" class="logic-intro panel">
@@ -156,7 +169,7 @@ defineExpose({ addRule, locate })
           <p class="hint">用分页与条件分支组织不同的填写路径。</p>
         </div>
       </div>
-      <button type="button" class="button button-primary" :disabled="disabled" @click="enable">
+      <button type="button" class="button" :disabled="disabled" @click="enable">
         <Icon name="plus" />
         开始配置规则
       </button>
@@ -206,7 +219,7 @@ defineExpose({ addRule, locate })
               </div>
               <button
                 type="button"
-                class="button button-primary"
+                class="button"
                 :disabled="!availableQuestions.length"
                 @click="addRule()"
               >
@@ -291,7 +304,7 @@ defineExpose({ addRule, locate })
               </div>
               <button
                 type="button"
-                class="button button-primary"
+                class="button"
                 :disabled="disabled || logic.variables.length >= 100"
                 @click="addVariable"
               >
@@ -356,14 +369,7 @@ defineExpose({ addRule, locate })
               : '单页填写'
           }}
         </span>
-        <button
-          type="button"
-          class="text-button danger-text"
-          :disabled="disabled || textPending"
-          @click="disable"
-        >
-          移除全部逻辑
-        </button>
+        <span class="hint">移除全部逻辑可在上方标题栏随时操作。</span>
       </div>
     </template>
   </section>

@@ -1,3 +1,6 @@
+<!-- [入口在哪] 登录/注册页与会话过期登录弹窗内渲染本表单 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 注册成功但自动登录失败时，底栏左侧常驻“更换账号重新注册”，可清空输入回到注册初态 -->
+<!-- [主提交通道在哪] 表单底栏右侧的唯一主按钮“登录/创建账号并登录” -->
 <!-- 密码只用于当前认证请求，失败时不写入日志或浏览器存储。 -->
 <script setup lang="ts">
 import { ref } from 'vue'
@@ -49,6 +52,12 @@ async function submit() {
   } finally {
     busy.value = false
   }
+}
+function switchAccount() {
+  registered.value = false
+  error.value = ''
+  password.value = ''
+  confirmation.value = ''
 }
 </script>
 <template>
@@ -105,8 +114,22 @@ async function submit() {
     <p v-if="mode === 'register' && !registered" class="hint">
       用户名支持字母、数字和下划线；密码至少 8 个字符。
     </p>
-    <button class="button button-primary button-block" :disabled="busy">
-      {{ busy ? '请稍候…' : mode === 'register' && !registered ? '创建账号并登录' : '登录' }}
-    </button>
+    <div class="actions" :class="registered ? 'between' : 'end'">
+      <button
+        v-if="registered"
+        type="button"
+        class="text-button danger-text"
+        @click="switchAccount"
+      >
+        更换账号重新注册
+      </button>
+      <button
+        class="button button-primary"
+        :class="{ 'button-block': !registered }"
+        :disabled="busy"
+      >
+        {{ busy ? '请稍候…' : mode === 'register' && !registered ? '创建账号并登录' : '登录' }}
+      </button>
+    </div>
   </form>
 </template>

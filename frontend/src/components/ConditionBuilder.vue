@@ -1,3 +1,6 @@
+<!-- [入口在哪] 规则编辑器中勾选显示/必填/校验后，条件即在对应规则卡片内展开。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 每条条件右侧常驻低饱和「删除条件」图标按钮，悬停变红；取消勾选规则项可整体退回默认条件。 -->
+<!-- [主提交通道在哪] 条件编辑不设主按钮，修改即时写回规则模型；最终保存与发布由编辑器顶部固定栏完成。 -->
 <!-- 常用条件使用题目和选项名称，切换高级编辑不会重建或丢弃原表达式。 -->
 <script setup lang="ts">
 import { computed, inject, ref, useId } from 'vue'
@@ -183,7 +186,7 @@ function remove(index: number) {
           </div>
           <button
             type="button"
-            class="icon-button"
+            class="icon-button danger-text"
             :disabled="locked || group.conditions.length <= 1"
             :aria-label="`删除条件 ${index + 1}`"
             @click="remove(index)"
