@@ -161,3 +161,46 @@ fn 重写问卷身份后题目标识全部更新() {
         "旧题目身份不应残留在逻辑引用里"
     );
 }
+
+#[test]
+fn 求值入口拒绝非规范答案题目身份() {
+    let expressions: Value =
+        serde_json::from_str(include_str!("../../fixtures/survey-logic/expressions.json"))
+            .expect("共享样例必须是合法 JSON");
+    let documents: Value =
+        serde_json::from_str(include_str!("../../fixtures/survey-logic/documents.json"))
+            .expect("共享样例必须是合法 JSON");
+    let questions = expressions["questions"].to_string();
+    let program = expressions["cases"][0]["program"].to_string();
+    let logic = documents["cases"][0]["logic"].to_string();
+    // 答案键只接受非零、小写连字符 UUID；大写、无连字符与 Nil 都必须在边界层被拒绝。
+    for id in [
+        "11111111-1111-4111-8111-11111111111A",
+        "11111111111141118111111111111111",
+        "00000000-0000-0000-0000-000000000000",
+    ] {
+        let answers_json = format!(r#"{{"{id}":"x"}}"#);
+        for output in [
+            logic_wasm::evaluate_expression(
+                program.clone(),
+                questions.clone(),
+                answers_json.clone(),
+            ),
+            logic_wasm::evaluate_document_logic(
+                logic.clone(),
+                questions.clone(),
+                answers_json.clone(),
+            ),
+        ] {
+            let envelope: Value = serde_json::from_str(&output).expect("信封必须是合法 JSON");
+            assert_eq!(
+                envelope["error"]["code"], "invalid_syntax",
+                "非规范题目身份 {id} 应被边界拒绝：{envelope}"
+            );
+            assert!(
+                envelope.get("ok").is_none(),
+                "失败信封不得同时携带 ok：{envelope}"
+            );
+        }
+    }
+}

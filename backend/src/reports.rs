@@ -42,14 +42,14 @@ const TIMEZONE: &str = "Asia/Shanghai (+08:00)";
 
 /// 所有报表一次只读取一个发布版本；省略版本时选择当前发布版本。
 #[derive(Debug, Deserialize, ToSchema, IntoParams)]
-struct ReportFilter {
-    version_id: Option<Uuid>,
+pub(crate) struct ReportFilter {
+    pub(crate) version_id: Option<Uuid>,
     /// RFC3339 开始时间，包含该时刻；必须携带 Z 或时区偏移，精度最多 6 位小数（微秒）。
     #[schema(format = DateTime)]
-    from: Option<String>,
+    pub(crate) from: Option<String>,
     /// RFC3339 结束时间，不包含该时刻；必须晚于开始时间，精度最多 6 位小数（微秒）。
     #[schema(format = DateTime)]
-    to: Option<String>,
+    pub(crate) to: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -109,22 +109,22 @@ struct DailyCount {
 }
 
 #[derive(Serialize, ToSchema)]
-struct OptionFrequency {
-    option_id: Uuid,
-    label: String,
-    count: u64,
+pub(crate) struct OptionFrequency {
+    pub(crate) option_id: Uuid,
+    pub(crate) label: String,
+    pub(crate) count: u64,
     /// 频次 / 本题 answered_count，取值 0..1；分母为 0 时为 null。
-    proportion: Option<f64>,
+    pub(crate) proportion: Option<f64>,
 }
 
 #[derive(Serialize, ToSchema)]
-struct RatingFrequency {
-    value: i32,
-    count: u64,
+pub(crate) struct RatingFrequency {
+    pub(crate) value: i32,
+    pub(crate) count: u64,
 }
 
 #[derive(Serialize, ToSchema)]
-struct TextResponse {
+pub(crate) struct TextResponse {
     receipt_id: Uuid,
     submitted_at: DateTime<FixedOffset>,
     /// 原始文本，不自动判断情感或回答有效性。
@@ -134,7 +134,7 @@ struct TextResponse {
 /// 六种题型按实际类型返回对应统计，不使用无意义的通用空字段。
 #[derive(Serialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum QuestionStatisticsData {
+pub(crate) enum QuestionStatisticsData {
     SingleChoice {
         options: Vec<OptionFrequency>,
     },
@@ -166,19 +166,19 @@ enum QuestionStatisticsData {
 }
 
 #[derive(Serialize, ToSchema)]
-struct QuestionStatistics {
-    question_id: Uuid,
-    title: String,
+pub(crate) struct QuestionStatistics {
+    pub(crate) question_id: Uuid,
+    pub(crate) title: String,
     /// 真正回答本题的答卷数，不包括缺失值。
-    answered_count: u64,
+    pub(crate) answered_count: u64,
     /// 进入有效路径且可见的答卷数，等于已答加适用未答。
-    applicable_count: u64,
+    pub(crate) applicable_count: u64,
     /// 适用但没有回答的答卷数。
-    unanswered_count: u64,
+    pub(crate) unanswered_count: u64,
     /// 被分支或显示规则跳过的答卷数。
-    skipped_count: u64,
+    pub(crate) skipped_count: u64,
     #[serde(flatten)]
-    statistics: QuestionStatisticsData,
+    pub(crate) statistics: QuestionStatisticsData,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -439,13 +439,13 @@ async fn export_csv(
     Ok(response)
 }
 
-struct TimeRange {
-    from: Option<DateTime<Utc>>,
-    to: Option<DateTime<Utc>>,
+pub(crate) struct TimeRange {
+    pub(crate) from: Option<DateTime<Utc>>,
+    pub(crate) to: Option<DateTime<Utc>>,
 }
 
 impl TimeRange {
-    fn parse(filter: &ReportFilter) -> AppResult<Self> {
+    pub(crate) fn parse(filter: &ReportFilter) -> AppResult<Self> {
         fn timestamp(value: &str) -> AppResult<DateTime<Utc>> {
             let time = DateTime::parse_from_rfc3339(value)
                 .map_err(|_| AppError::validation("时间必须是包含时区的 RFC3339 格式"))?;
@@ -597,11 +597,11 @@ struct StoredResponseRow {
 }
 
 // 适用性只来自历史版本重建；不按当前草稿推断，也不从答案是否缺失猜测跳题。
-struct SnapshotRow {
-    receipt_id: Uuid,
-    submitted_at: DateTime<Utc>,
-    answers: BTreeMap<Uuid, Value>,
-    question_states: Option<BTreeMap<Uuid, AnswerState>>,
+pub(crate) struct SnapshotRow {
+    pub(crate) receipt_id: Uuid,
+    pub(crate) submitted_at: DateTime<Utc>,
+    pub(crate) answers: BTreeMap<Uuid, Value>,
+    pub(crate) question_states: Option<BTreeMap<Uuid, AnswerState>>,
 }
 
 fn report_evaluator(document: &Document) -> AppResult<Option<FlowEvaluator<'_>>> {
@@ -688,7 +688,10 @@ async fn response_snapshot(
         .collect()
 }
 
-fn summarize_question(question: Question, rows: &[SnapshotRow]) -> AppResult<QuestionStatistics> {
+pub(crate) fn summarize_question(
+    question: Question,
+    rows: &[SnapshotRow],
+) -> AppResult<QuestionStatistics> {
     let mut answered_count = 0u64;
     let mut skipped_count = 0u64;
     let is_multiple = matches!(&question.kind, QuestionKind::MultipleChoice { .. });
@@ -862,7 +865,7 @@ fn update_mean(mean: &mut f64, value: f64, count: u64) {
     }
 }
 
-fn encode_csv(
+pub(crate) fn encode_csv(
     document: &Document,
     version_id: Uuid,
     version_number: i32,

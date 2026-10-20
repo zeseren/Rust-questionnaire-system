@@ -1,7 +1,9 @@
 //! 与浏览器共用语义样例，防止缺失值、数值边界、错误分类和资源预算发生漂移。
 use std::collections::BTreeMap;
 
-use questionnaire_api::domain::{DocumentLogic, Question, compile_expression};
+use questionnaire_api::domain::{
+    Choice, DocumentLogic, Question, QuestionKind, compile_expression,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -113,5 +115,63 @@ fn normalize_expected_numbers(value: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+#[test]
+fn 空规则包编译仍拦截重复或全零的题目与选项身份() {
+    // 空规则包同样绑定题目身份，不能因没有表达式而跳过题目/选项唯一性检查。
+    let empty: DocumentLogic = serde_json::from_value(json!({
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [],
+        "rules": [],
+        "flow": null,
+    }))
+    .expect("空规则包必须是合法的文档规则");
+
+    let text = |id: Uuid| Question {
+        id,
+        title: "题".into(),
+        required: false,
+        kind: QuestionKind::Text { max_length: 20 },
+    };
+    let duplicate_question = Uuid::from_u128(0x1111_1111_1111_4111_8111_1111_1111_1111);
+    let duplicate_option = Uuid::from_u128(0x2222_2222_2222_4222_8222_2222_2222_2222);
+    let cases = [
+        ("全零题目身份", vec![text(Uuid::nil())]),
+        (
+            "重复题目身份",
+            vec![text(duplicate_question), text(duplicate_question)],
+        ),
+        (
+            "重复选项身份",
+            vec![Question {
+                id: duplicate_question,
+                title: "单选".into(),
+                required: false,
+                kind: QuestionKind::SingleChoice {
+                    options: vec![
+                        Choice {
+                            id: duplicate_option,
+                            label: "甲".into(),
+                        },
+                        Choice {
+                            id: duplicate_option,
+                            label: "乙".into(),
+                        },
+                    ],
+                },
+            }],
+        ),
+    ];
+
+    for (name, questions) in cases {
+        let error = empty.compile(&questions).unwrap_err();
+        assert_eq!(
+            serde_json::to_value(error.code).unwrap(),
+            "invalid_reference",
+            "{name} 必须在编译前被拒绝"
+        );
     }
 }
