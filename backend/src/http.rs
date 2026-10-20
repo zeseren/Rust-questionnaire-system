@@ -9,7 +9,7 @@ use axum::{
     http::{StatusCode, request::Parts},
 };
 use serde::{
-    Deserialize, Deserializer,
+    Deserialize, Deserializer, Serialize,
     de::{self, DeserializeOwned},
 };
 use std::fmt;
@@ -101,19 +101,105 @@ fn optional_u64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64
     deserializer.deserialize_any(Visitor).map(Some)
 }
 
+/// 一次解析完成的分页参数：业务层直接使用，不再手工重算偏移与页码。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PageBounds {
+    pub page: u64,
+    pub page_size: u64,
+    pub offset: u64,
+    pub limit: u64,
+}
+
 impl Pagination {
-    pub fn bounds(&self) -> AppResult<(u64, u64)> {
+    pub fn bounds(&self) -> AppResult<PageBounds> {
         let page = self.page.unwrap_or(1);
-        let size = self.page_size.unwrap_or(20);
-        if page == 0 || !(1..=100).contains(&size) {
+        let page_size = self.page_size.unwrap_or(20);
+        if page == 0 || !(1..=100).contains(&page_size) {
             return Err(AppError::validation(
                 "page 至少为 1，page_size 必须在 1..=100",
             ));
         }
         let offset = (page - 1)
-            .checked_mul(size)
+            .checked_mul(page_size)
             .filter(|offset| *offset <= i64::MAX as u64)
             .ok_or_else(|| AppError::validation("页码过大"))?;
-        Ok((offset, size))
+        Ok(PageBounds {
+            page,
+            page_size,
+            offset,
+            limit: page_size,
+        })
+    }
+}
+
+/// 统一的分页响应结构；页码与页大小只在构造时从 `PageBounds` 复制。
+#[derive(Serialize, ToSchema)]
+pub(crate) struct Page<T: ToSchema> {
+    pub items: Vec<T>,
+    pub total: u64,
+    pub page: u64,
+    pub page_size: u64,
+}
+
+impl<T: ToSchema> Page<T> {
+    pub(crate) fn new(items: Vec<T>, total: u64, bounds: PageBounds) -> Self {
+        Self {
+            items,
+            total,
+            page: bounds.page,
+            page_size: bounds.page_size,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PageBounds, Pagination};
+
+    fn pagination(page: Option<u64>, page_size: Option<u64>) -> Pagination {
+        Pagination { page, page_size }
+    }
+
+    #[test]
+    fn 默认分页从第一页开始且每页二十条() {
+        assert_eq!(
+            pagination(None, None).bounds().expect("默认分页合法"),
+            PageBounds {
+                page: 1,
+                page_size: 20,
+                offset: 0,
+                limit: 20,
+            }
+        );
+    }
+
+    #[test]
+    fn 分页参数按一与一百的边界换算偏移() {
+        assert_eq!(
+            pagination(Some(5), Some(100)).bounds().expect("上界合法"),
+            PageBounds {
+                page: 5,
+                page_size: 100,
+                offset: 400,
+                limit: 100,
+            }
+        );
+        assert_eq!(
+            pagination(Some(1), Some(1)).bounds().expect("下界合法"),
+            PageBounds {
+                page: 1,
+                page_size: 1,
+                offset: 0,
+                limit: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn 非法页码与页大小被拦截() {
+        assert!(pagination(Some(0), Some(20)).bounds().is_err());
+        assert!(pagination(Some(1), Some(0)).bounds().is_err());
+        assert!(pagination(Some(1), Some(101)).bounds().is_err());
+        assert!(pagination(Some(u64::MAX), Some(100)).bounds().is_err());
     }
 }

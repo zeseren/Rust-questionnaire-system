@@ -15,14 +15,13 @@ use axum::{
 };
 use chrono::{DateTime, FixedOffset, NaiveDate, SecondsFormat, Utc};
 use sea_orm::{
-    AccessMode, ConnectionTrait, DatabaseConnection, FromQueryResult, IsolationLevel,
-    TransactionTrait,
+    ConnectionTrait, DatabaseConnection, FromQueryResult,
     entity::{ColumnTrait, EntityTrait},
     query::{PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Select},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
@@ -32,7 +31,7 @@ use crate::{
     domain::{AnswerState, Choice, Document, FlowEvaluator, Question, QuestionKind},
     entities::{response, version},
     error::{AppError, AppResult, ErrorResponse},
-    http::{ApiPath, ApiQuery, Pagination},
+    http::{ApiPath, ApiQuery, Page, Pagination},
     repository,
 };
 
@@ -42,7 +41,7 @@ const SHANGHAI_OFFSET: FixedOffset =
 const TIMEZONE: &str = "Asia/Shanghai (+08:00)";
 
 /// 所有报表一次只读取一个发布版本；省略版本时选择当前发布版本。
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
 struct ReportFilter {
     version_id: Option<Uuid>,
     /// RFC3339 开始时间，包含该时刻；必须携带 Z 或时区偏移，精度最多 6 位小数（微秒）。
@@ -83,10 +82,8 @@ struct ResponseSummary {
 struct ResponsePage {
     #[serde(flatten)]
     selection: ReportSelection,
-    page: u64,
-    page_size: u64,
-    total: u64,
-    items: Vec<ResponseSummary>,
+    #[serde(flatten)]
+    page: Page<ResponseSummary>,
 }
 
 /// 题面是提交所绑定的不可变发布版本，不是最新草稿或最新版本。
@@ -209,11 +206,8 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
     get, path = "/api/surveys/{id}/responses", tag = "答卷与报表",
     params(
         ("id" = Uuid, Path, description = "本人问卷 UUID"),
-        ("version_id" = Option<Uuid>, Query, description = "发布版本 UUID，默认当前版本"),
-        ("from" = Option<DateTime<Utc>>, Query, description = "RFC3339 开始时刻，包含；最多微秒精度（6位小数），超出返回422"),
-        ("to" = Option<DateTime<Utc>>, Query, description = "RFC3339 结束时刻，不包含；最多微秒精度（6位小数），超出返回422"),
-        ("page" = Option<u64>, Query, description = "页码，从 1 开始，默认 1"),
-        ("page_size" = Option<u64>, Query, description = "每页 1..100 条，默认 20")
+        ReportFilter,
+        Pagination
     ),
     responses(
         (status = 200, description = "选定版本的答卷分页，时间为 +08:00", body = ResponsePage),
@@ -232,41 +226,36 @@ async fn list_responses(
     ApiPath(id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<ResponseListQuery>,
 ) -> AppResult<Json<ResponsePage>> {
-    let (offset, limit) = query.pagination.bounds()?;
+    let bounds = query.pagination.bounds()?;
     let range = TimeRange::parse(&query.filter)?;
-    let tx = state
-        .db
-        .begin_with_config(
-            Some(IsolationLevel::RepeatableRead),
-            Some(AccessMode::ReadOnly),
-        )
-        .await?;
-    let version = selected_version(&tx, user.id, id, query.filter.version_id).await?;
-    let responses = filtered_responses(id, version.id, &range);
+    let tx = repository::read_snapshot(&state.db).await?;
+    let (version_id, version_number) =
+        selected_version_meta(&tx, user.id, id, query.filter.version_id).await?;
+    let responses = filtered_responses(id, version_id, &range);
     let total = responses.clone().count(&tx).await?;
     let rows = responses
         .select_only()
         .columns([response::Column::Id, response::Column::SubmittedAt])
         .order_by_asc(response::Column::SubmittedAt)
         .order_by_asc(response::Column::Id)
-        .offset(offset)
-        .limit(limit)
+        .offset(bounds.offset)
+        .limit(bounds.limit)
         .into_model::<ResponseHead>()
         .all(&tx)
         .await?;
     tx.commit().await?;
     Ok(Json(ResponsePage {
-        selection: range.selection(version.id, version.number),
-        page: offset / limit + 1,
-        page_size: limit,
-        total,
-        items: rows
-            .into_iter()
-            .map(|row| ResponseSummary {
-                receipt_id: row.id,
-                submitted_at: row.submitted_at.with_timezone(&SHANGHAI_OFFSET),
-            })
-            .collect(),
+        selection: range.selection(version_id, version_number),
+        page: Page::new(
+            rows.into_iter()
+                .map(|row| ResponseSummary {
+                    receipt_id: row.id,
+                    submitted_at: row.submitted_at.with_timezone(&SHANGHAI_OFFSET),
+                })
+                .collect(),
+            total,
+            bounds,
+        ),
     }))
 }
 
@@ -293,7 +282,8 @@ async fn response_detail(
     user: AuthUser,
     ApiPath((id, receipt_id)): ApiPath<(Uuid, Uuid)>,
 ) -> AppResult<Json<ResponseDetail>> {
-    repository::owned_survey(&state.db, user.id, id).await?;
+    let tx = repository::read_snapshot(&state.db).await?;
+    repository::owned_survey_meta(&tx, user.id, id).await?;
     // 显式投影需要的字段，连查询结果也不携带内部身份或幂等哈希。
     let row = response::Entity::find_by_id(receipt_id)
         .filter(response::Column::SurveyId.eq(id))
@@ -305,14 +295,15 @@ async fn response_detail(
             response::Column::Answers,
         ])
         .into_model::<ResponseContent>()
-        .one(&state.db)
+        .one(&tx)
         .await?
         .ok_or_else(AppError::not_found)?;
     let version = version::Entity::find_by_id(row.version_id)
         .filter(version::Column::SurveyId.eq(id))
-        .one(&state.db)
+        .one(&tx)
         .await?
         .ok_or_else(AppError::not_found)?;
+    tx.commit().await?;
     let document: Document = serde_json::from_value(version.document)?;
     let evaluator = report_evaluator(&document)?;
     let row = snapshot_row(
@@ -344,12 +335,7 @@ async fn response_detail(
 /// 适用数等于已答加适用未答；适用数加规则跳过数等于本次答卷总数。
 #[utoipa::path(
     get, path = "/api/surveys/{id}/statistics", tag = "答卷与报表",
-    params(
-        ("id" = Uuid, Path, description = "本人问卷 UUID"),
-        ("version_id" = Option<Uuid>, Query, description = "发布版本 UUID，默认当前版本"),
-        ("from" = Option<DateTime<Utc>>, Query, description = "RFC3339 开始时刻，包含；最多微秒精度（6位小数），超出返回422"),
-        ("to" = Option<DateTime<Utc>>, Query, description = "RFC3339 结束时刻，不包含；最多微秒精度（6位小数），超出返回422")
-    ),
+    params(("id" = Uuid, Path, description = "本人问卷 UUID"), ReportFilter),
     responses(
         (status = 200, description = "一致快照统计，趋势按上海自然日分组", body = StatisticsResponse),
         (status = 400, description = "路径或查询参数格式错误", body = ErrorResponse),
@@ -368,9 +354,12 @@ async fn statistics(
     ApiQuery(filter): ApiQuery<ReportFilter>,
 ) -> AppResult<Json<StatisticsResponse>> {
     let range = TimeRange::parse(&filter)?;
-    let version = selected_version(&state.db, user.id, id, filter.version_id).await?;
-    let document: Document = serde_json::from_value(version.document)?;
-    let rows = response_snapshot(&state.db, user.id, id, version.id, &range, &document).await?;
+    let LoadedReport {
+        version_id,
+        version_number,
+        document,
+        rows,
+    } = load_report(&state.db, user.id, id, filter.version_id, &range).await?;
     let mut dates = BTreeMap::new();
     for row in &rows {
         *dates
@@ -387,7 +376,7 @@ async fn statistics(
         .map(|question| summarize_question(question, &rows))
         .collect::<AppResult<Vec<_>>>()?;
     Ok(Json(StatisticsResponse {
-        selection: range.selection(version.id, version.number),
+        selection: range.selection(version_id, version_number),
         total_count: rows.len() as u64,
         trend: dates
             .into_iter()
@@ -406,12 +395,7 @@ async fn statistics(
 /// 为保持电子表格安全，以等号、加减号或 @ 开头的单元格会加单引号，含前导空白/控制字符的绕过同样处理。
 #[utoipa::path(
     get, path = "/api/surveys/{id}/export.csv", tag = "答卷与报表",
-    params(
-        ("id" = Uuid, Path, description = "本人问卷 UUID"),
-        ("version_id" = Option<Uuid>, Query, description = "发布版本 UUID，默认当前版本"),
-        ("from" = Option<DateTime<Utc>>, Query, description = "RFC3339 开始时刻，包含；最多微秒精度（6位小数），超出返回422"),
-        ("to" = Option<DateTime<Utc>>, Query, description = "RFC3339 结束时刻，不包含；最多微秒精度（6位小数），超出返回422")
-    ),
+    params(("id" = Uuid, Path, description = "本人问卷 UUID"), ReportFilter),
     responses(
         (status = 200, description = "UTF-8 CSV；公式风险单元格以单引号作为文本保护", body = String,
             content_type = "text/csv; charset=utf-8",
@@ -432,10 +416,13 @@ async fn export_csv(
     ApiQuery(filter): ApiQuery<ReportFilter>,
 ) -> AppResult<Response> {
     let range = TimeRange::parse(&filter)?;
-    let version = selected_version(&state.db, user.id, id, filter.version_id).await?;
-    let document: Document = serde_json::from_value(version.document)?;
-    let rows = response_snapshot(&state.db, user.id, id, version.id, &range, &document).await?;
-    let bytes = encode_csv(&document, version.id, version.number, &rows)?;
+    let LoadedReport {
+        version_id,
+        version_number,
+        document,
+        rows,
+    } = load_report(&state.db, user.id, id, filter.version_id, &range).await?;
+    let bytes = encode_csv(&document, version_id, version_number, &rows)?;
     let mut response = bytes.into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -444,8 +431,7 @@ async fn export_csv(
     response.headers_mut().insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_str(&format!(
-            "attachment; filename=\"survey-{id}-{}.csv\"",
-            version.id
+            "attachment; filename=\"survey-{id}-{version_id}.csv\""
         ))
         .map_err(|error| AppError::internal(error))?,
     );
@@ -499,21 +485,77 @@ impl TimeRange {
     }
 }
 
+/// 显式版本优先；省略时回退到当前发布版本。未发布问卷没有可读取的答卷版本。
+fn resolve_version_id(
+    current_version_id: Option<Uuid>,
+    version_id: Option<Uuid>,
+) -> AppResult<Uuid> {
+    version_id
+        .or(current_version_id)
+        .ok_or_else(|| AppError::conflict("not_published", "问卷尚未发布，没有可查看的答卷版本"))
+}
+
 async fn selected_version(
     db: &impl ConnectionTrait,
     owner_id: Uuid,
     survey_id: Uuid,
     version_id: Option<Uuid>,
 ) -> AppResult<version::Model> {
-    let survey = repository::owned_survey(db, owner_id, survey_id).await?;
-    let version_id = version_id
-        .or(survey.current_version_id)
-        .ok_or_else(|| AppError::conflict("not_published", "问卷尚未发布，没有可查看的答卷版本"))?;
+    let survey = repository::owned_survey_meta(db, owner_id, survey_id).await?;
+    let version_id = resolve_version_id(survey.current_version_id, version_id)?;
     version::Entity::find_by_id(version_id)
         .filter(version::Column::SurveyId.eq(survey_id))
         .one(db)
         .await?
         .ok_or_else(AppError::not_found)
+}
+
+/// 答卷列表只需要版本 ID 与编号，不加载版本题面 JSONB。
+async fn selected_version_meta(
+    db: &impl ConnectionTrait,
+    owner_id: Uuid,
+    survey_id: Uuid,
+    version_id: Option<Uuid>,
+) -> AppResult<(Uuid, i32)> {
+    let survey = repository::owned_survey_meta(db, owner_id, survey_id).await?;
+    let version_id = resolve_version_id(survey.current_version_id, version_id)?;
+    version::Entity::find_by_id(version_id)
+        .filter(version::Column::SurveyId.eq(survey_id))
+        .select_only()
+        .columns([version::Column::Id, version::Column::Number])
+        .into_tuple::<(Uuid, i32)>()
+        .one(db)
+        .await?
+        .ok_or_else(AppError::not_found)
+}
+
+/// 统计与导出共用的单次读取结果：版本标识、题面和固定快照的答卷。
+struct LoadedReport {
+    version_id: Uuid,
+    version_number: i32,
+    document: Document,
+    rows: Vec<SnapshotRow>,
+}
+
+async fn load_report(
+    db: &DatabaseConnection,
+    owner_id: Uuid,
+    survey_id: Uuid,
+    version_id: Option<Uuid>,
+    range: &TimeRange,
+) -> AppResult<LoadedReport> {
+    let tx = repository::read_snapshot(db).await?;
+    let version = selected_version(&tx, owner_id, survey_id, version_id).await?;
+    let (version_id, version_number) = (version.id, version.number);
+    let document: Document = serde_json::from_value(version.document)?;
+    let rows = response_snapshot(&tx, survey_id, version_id, range, &document).await?;
+    tx.commit().await?;
+    Ok(LoadedReport {
+        version_id,
+        version_number,
+        document,
+        rows,
+    })
 }
 
 #[derive(FromQueryResult)]
@@ -547,12 +589,12 @@ fn filtered_responses(
     query
 }
 
-// 元组对应固定 SELECT 的三列；Json 直接解码规范化答案，避免再复制一份 JSON 树。
-type StoredRow = (
-    Uuid,
-    DateTime<Utc>,
-    sqlx::types::Json<BTreeMap<Uuid, Value>>,
-);
+#[derive(FromQueryResult)]
+struct StoredResponseRow {
+    id: Uuid,
+    submitted_at: DateTime<Utc>,
+    answers: Value,
+}
 
 // 适用性只来自历史版本重建；不按当前草稿推断，也不从答案是否缺失猜测跳题。
 struct SnapshotRow {
@@ -614,36 +656,34 @@ fn plain_question_states(
 }
 
 async fn response_snapshot(
-    db: &DatabaseConnection,
-    owner_id: Uuid,
+    db: &impl ConnectionTrait,
     survey_id: Uuid,
     version_id: Uuid,
     range: &TimeRange,
     document: &Document,
 ) -> AppResult<Vec<SnapshotRow>> {
-    // 单条 PostgreSQL SELECT 自带一致快照。这里不处于 ORM 事务内，直接复用同一个连接池。
-    // SQL 自身仍限制 owner_id，不能因为使用 SQLx 就绕过权限。
-    let stored: Vec<StoredRow> = sqlx::query_as(
-        "SELECT r.id, r.submitted_at, r.answers
-         FROM responses AS r
-         INNER JOIN surveys AS s ON s.id = r.survey_id
-         WHERE s.owner_id = $1 AND r.survey_id = $2 AND r.version_id = $3
-           AND ($4::timestamptz IS NULL OR r.submitted_at >= $4)
-           AND ($5::timestamptz IS NULL OR r.submitted_at < $5)
-         ORDER BY r.submitted_at ASC, r.id ASC",
-    )
-    .bind(owner_id)
-    .bind(survey_id)
-    .bind(version_id)
-    .bind(range.from)
-    .bind(range.to)
-    .fetch_all(db.get_postgres_connection_pool())
-    .await?;
+    let stored = filtered_responses(survey_id, version_id, range)
+        .select_only()
+        .columns([
+            response::Column::Id,
+            response::Column::SubmittedAt,
+            response::Column::Answers,
+        ])
+        .order_by_asc(response::Column::SubmittedAt)
+        .order_by_asc(response::Column::Id)
+        .into_model::<StoredResponseRow>()
+        .all(db)
+        .await?;
     let evaluator = report_evaluator(document)?;
     stored
         .into_iter()
-        .map(|(id, submitted_at, answers)| {
-            snapshot_row(evaluator.as_ref(), id, submitted_at, answers.0)
+        .map(|row| {
+            snapshot_row(
+                evaluator.as_ref(),
+                row.id,
+                row.submitted_at,
+                serde_json::from_value(row.answers)?,
+            )
         })
         .collect()
 }
@@ -775,18 +815,9 @@ fn summarize_choices(
 ) -> AppResult<Vec<OptionFrequency>> {
     let mut counts = HashMap::<&str, u64>::with_capacity(options.len());
     for row in rows {
-        if row
-            .question_states
-            .as_ref()
-            .and_then(|states| states.get(&question_id))
-            == Some(&AnswerState::Skipped)
-        {
-            *skipped_count += 1;
-        }
-        let Some(value) = row.answers.get(&question_id) else {
+        let Some(value) = observe_row(row, question_id, answered_count, skipped_count) else {
             continue;
         };
-        *answered_count += 1;
         match value {
             Value::String(option) => *counts.entry(option.as_str()).or_default() += 1,
             Value::Array(options) => {
@@ -894,17 +925,13 @@ fn encode_csv(
         write_cell(&mut writer, &timestamp)?;
         for question in &document.questions {
             match answers.get(&question.id) {
-                None | Some(Value::Null) => write_cell(&mut writer, "")?,
-                Some(Value::String(value)) => write_cell(&mut writer, value.as_str())?,
+                None => write_cell(&mut writer, "")?,
+                Some(Value::String(value)) => write_cell(&mut writer, value)?,
                 // 多选保持 JSON 数组，不用逗号连接，以免丢失集合与 CSV 字段边界。
                 Some(value) => write_cell(&mut writer, &serde_json::to_string(value)?)?,
             }
-            if with_states {
-                let state = match question_states
-                    .as_ref()
-                    .and_then(|states| states.get(&question.id))
-                    .ok_or_else(invalid_stored_answer)?
-                {
+            if let Some(states) = &question_states {
+                let state = match states[&question.id] {
                     AnswerState::Answered => "已答",
                     AnswerState::Unanswered => "适用未答",
                     AnswerState::Skipped => "规则跳过",
@@ -935,5 +962,61 @@ fn formula_safe(value: &str) -> Cow<'_, str> {
         Cow::Owned(format!("'{value}"))
     } else {
         Cow::Borrowed(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::formula_safe;
+    use crate::entities::SurveyStatus;
+    use chrono::{Duration, Utc};
+    use std::borrow::Cow;
+
+    #[test]
+    fn 普通文本直接借用不分配() {
+        assert!(matches!(formula_safe("答卷标题"), Cow::Borrowed(_)));
+        assert!(matches!(formula_safe(""), Cow::Borrowed(_)));
+        assert!(matches!(formula_safe("a=b"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn 公式前缀与前导不可见字符被加单引号() {
+        assert_eq!(formula_safe("=SUM(A1)"), "'=SUM(A1)");
+        assert_eq!(formula_safe("+1"), "'+1");
+        assert_eq!(formula_safe("-1"), "'-1");
+        assert_eq!(formula_safe("@cmd"), "'@cmd");
+        assert_eq!(formula_safe(" \t=1"), "' \t=1");
+        assert_eq!(formula_safe("\u{feff}-2"), "'\u{feff}-2");
+    }
+
+    #[test]
+    fn 到期问卷在读取时视为已关闭() {
+        let now = Utc::now();
+        let past = now - Duration::seconds(1);
+        let future = now + Duration::seconds(60);
+        assert_eq!(
+            SurveyStatus::Collecting.effective(Some(past), now),
+            SurveyStatus::Closed
+        );
+        assert_eq!(
+            SurveyStatus::Collecting.effective(Some(future), now),
+            SurveyStatus::Collecting
+        );
+        assert_eq!(
+            SurveyStatus::Collecting.effective(None, now),
+            SurveyStatus::Collecting
+        );
+        assert_eq!(
+            SurveyStatus::Closed.effective(Some(past), now),
+            SurveyStatus::Closed
+        );
+        assert_eq!(
+            SurveyStatus::Unpublished.effective(Some(past), now),
+            SurveyStatus::Unpublished
+        );
+        assert_eq!(
+            SurveyStatus::Archived.effective(Some(past), now),
+            SurveyStatus::Archived
+        );
     }
 }

@@ -22,6 +22,8 @@ use questionnaire_logic::domain::{
     Document, DocumentLogic, Question, compile_expression as core_compile_expression,
     format_logic_text as core_format_logic_text, parse_logic_text as core_parse_logic_text,
 };
+use questionnaire_logic::identity::Uuid;
+
 /// 边界自身的诊断（非领域错误）：入参反序列化失败等。
 ///
 /// message 用 String 而非 &'static str：serde 的文本不属于领域错误表。
@@ -39,6 +41,13 @@ fn decode<'de, T: serde::Deserialize<'de>>(raw: &'de str, what: &str) -> Result<
     serde_json::from_str(raw)
         .map_err(|error| boundary_error(format!("{what} 不是合法 JSON：{error}")))
 }
+
+/// 答案上下文：键必须是严格的题目身份，与领域侧共用同一套 UUID 规则。
+#[derive(serde::Deserialize)]
+struct StrictAnswers(
+    #[serde(deserialize_with = "questionnaire_logic::identity::deserialize_map")]
+    BTreeMap<Uuid, Value>,
+);
 
 /// 领域错误统一序列化为信封错误对象；错误对象本身只含基础类型，序列化不会失败。
 fn domain_error(error: impl serde::Serialize) -> Value {
@@ -76,10 +85,7 @@ pub fn compile_document_logic(logic_json: String, questions_json: String) -> Str
         let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
         let logic: DocumentLogic = decode(&logic_json, "logic_json")?;
         let compiled = logic.compile(&questions).map_err(domain_error)?;
-        Ok(json!({
-            "compiled": true,
-            "variable_order": compiled.variable_order(),
-        }))
+        Ok(json!({ "variable_order": compiled.variable_order() }))
     })();
     envelope_generic(result)
 }
@@ -89,8 +95,7 @@ pub fn compile_document_logic(logic_json: String, questions_json: String) -> Str
 pub fn compile_expression(raw_json: String, questions_json: String) -> String {
     let result = (|| {
         let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
-        let raw: Value = serde_json::from_str(&raw_json)
-            .map_err(|error| boundary_error(format!("raw_json 不是合法 JSON：{error}")))?;
+        let raw: Value = decode(&raw_json, "raw_json")?;
         let compiled = core_compile_expression(&raw, &questions).map_err(domain_error)?;
         let dependencies: Vec<_> = compiled.dependencies().collect();
         Ok(json!({
@@ -127,8 +132,7 @@ pub fn evaluate_expression(
     let result = (|| {
         let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
         let raw: Value = decode(&raw_json, "raw_json")?;
-        // 答案上下文按题目身份索引；身份类型由核心求值签名推断，边界不必重述。
-        let answers: BTreeMap<_, Value> = decode(&answers_json, "answers_json")?;
+        let StrictAnswers(answers) = decode(&answers_json, "answers_json")?;
         let compiled = core_compile_expression(&raw, &questions).map_err(domain_error)?;
         compiled.evaluate(&answers).map_err(domain_error)
     })();
@@ -148,8 +152,7 @@ pub fn evaluate_document_logic(
     let result = (|| {
         let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
         let logic: DocumentLogic = decode(&logic_json, "logic_json")?;
-        // 答案上下文按题目身份索引；身份类型由核心求值签名推断。
-        let answers: BTreeMap<_, Value> = decode(&answers_json, "answers_json")?;
+        let StrictAnswers(answers) = decode(&answers_json, "answers_json")?;
         let compiled = logic.compile(&questions).map_err(domain_error)?;
         compiled.evaluate(&answers).map_err(domain_error)
     })();
@@ -237,21 +240,11 @@ impl FlowSession {
 
 /// 信封只含一个键：成功值与错误值互斥，错误在进入本函数前已序列化为
 /// `serde_json::Value`（领域错误经 serde 序列化，边界错误由 `boundary_error` 构造）。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 enum Envelope<T> {
     Ok(T),
     Error(Value),
-}
-
-impl<T: serde::Serialize> serde::Serialize for Envelope<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeMap;
-        let mut envelope = serializer.serialize_map(Some(1))?;
-        match self {
-            Self::Ok(value) => envelope.serialize_entry("ok", value)?,
-            Self::Error(error) => envelope.serialize_entry("error", error)?,
-        }
-        envelope.end()
-    }
 }
 
 /// 统一信封：把成功值或错误值一次性序列化成 `{"ok":…}` / `{"error":…}`，

@@ -127,11 +127,15 @@ fn router(state: AppState) -> Router {
             "cookieAuth",
             SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new("session"))),
         );
-    // 路由与文档共用 handler 注解，文档仅在组装时生成。
+    // 路由与文档共用 handler 注解，文档仅在组装时生成一次，之后每次请求只克隆 Arc。
+    let doc = Arc::new(doc);
     router
         .route(
             "/api/openapi.json",
-            get(move || std::future::ready(Json(doc.clone()))),
+            get(move || {
+                let doc = Arc::clone(&doc);
+                std::future::ready(Json(doc))
+            }),
         )
         .fallback(|| async { AppError::not_found() })
         .method_not_allowed_fallback(|| async {

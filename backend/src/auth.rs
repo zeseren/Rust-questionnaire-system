@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    entities::{session, user},
+    entities::{UserRole, session, user},
     error::{AppError, AppResult, ErrorResponse},
     http::ApiJson,
 };
@@ -35,7 +35,7 @@ use crate::{
 pub(crate) struct AuthUser {
     pub id: Uuid,
     pub username: String,
-    pub role: String,
+    pub role: UserRole,
 }
 
 impl FromRequestParts<AppState> for AuthUser {
@@ -84,7 +84,7 @@ pub(crate) struct UserProfile {
     pub id: Uuid,
     pub username: String,
     /// user 为普通用户，admin 为受控创建的管理员。
-    pub role: String,
+    pub role: UserRole,
 }
 
 impl From<user::Model> for UserProfile {
@@ -133,7 +133,13 @@ async fn register(
     State(state): State<AppState>,
     ApiJson(request): ApiJson<RegisterRequest>,
 ) -> AppResult<(StatusCode, Json<UserProfile>)> {
-    let user = create_user(&state.db, request.username, request.password, "user").await?;
+    let user = create_user(
+        &state.db,
+        request.username,
+        request.password,
+        UserRole::User,
+    )
+    .await?;
     Ok((StatusCode::CREATED, Json(user.into())))
 }
 
@@ -175,19 +181,11 @@ async fn login(
     )?;
 
     let tx = state.db.begin().await?;
-    let current = user::Entity::find_by_id(candidate.id)
-        .lock(LockType::NoKeyUpdate)
-        .one(&tx)
+    let current = lock_unchanged_credentials(&tx, candidate.id, &candidate.password_hash)
         .await?
         .ok_or_else(invalid_credentials)?;
-    if current.disabled || current.password_hash != candidate.password_hash {
-        return Err(invalid_credentials());
-    }
-    let lifetime = Duration::try_seconds(state.config.session_ttl_seconds)
-        .filter(|duration| *duration > Duration::zero())
-        .ok_or_else(|| AppError::internal("invalid session lifetime"))?;
     let expires_at = Utc::now()
-        .checked_add_signed(lifetime)
+        .checked_add_signed(Duration::seconds(state.config.session_ttl_seconds))
         .ok_or_else(|| AppError::internal("session expiry overflow"))?;
     // 旧 Cookie 本身就是撤销该会话的凭证；无需同时锁定另一个账号。
     if let Some(old_token) = session_token(&headers) {
@@ -257,7 +255,6 @@ async fn change_password(
     headers: HeaderMap,
     ApiJson(request): ApiJson<ChangePasswordRequest>,
 ) -> AppResult<(StatusCode, [(header::HeaderName, HeaderValue); 1])> {
-    validate_password(&request.old_password)?;
     validate_password(&request.new_password)?;
     let candidate = user::Entity::find_by_id(user.id)
         .one(&state.db)
@@ -270,17 +267,12 @@ async fn change_password(
     let cookie = session_cookie("", 0, state.config.cookie_secure)?;
 
     let tx = state.db.begin().await?;
-    let current = user::Entity::find_by_id(user.id)
-        .lock(LockType::NoKeyUpdate)
-        .one(&tx)
+    let current = lock_unchanged_credentials(&tx, user.id, &candidate.password_hash)
         .await?
         .ok_or_else(AppError::unauthorized)?;
     let authenticated = authenticate(&headers, &tx).await?;
     // 锁前算出的验证结果，只能用于同一个仍有效的会话和没有变化的密码版本。
-    if authenticated.id != user.id
-        || current.disabled
-        || current.password_hash != candidate.password_hash
-    {
+    if authenticated.id != user.id {
         return Err(AppError::unauthorized());
     }
     let mut updated = current.into_active_model();
@@ -324,7 +316,7 @@ pub(crate) async fn create_admin(
     username: String,
     password: String,
 ) -> AppResult<()> {
-    create_user(db, username, password, "admin").await?;
+    create_user(db, username, password, UserRole::Admin).await?;
     Ok(())
 }
 
@@ -332,7 +324,7 @@ async fn create_user(
     db: &DatabaseConnection,
     username: String,
     password: String,
-    role: &'static str,
+    role: UserRole,
 ) -> AppResult<user::Model> {
     let username = normalize_username(username)?;
     validate_password(&password)?;
@@ -341,7 +333,7 @@ async fn create_user(
         id: Set(Uuid::new_v4()),
         username: Set(username),
         password_hash: Set(password_hash),
-        role: Set(role.to_owned()),
+        role: Set(role),
         disabled: Set(false),
         created_at: Set(Utc::now()),
     }
@@ -409,6 +401,28 @@ async fn verify_password(password: String, encoded_hash: String) -> AppResult<bo
     .map_err(|error| AppError::internal(error))?
 }
 
+/// 锁定账号并确认密码版本未变；返回 `None` 表示账号不可用或摘要已变化。
+///
+/// 锁前算出的密码验证结果只能用于同一个仍有效的密码版本，所以两处入口都在持锁后调用本函数，
+/// 再由调用方决定具体的错误码。
+async fn lock_unchanged_credentials(
+    tx: &sea_orm::DatabaseTransaction,
+    id: Uuid,
+    expected_hash: &str,
+) -> AppResult<Option<user::Model>> {
+    let Some(current) = user::Entity::find_by_id(id)
+        .lock(LockType::NoKeyUpdate)
+        .one(tx)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if current.disabled || current.password_hash != expected_hash {
+        return Ok(None);
+    }
+    Ok(Some(current))
+}
+
 fn new_session_token() -> AppResult<String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| AppError::internal(error))?;
@@ -416,8 +430,12 @@ fn new_session_token() -> AppResult<String> {
 }
 
 /// 高熵秘密可以使用快速摘要；用户密码必须使用上面的 Argon2id，不能用此函数。
+pub(crate) fn hash_secret_bytes(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
 pub(crate) fn hash_secret(token: &str) -> String {
-    hex::encode(Sha256::digest(token.as_bytes()))
+    hash_secret_bytes(token.as_bytes())
 }
 
 fn session_token(headers: &HeaderMap) -> Option<&str> {

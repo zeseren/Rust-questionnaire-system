@@ -55,7 +55,8 @@ pub struct LogicTextError {
 }
 
 fn located(source: &str, offset: usize, error: LogicError) -> LogicTextError {
-    let prefix = &source[..offset];
+    // 偏移来自 pest 的字节位置；越界或非字符边界时退化为整段源码，避免切片 panic。
+    let prefix = source.get(..offset).unwrap_or(source);
     LogicTextError {
         line: prefix.bytes().filter(|byte| *byte == b'\n').count() + 1,
         column: prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1,
@@ -410,13 +411,10 @@ impl<'a> Compiler<'a> {
                             LogicErrorCode::InvalidReference,
                         ));
                     }
-                    let value_type = match next(&mut fields).as_str() {
-                        "boolean" => LogicValueType::Boolean,
-                        "number" => LogicValueType::Number,
-                        "text" => LogicValueType::Text,
-                        "choice" => LogicValueType::Choice,
-                        _ => LogicValueType::Choices,
-                    };
+                    let value_type = LogicValueType::from_name(next(&mut fields).as_str())
+                        .ok_or_else(|| {
+                            failure(self.source, offset, LogicErrorCode::InvalidSyntax)
+                        })?;
                     self.locations.push((
                         format!("$.logic.variables[{}]", logic.variables.len()),
                         offset,
@@ -525,16 +523,21 @@ impl<'a> Compiler<'a> {
             })?;
             logic.flow = Some(FlowDefinition { entry, nodes });
         }
+        // 预先索引题目与选项身份，绑定校验从逐项扫描降为集合查找。
+        let mut question_ids = BTreeSet::new();
+        let mut option_ids = BTreeSet::new();
+        for question in questions {
+            question_ids.insert(question.id);
+            if let QuestionKind::SingleChoice { options }
+            | QuestionKind::MultipleChoice { options, .. } = &question.kind
+            {
+                option_ids.extend(options.iter().map(|option| option.id));
+            }
+        }
         for binding in self.bindings.values() {
             let valid = match binding.category {
-                Category::Question => questions.iter().any(|question| question.id == binding.id),
-                Category::Option => questions.iter().any(|question| match &question.kind {
-                    QuestionKind::SingleChoice { options }
-                    | QuestionKind::MultipleChoice { options, .. } => {
-                        options.iter().any(|option| option.id == binding.id)
-                    }
-                    _ => false,
-                }),
+                Category::Question => question_ids.contains(&binding.id),
+                Category::Option => option_ids.contains(&binding.id),
                 _ => definitions.contains(&binding.id),
             };
             if !valid {
@@ -625,7 +628,7 @@ impl Formatter {
     /// 未知绑定返回 `invalid_reference`；与 TS 端 `ref` 闭包语义一致。
     fn reference(&self, id: &Value) -> Result<&str, LogicError> {
         id.as_str()
-            .and_then(|raw| Uuid::parse_str(raw).ok())
+            .and_then(crate::identity::parse)
             .ok_or_else(|| error(LogicErrorCode::InvalidReference, "$", None))
             .and_then(|id| self.bound(id))
     }
@@ -743,10 +746,7 @@ pub fn format_logic_text(
         formatter.lines.push(format!(
             "let {}: {} = {};",
             formatter.bound(variable.id)?,
-            serde_json::to_value(variable.value_type)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_string))
-                .ok_or_else(|| error(LogicErrorCode::InvalidSyntax, "$", None))?,
+            variable.value_type.as_str(),
             formatter.expression(&variable.expression)?
         ));
     }

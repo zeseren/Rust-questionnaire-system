@@ -83,8 +83,7 @@ impl AppError {
     /// 用于 `map_err` 时须写成 `|error| AppError::internal(error)`，避免函数适配器丢失位置。
     #[track_caller]
     pub fn internal(error: impl std::fmt::Display) -> Self {
-        let error_id = Uuid::new_v4().simple().to_string();
-        let error_id = error_id[..16].to_owned();
+        let error_id = hex::encode(&Uuid::new_v4().as_bytes()[..8]);
         tracing::error!(
             error_id = %error_id,
             error_kind = std::any::type_name_of_val(&error),

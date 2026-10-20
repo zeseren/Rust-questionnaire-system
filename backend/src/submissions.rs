@@ -9,12 +9,11 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    AccessMode, ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, IsolationLevel,
-    QueryFilter, QuerySelect, Set, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, FromQueryResult, QueryFilter,
+    QuerySelect, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::{Uuid, Variant, Version};
@@ -22,11 +21,10 @@ use uuid::{Uuid, Variant, Version};
 use crate::{
     AppState, auth,
     domain::{Answer, Document},
-    entities::{response, survey, user, version},
+    entities::{FillingMode, SurveyStatus, response, survey, user, version},
     error::{AppError, AppResult, ErrorResponse},
     http::{ApiJson, ApiPath},
     repository,
-    surveys::FillingMode,
 };
 
 /// 公开题面只含当前发布内容及知情提示，不包含发布者账号或草稿。
@@ -36,8 +34,7 @@ pub(crate) struct PublicSurvey {
     pub version_id: Uuid,
     pub version_number: i32,
     /// anonymous 为公开匿名；login_once 为同一账号跨版本仅提交一次。
-    #[schema(value_type = crate::surveys::FillingMode)]
-    pub mode: String,
+    pub mode: FillingMode,
     pub deadline: Option<DateTime<Utc>>,
     /// purpose 是发布者说明的收集目的；文本只能作为普通文本展示。
     pub document: Document,
@@ -161,6 +158,17 @@ async fn submit(
     Ok((status, Json(receipt)))
 }
 
+// 题面读取只需要回收资格与当前版本，不加载 1 MiB 的草稿 JSONB。
+#[derive(FromQueryResult)]
+struct PublicSurveyRow {
+    owner_id: Uuid,
+    mode: Option<FillingMode>,
+    status: SurveyStatus,
+    deadline: Option<DateTime<Utc>>,
+    taken_down: bool,
+    current_version_id: Option<Uuid>,
+}
+
 /// 题面读取不需要写锁：只读快照保证题面、发布者状态、发布版本与是否已提交
 /// 来自同一时刻，也不与回收写入争抢 users / surveys 行锁。
 async fn read_public_survey(
@@ -168,25 +176,28 @@ async fn read_public_survey(
     headers: &HeaderMap,
     id: Uuid,
 ) -> AppResult<PublicSurvey> {
-    let tx = state
-        .db
-        .begin_with_config(
-            Some(IsolationLevel::RepeatableRead),
-            Some(AccessMode::ReadOnly),
-        )
-        .await?;
+    let tx = repository::read_snapshot(&state.db).await?;
     let survey = survey::Entity::find_by_id(id)
+        .select_only()
+        .columns([
+            survey::Column::OwnerId,
+            survey::Column::Mode,
+            survey::Column::Status,
+            survey::Column::Deadline,
+            survey::Column::TakenDown,
+            survey::Column::CurrentVersionId,
+        ])
+        .into_model::<PublicSurveyRow>()
         .one(&tx)
         .await?
         .ok_or_else(AppError::not_found)?;
     // anonymous 与尚未设置的模式完全不解释 Cookie；只有 login_once 才要求有效会话。
-    let (mode, respondent_id) = match survey.mode.as_deref() {
-        Some("login_once") => (
+    let (mode, respondent_id) = match survey.mode.unwrap_or(FillingMode::Anonymous) {
+        FillingMode::LoginOnce => (
             FillingMode::LoginOnce,
             Some(auth::authenticate(headers, &tx).await?.id),
         ),
-        Some("anonymous") | None => (FillingMode::Anonymous, None),
-        Some(_) => return Err(AppError::internal("unknown collection mode")),
+        FillingMode::Anonymous => (FillingMode::Anonymous, None),
     };
     let publisher_disabled = user::Entity::find_by_id(survey.owner_id)
         .select_only()
@@ -201,9 +212,14 @@ async fn read_public_survey(
             "发布者账号暂不可用，问卷暂停接受填写",
         ));
     }
-    repository::ensure_collecting(&survey, Utc::now())?;
+    repository::ensure_collecting(
+        survey.status,
+        survey.deadline,
+        survey.taken_down,
+        Utc::now(),
+    )?;
     if let Some(respondent_id) = respondent_id {
-        ensure_not_submitted(&tx, survey.id, respondent_id).await?;
+        ensure_not_submitted(&tx, id, respondent_id).await?;
     }
     let version_id = survey
         .current_version_id
@@ -227,7 +243,7 @@ async fn read_public_survey(
         survey_id: id,
         version_id,
         version_number: published.number,
-        mode: mode.as_str().to_owned(),
+        mode,
         deadline: survey.deadline,
         document,
         privacy: PrivacyNotice {
@@ -253,7 +269,7 @@ async fn submit_response(
         ));
     }
     // 只保存秘密的 SHA-256；UUID 的文本大小写、连字符格式不会改变其身份。
-    let key_hash = hex::encode(Sha256::digest(request.idempotency_key.as_bytes()));
+    let key_hash = auth::hash_secret_bytes(request.idempotency_key.as_bytes());
     let locked = lock_public_survey(state, headers, id).await?;
     let scope = locked
         .respondent_id
@@ -303,7 +319,7 @@ async fn submit_response(
         version_id: request.version_id,
         answers: &answers,
     };
-    let payload_hash = hex::encode(Sha256::digest(serde_json::to_vec(&payload)?));
+    let payload_hash = auth::hash_secret_bytes(&serde_json::to_vec(&payload)?);
     if let Some((receipt_id, _, original_hash)) = previous {
         if original_hash != payload_hash {
             return Err(idempotency_conflict());
@@ -360,16 +376,12 @@ async fn lock_public_survey(
         .select_only()
         .column(survey::Column::OwnerId)
         .column(survey::Column::Mode)
-        .into_tuple::<(Uuid, Option<String>)>()
+        .into_tuple::<(Uuid, Option<FillingMode>)>()
         .one(&state.db)
         .await?
         .ok_or_else(AppError::not_found)?;
-    // 模式字符串只解析一次；未知值按内部错误处理，不静默降级为匿名。
-    let respondent_id = match initial_mode
-        .as_deref()
-        .map(FillingMode::from_stored)
-        .transpose()?
-    {
+    // anonymous 与尚未设置的模式绝不解释 Cookie。
+    let respondent_id = match initial_mode {
         Some(FillingMode::LoginOnce) => Some(auth::authenticate(headers, &state.db).await?.id),
         Some(FillingMode::Anonymous) | None => None,
     };
@@ -404,7 +416,12 @@ fn ensure_available(locked: &LockedSurvey, now: DateTime<Utc>) -> AppResult<()> 
             "发布者账号暂不可用，问卷暂停接受填写",
         ));
     }
-    repository::ensure_collecting(&locked.survey, now)
+    repository::ensure_collecting(
+        locked.survey.status,
+        locked.survey.deadline,
+        locked.survey.taken_down,
+        now,
+    )
 }
 
 async fn ensure_not_submitted(

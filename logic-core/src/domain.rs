@@ -4,7 +4,7 @@
 //! 所有文字长度均按 Unicode 标量值（`chars()`）计数，而不是 UTF-8 字节数。
 //! 所有题面和文本答案都拒绝 U+0000 空字符，避免文本无法持久化。
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
@@ -223,7 +223,10 @@ impl Document {
         check_length(&self.purpose, MAX_TEXT_LENGTH, None, "收集目的")?;
         check_length(&self.thank_you, MAX_THANK_YOU_LENGTH, None, "结束语")?;
         if self.questions.len() > MAX_QUESTIONS {
-            return Err(ValidationError::new(None, "每份问卷最多允许 100 道题目"));
+            return Err(ValidationError::new(
+                None,
+                format!("每份问卷最多允许 {MAX_QUESTIONS} 道题目"),
+            ));
         }
 
         let mut question_ids = HashSet::with_capacity(self.questions.len());
@@ -238,7 +241,10 @@ impl Document {
                 QuestionKind::SingleChoice { options }
                 | QuestionKind::MultipleChoice { options, .. } => {
                     if options.len() > MAX_CHOICES {
-                        return Err(ValidationError::new(id, "每道选择题最多允许 50 个选项"));
+                        return Err(ValidationError::new(
+                            id,
+                            format!("每道选择题最多允许 {MAX_CHOICES} 个选项"),
+                        ));
                     }
                     for option in options {
                         if option.id.is_nil() || !option_ids.insert(option.id) {
@@ -253,7 +259,10 @@ impl Document {
                     } = &question.kind
                         && (*min_choices > MAX_CHOICES || *max_choices > MAX_CHOICES)
                     {
-                        return Err(ValidationError::new(id, "选择数量配置不能超过 50"));
+                        return Err(ValidationError::new(
+                            id,
+                            format!("选择数量配置不能超过 {MAX_CHOICES}"),
+                        ));
                     }
                 }
                 QuestionKind::Text { max_length } => {
@@ -434,8 +443,9 @@ impl Document {
 
     /// 校验答案并生成可以稳定序列化、用于存储和幂等比较的规范化结果。
     ///
-    /// 要求文档满足发布态的结构规则；答案长度按版本内每题保存的 `max_length` 检查。
-    /// 题目按 UUID 排序，多选按选项 UUID 排序，
+    /// 只校验答案与题目规则、流程路径的相容性；标题和说明等发布态文案已由
+    /// 发布流程保证，不在每次提交时重复扫描。答案长度按版本内每题保存的
+    /// `max_length` 检查。题目按 UUID 排序，多选按选项 UUID 排序，
     /// 数字统一为有限 `f64` JSON 数字，`1` 与 `1.0`、正零与负零分别等价。
     /// `null`、空白文本、空多选视为缺失；可选题不存储缺失项，必填题拒绝缺失。
     /// 非空白文本保留原文，不修剪、不截断。
@@ -447,37 +457,17 @@ impl Document {
         &self,
         answers: Vec<Answer>,
     ) -> Result<BTreeMap<Uuid, Value>, ValidationError> {
-        if let Some(logic) = self.validate_publish_compiled()? {
-            return FlowEvaluator::from_compiled(self, logic)
-                .evaluate_answers(answers)
-                .map(|result| result.answers)
-                .map_err(|error| ValidationError::new(error.question_id, error.to_string()));
-        }
-        let questions: HashMap<_, _> = self
-            .questions
-            .iter()
-            .map(|question| (question.id, question))
-            .collect();
-        let mut seen = HashSet::with_capacity(answers.len().min(MAX_QUESTIONS));
-        let mut normalized = BTreeMap::new();
-        for answer in answers {
-            let id = Some(answer.question_id);
-            if !seen.insert(answer.question_id) {
-                return Err(ValidationError::new(id, "同一道题目不能重复提交"));
-            }
-            let question = questions
-                .get(&answer.question_id)
-                .ok_or_else(|| ValidationError::new(id, "答案包含不属于此问卷版本的题目"))?;
-            if let Some(value) = question.normalize_answer(Some(&answer.value))? {
-                normalized.insert(question.id, value);
-            }
-        }
-        for question in &self.questions {
-            if question.required && !normalized.contains_key(&question.id) {
-                return Err(ValidationError::new(Some(question.id), "此题为必填项"));
-            }
-        }
-        Ok(normalized)
+        // 提交只复用规则的编译结果与同一段流程求值；发布态文案校验只发生在发布时。
+        let logic = match &self.logic {
+            Some(logic) => logic
+                .compile(&self.questions)
+                .map_err(|error| ValidationError::new(error.question_id, error.to_string()))?,
+            None => CompiledDocumentLogic::empty(),
+        };
+        FlowEvaluator::from_compiled(self, logic)
+            .evaluate_answers(answers)
+            .map(|result| result.answers)
+            .map_err(|error| ValidationError::new(error.question_id, error.to_string()))
     }
 }
 
@@ -512,18 +502,15 @@ impl Question {
                 if values.len() < *min_choices || values.len() > *max_choices {
                     return Err(ValidationError::new(id, "所选数量不符合此题的上下限"));
                 }
-                let allowed: HashSet<_> = options.iter().map(|option| option.id).collect();
-                let mut selected = Vec::with_capacity(values.len());
+                let mut selected = BTreeSet::new();
                 for value in values {
                     let option_id = parse_option_id(value, self.id)?;
-                    if !allowed.contains(&option_id) {
+                    if !options.iter().any(|option| option.id == option_id) {
                         return Err(ValidationError::new(id, "选项不属于此版本的当前题目"));
                     }
-                    selected.push(option_id);
-                }
-                selected.sort_unstable();
-                if selected.windows(2).any(|pair| pair[0] == pair[1]) {
-                    return Err(ValidationError::new(id, "多选答案不能包含重复选项"));
+                    if !selected.insert(option_id) {
+                        return Err(ValidationError::new(id, "多选答案不能包含重复选项"));
+                    }
                 }
                 Ok(Some(Value::Array(
                     selected
@@ -609,10 +596,13 @@ pub(crate) fn finite_number(value: &Value, question_id: Uuid) -> Result<f64, Val
         .ok_or_else(|| ValidationError::new(Some(question_id), "答案必须是有限的 JSON 数字"))
 }
 
+/// 统一正零与负零；IEEE 754 保留负零的符号，但问卷中的两者是相同答案。
+pub(crate) fn canonical_zero(number: f64) -> f64 {
+    if number == 0.0 { 0.0 } else { number }
+}
+
 pub(crate) fn canonical_number(number: f64) -> Value {
-    // IEEE 754 保留负零的符号，但问卷中的正零与负零是相同答案。
     Value::Number(
-        Number::from_f64(if number == 0.0 { 0.0 } else { number })
-            .expect("BUG: 有限 f64 必然可转换为 JSON Number"),
+        Number::from_f64(canonical_zero(number)).expect("BUG: 有限 f64 必然可转换为 JSON Number"),
     )
 }

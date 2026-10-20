@@ -7,10 +7,10 @@ use serde_json::{Number, Value, json};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::domain::{Question, QuestionKind};
+use crate::domain::{MAX_QUESTIONS, Question, QuestionKind};
 use crate::logic::{
     CompilationContext, CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType,
-    check_raw_budget, error, validate_versions,
+    check_raw_budget, error,
 };
 
 /// 可持久化的规则包；表达式结构由编译器严格检查。
@@ -92,11 +92,17 @@ pub struct DocumentLogicValues {
     pub rules: BTreeMap<Uuid, RuleValues>,
 }
 
+/// 计算变量的编译结果与来源路径绑在一起存储，避免两张平行表。
+#[derive(Debug)]
+struct CompiledVariable {
+    expression: CompiledExpression,
+    path: String,
+}
+
 /// 完成拓扑排序、类型检查和前置依赖检查的文档规则。
 #[derive(Debug)]
 pub struct CompiledDocumentLogic {
-    variables: BTreeMap<Uuid, CompiledExpression>,
-    variable_paths: BTreeMap<Uuid, String>,
+    variables: BTreeMap<Uuid, CompiledVariable>,
     order: Vec<Uuid>,
     rules: Vec<RuleExpressions>,
     rule_indices: BTreeMap<Uuid, usize>,
@@ -108,7 +114,6 @@ impl CompiledDocumentLogic {
     pub(crate) fn empty() -> Self {
         Self {
             variables: BTreeMap::new(),
-            variable_paths: BTreeMap::new(),
             order: Vec::new(),
             rules: Vec::new(),
             rule_indices: BTreeMap::new(),
@@ -121,9 +126,9 @@ impl CompiledDocumentLogic {
         self.rule_indices.get(&id).map(|&index| &self.rules[index])
     }
 
-    /// 已编译的计算变量；流程编译按 `variable_order` 逐个展开依赖。
-    pub(crate) fn variables(&self) -> &BTreeMap<Uuid, CompiledExpression> {
-        &self.variables
+    /// 已编译的计算变量表达式；流程编译按 `variable_order` 逐个展开依赖。
+    pub(crate) fn variable_expression(&self, id: Uuid) -> &CompiledExpression {
+        &self.variables[&id].expression
     }
 
     /// 已编译的题目规则，保持文档声明顺序。
@@ -132,11 +137,7 @@ impl CompiledDocumentLogic {
     }
 
     pub(crate) fn dependencies(&self, expression: &CompiledExpression) -> BTreeSet<Uuid> {
-        let mut result: BTreeSet<_> = expression.dependencies().collect();
-        for id in expression.variable_dependencies() {
-            result.extend(&self.question_dependencies[&id]);
-        }
-        result
+        expand_dependencies(expression, &self.question_dependencies)
     }
 
     /// 当某题答案因校验失败被回滚时，仅失效传递依赖该题的计算变量缓存。
@@ -169,11 +170,13 @@ impl CompiledDocumentLogic {
         if let Some(value) = cache.get(&id) {
             return Ok(value.clone());
         }
-        let value = self.variables[&id]
+        let variable = &self.variables[&id];
+        let value = variable
+            .expression
             .evaluate_resolving(answers, &mut |dependency| {
                 self.evaluate_variable(dependency, answers, cache)
             })
-            .map_err(|failure| failure.relocate(&self.variable_paths[&id]))?;
+            .map_err(|failure| failure.relocate(&variable.path))?;
         cache.insert(id, value.clone());
         Ok(value)
     }
@@ -192,11 +195,13 @@ impl CompiledDocumentLogic {
     ) -> Result<DocumentLogicValues, LogicError> {
         let mut variables = BTreeMap::new();
         for id in &self.order {
+            let variable = &self.variables[id];
             variables.insert(
                 *id,
-                self.variables[id]
+                variable
+                    .expression
                     .evaluate_with_variables(answers, &variables)
-                    .map_err(|failure| failure.relocate(&self.variable_paths[id]))?,
+                    .map_err(|failure| failure.relocate(&variable.path))?,
             );
         }
         let mut rules = BTreeMap::new();
@@ -226,17 +231,35 @@ impl CompiledDocumentLogic {
     }
 }
 
+/// 表达式的直接题目依赖与计算变量展开的题目依赖合并为一份集合。
+fn expand_dependencies(
+    expression: &CompiledExpression,
+    question_dependencies: &BTreeMap<Uuid, BTreeSet<Uuid>>,
+) -> BTreeSet<Uuid> {
+    let mut dependencies: BTreeSet<_> = expression.dependencies().collect();
+    for id in expression.variable_dependencies() {
+        dependencies.extend(&question_dependencies[&id]);
+    }
+    dependencies
+}
+
 impl DocumentLogic {
     /// 检查规则总容量、引用、类型、变量循环和间接前向依赖。
     ///
     /// # 错误
     /// 不接受未知版本、重复身份、空规则、类型错误、环或非法题目顺序。
     pub fn compile(&self, questions: &[Question]) -> Result<CompiledDocumentLogic, LogicError> {
-        if self.variables.len() > 100 || self.rules.len() > 100 {
+        if self.variables.len() > MAX_QUESTIONS || self.rules.len() > MAX_QUESTIONS {
             return Err(error(LogicErrorCode::LimitExceeded, "$.logic", None));
         }
         if self.variables.is_empty() && self.rules.is_empty() && self.flow.is_none() {
-            validate_versions(&self.dsl_version, &self.semantics_version)?;
+            // 空规则包同样要经过版本与题目绑定检查，不能静默放行。
+            CompilationContext::new(
+                &self.dsl_version,
+                &self.semantics_version,
+                questions,
+                &BTreeMap::new(),
+            )?;
             return Ok(CompiledDocumentLogic::empty());
         }
         for expression in self
@@ -289,36 +312,32 @@ impl DocumentLogic {
                 .map_err(|failure| failure.relocate(path))
         };
         let mut variables = BTreeMap::new();
-        let mut variable_paths = BTreeMap::new();
         for (index, variable) in self.variables.iter().enumerate() {
             let path = format!("$.logic.variables[{index}].expression");
             let expression = compile(&variable.expression, &path)?;
             if expression.value_type() != variable.value_type {
                 return Err(error(LogicErrorCode::TypeMismatch, &path, None));
             }
-            variables.insert(variable.id, expression);
-            variable_paths.insert(variable.id, path);
+            variables.insert(variable.id, CompiledVariable { expression, path });
         }
         let mut order = Vec::with_capacity(variables.len());
         let mut question_dependencies: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
         while order.len() < variables.len() {
-            let next = variables.iter().find(|(id, expression)| {
+            let next = variables.iter().find(|(id, variable)| {
                 !question_dependencies.contains_key(id)
-                    && expression
+                    && variable
+                        .expression
                         .variable_dependencies()
                         .all(|dependency| question_dependencies.contains_key(&dependency))
             });
-            let Some((id, expression)) = next else {
+            let Some((id, variable)) = next else {
                 return Err(error(
                     LogicErrorCode::DependencyCycle,
                     "$.logic.variables",
                     None,
                 ));
             };
-            let mut dependencies: BTreeSet<_> = expression.dependencies().collect();
-            for dependency in expression.variable_dependencies() {
-                dependencies.extend(&question_dependencies[&dependency]);
-            }
+            let dependencies = expand_dependencies(&variable.expression, &question_dependencies);
             question_dependencies.insert(*id, dependencies);
             order.push(*id);
         }
@@ -364,10 +383,7 @@ impl DocumentLogic {
                         Some(rule.question_id),
                     ));
                 }
-                let mut dependencies: BTreeSet<_> = expression.dependencies().collect();
-                for dependency in expression.variable_dependencies() {
-                    dependencies.extend(&question_dependencies[&dependency]);
-                }
+                let dependencies = expand_dependencies(&expression, &question_dependencies);
                 if dependencies.iter().any(|id| {
                     positions[id] > *position || (!allow_self && positions[id] == *position)
                 }) {
@@ -390,7 +406,6 @@ impl DocumentLogic {
         }
         let mut compiled = CompiledDocumentLogic {
             variables,
-            variable_paths,
             order,
             rules,
             rule_indices,
@@ -458,7 +473,7 @@ pub(crate) fn rewrite(
         if let Some(value) = fields.get_mut(key)
             && let Some(id) = value
                 .as_str()
-                .and_then(|value| Uuid::parse_str(value).ok())
+                .and_then(crate::identity::parse)
                 .and_then(|id| ids.get(&id))
         {
             *value = json!(id);
@@ -468,7 +483,7 @@ pub(crate) fn rewrite(
         for value in values {
             if let Some(id) = value
                 .as_str()
-                .and_then(|value| Uuid::parse_str(value).ok())
+                .and_then(crate::identity::parse)
                 .and_then(|id| options.get(&id))
             {
                 *value = json!(id);

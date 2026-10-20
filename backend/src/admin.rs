@@ -4,22 +4,19 @@ use crate::{
     AppState,
     auth::AuthUser,
     domain::Document,
-    entities::{audit, session, survey, user, version},
+    entities::{AuditAction, SurveyStatus, UserRole, audit, session, survey, user, version},
     error::{AppError, AppResult, ErrorResponse},
-    http::{ApiJson, ApiPath, ApiQuery, Pagination},
+    http::{ApiJson, ApiPath, ApiQuery, Page, Pagination},
     repository,
-    surveys::{SurveyStatus, effective_status},
 };
 use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    AccessMode, ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait, FromQueryResult,
-    IntoActiveModel, IsolationLevel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Select,
-    Set, TransactionTrait,
-    sea_query::{Expr, LockType, extension::postgres::PgExpr},
+    ActiveModelTrait, ColumnTrait, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, Select, Set, TransactionTrait, sea_query::LockType,
 };
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
+use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
@@ -33,21 +30,10 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
 }
 
 fn require_admin(user: &AuthUser) -> AppResult<()> {
-    if user.role != "admin" {
+    if user.role != UserRole::Admin {
         return Err(AppError::forbidden());
     }
     Ok(())
-}
-
-// 治理列表统一使用可重复读的只读快照：总数与分页数据来自同一时刻，且不取写锁。
-async fn read_snapshot(state: &AppState) -> AppResult<DatabaseTransaction> {
-    Ok(state
-        .db
-        .begin_with_config(
-            Some(IsolationLevel::RepeatableRead),
-            Some(AccessMode::ReadOnly),
-        )
-        .await?)
 }
 
 fn reason(value: &str) -> AppResult<()> {
@@ -62,59 +48,43 @@ fn reason(value: &str) -> AppResult<()> {
     Ok(())
 }
 
-#[derive(Deserialize, IntoParams)]
-struct ListQuery {
-    #[serde(flatten)]
-    pagination: Pagination,
-}
-
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, FromQueryResult, ToSchema)]
 struct UserItem {
     id: Uuid,
     username: String,
-    role: String,
+    role: UserRole,
     disabled: bool,
     created_at: DateTime<Utc>,
 }
-impl From<user::Model> for UserItem {
-    fn from(value: user::Model) -> Self {
-        Self {
-            id: value.id,
-            username: value.username,
-            role: value.role,
-            disabled: value.disabled,
-            created_at: value.created_at,
-        }
-    }
-}
-#[derive(Serialize, ToSchema)]
-struct UserPage {
-    items: Vec<UserItem>,
-    total: u64,
-}
 
-#[utoipa::path(get, path="/api/admin/users", params(("page"=Option<u64>,Query),("page_size"=Option<u64>,Query)), responses((status=200,body=UserPage),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse)), security(("cookieAuth"=[])))]
+#[utoipa::path(get, path="/api/admin/users", params(Pagination), responses((status=200,body=Page<UserItem>),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse)), security(("cookieAuth"=[])))]
 async fn users(
     State(state): State<AppState>,
     actor: AuthUser,
-    ApiQuery(query): ApiQuery<ListQuery>,
-) -> AppResult<Json<UserPage>> {
+    ApiQuery(pagination): ApiQuery<Pagination>,
+) -> AppResult<Json<Page<UserItem>>> {
     require_admin(&actor)?;
-    let (offset, limit) = query.pagination.bounds()?;
-    let tx = read_snapshot(&state).await?;
+    let bounds = pagination.bounds()?;
+    let tx = repository::read_snapshot(&state.db).await?;
     let total = user::Entity::find().count(&tx).await?;
     let items = user::Entity::find()
+        .select_only()
+        .columns([
+            user::Column::Id,
+            user::Column::Username,
+            user::Column::Role,
+            user::Column::Disabled,
+            user::Column::CreatedAt,
+        ])
         .order_by_desc(user::Column::CreatedAt)
         .order_by_desc(user::Column::Id)
-        .offset(offset)
-        .limit(limit)
+        .offset(bounds.offset)
+        .limit(bounds.limit)
+        .into_model::<UserItem>()
         .all(&tx)
-        .await?
-        .into_iter()
-        .map(UserItem::from)
-        .collect();
+        .await?;
     tx.commit().await?;
-    Ok(Json(UserPage { items, total }))
+    Ok(Json(Page::new(items, total, bounds)))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -158,11 +128,10 @@ async fn change_user(
         id: Set(Uuid::new_v4()),
         actor_id: Set(actor.id),
         action: Set(if input.disabled {
-            "disable_user"
+            AuditAction::DisableUser
         } else {
-            "enable_user"
-        }
-        .to_owned()),
+            AuditAction::EnableUser
+        }),
         target_id: Set(id),
         reason: Set(input.reason),
         created_at: Set(Utc::now()),
@@ -179,7 +148,7 @@ struct SurveyRow {
     id: Uuid,
     owner_id: Uuid,
     title: String,
-    status: String,
+    status: SurveyStatus,
     taken_down: bool,
     deadline: Option<DateTime<Utc>>,
     current_version_id: Option<Uuid>,
@@ -196,16 +165,16 @@ struct SurveyItem {
     current_version_id: Option<Uuid>,
 }
 impl SurveyItem {
-    fn from_row(row: SurveyRow) -> AppResult<Self> {
-        Ok(Self {
-            status: effective_status(&row.status, row.deadline, Utc::now())?,
+    fn from_row(row: SurveyRow, now: DateTime<Utc>) -> Self {
+        Self {
+            status: row.status.effective(row.deadline, now),
             id: row.id,
             owner_id: row.owner_id,
             title: row.title,
             taken_down: row.taken_down,
             deadline: row.deadline,
             current_version_id: row.current_version_id,
-        })
+        }
     }
 }
 
@@ -221,15 +190,7 @@ fn governance_query() -> Select<survey::Entity> {
             survey::Column::Deadline,
             survey::Column::CurrentVersionId,
         ])
-        .column_as(
-            Expr::col(survey::Column::Draft).cast_json_field("title"),
-            "title",
-        )
-}
-#[derive(Serialize, ToSchema)]
-struct AdminSurveyPage {
-    items: Vec<SurveyItem>,
-    total: u64,
+        .column_as(repository::title_column(), "title")
 }
 #[derive(Serialize, ToSchema)]
 struct GovernanceDetail {
@@ -237,30 +198,31 @@ struct GovernanceDetail {
     published_document: Option<Document>,
 }
 
-#[utoipa::path(get, path="/api/admin/surveys", params(("page"=Option<u64>,Query),("page_size"=Option<u64>,Query)), responses((status=200,body=AdminSurveyPage),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse)), security(("cookieAuth"=[])))]
+#[utoipa::path(get, path="/api/admin/surveys", params(Pagination), responses((status=200,body=Page<SurveyItem>),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse)), security(("cookieAuth"=[])))]
 async fn surveys(
     State(state): State<AppState>,
     actor: AuthUser,
-    ApiQuery(query): ApiQuery<ListQuery>,
-) -> AppResult<Json<AdminSurveyPage>> {
+    ApiQuery(pagination): ApiQuery<Pagination>,
+) -> AppResult<Json<Page<SurveyItem>>> {
     require_admin(&actor)?;
-    let (offset, limit) = query.pagination.bounds()?;
+    let bounds = pagination.bounds()?;
+    let now = Utc::now();
     // 只读快照：总数与分页数据来自同一时刻，且不为列表取任何写锁。
-    let tx = read_snapshot(&state).await?;
+    let tx = repository::read_snapshot(&state.db).await?;
     let total = survey::Entity::find().count(&tx).await?;
     let items = governance_query()
         .order_by_desc(survey::Column::CreatedAt)
         .order_by_desc(survey::Column::Id)
-        .offset(offset)
-        .limit(limit)
+        .offset(bounds.offset)
+        .limit(bounds.limit)
         .into_model::<SurveyRow>()
         .all(&tx)
         .await?
         .into_iter()
-        .map(SurveyItem::from_row)
-        .collect::<AppResult<_>>()?;
+        .map(|row| SurveyItem::from_row(row, now))
+        .collect();
     tx.commit().await?;
-    Ok(Json(AdminSurveyPage { items, total }))
+    Ok(Json(Page::new(items, total, bounds)))
 }
 
 #[utoipa::path(get, path="/api/admin/surveys/{id}", params(("id"=Uuid,Path)), responses((status=200,body=GovernanceDetail),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse),(status=404,body=ErrorResponse)), security(("cookieAuth"=[])))]
@@ -287,7 +249,7 @@ async fn survey_detail(
         None
     };
     Ok(Json(GovernanceDetail {
-        survey: SurveyItem::from_row(row)?,
+        survey: SurveyItem::from_row(row, Utc::now()),
         published_document,
     }))
 }
@@ -326,11 +288,10 @@ async fn change_survey(
         id: Set(Uuid::new_v4()),
         actor_id: Set(actor.id),
         action: Set(if input.taken_down {
-            "take_down"
+            AuditAction::TakedownSurvey
         } else {
-            "restore_survey"
-        }
-        .to_owned()),
+            AuditAction::RestoreSurvey
+        }),
         target_id: Set(id),
         reason: Set(input.reason),
         created_at: Set(Utc::now()),
@@ -341,48 +302,34 @@ async fn change_survey(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, FromQueryResult, ToSchema)]
 struct AuditItem {
     id: Uuid,
     actor_id: Uuid,
-    action: String,
+    action: AuditAction,
     target_id: Uuid,
     reason: String,
     created_at: DateTime<Utc>,
 }
-#[derive(Serialize, ToSchema)]
-struct AuditPage {
-    items: Vec<AuditItem>,
-    total: u64,
-}
 
-#[utoipa::path(get, path="/api/admin/audits", params(("page"=Option<u64>,Query),("page_size"=Option<u64>,Query)), responses((status=200,body=AuditPage),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse)), security(("cookieAuth"=[])))]
+#[utoipa::path(get, path="/api/admin/audits", params(Pagination), responses((status=200,body=Page<AuditItem>),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse)), security(("cookieAuth"=[])))]
 async fn audits(
     State(state): State<AppState>,
     actor: AuthUser,
-    ApiQuery(query): ApiQuery<ListQuery>,
-) -> AppResult<Json<AuditPage>> {
+    ApiQuery(pagination): ApiQuery<Pagination>,
+) -> AppResult<Json<Page<AuditItem>>> {
     require_admin(&actor)?;
-    let (offset, limit) = query.pagination.bounds()?;
-    let tx = read_snapshot(&state).await?;
+    let bounds = pagination.bounds()?;
+    let tx = repository::read_snapshot(&state.db).await?;
     let total = audit::Entity::find().count(&tx).await?;
     let items = audit::Entity::find()
         .order_by_desc(audit::Column::CreatedAt)
         .order_by_desc(audit::Column::Id)
-        .offset(offset)
-        .limit(limit)
+        .offset(bounds.offset)
+        .limit(bounds.limit)
+        .into_model::<AuditItem>()
         .all(&tx)
-        .await?
-        .into_iter()
-        .map(|item| AuditItem {
-            id: item.id,
-            actor_id: item.actor_id,
-            action: item.action,
-            target_id: item.target_id,
-            reason: item.reason,
-            created_at: item.created_at,
-        })
-        .collect();
+        .await?;
     tx.commit().await?;
-    Ok(Json(AuditPage { items, total }))
+    Ok(Json(Page::new(items, total, bounds)))
 }

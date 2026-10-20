@@ -58,7 +58,10 @@ fn 文档规则预检成功信封可解析() {
     let (questions_json, logic_json) = sample();
     let output = logic_wasm::compile_document_logic(logic_json, questions_json);
     let envelope: Value = serde_json::from_str(&output).expect("信封必须是合法 JSON");
-    assert_eq!(envelope["ok"]["compiled"], true);
+    assert!(
+        envelope["ok"].get("compiled").is_none(),
+        "成功信封不再包含恒真的 compiled 字段：{envelope}"
+    );
     assert!(
         envelope["ok"]["variable_order"].is_array(),
         "编译成功应返回变量拓扑顺序：{envelope}"

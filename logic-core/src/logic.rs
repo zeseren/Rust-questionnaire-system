@@ -10,7 +10,8 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::domain::{
-    MAX_CHOICES, MAX_QUESTIONS, MAX_TEXT_LENGTH, Question, QuestionKind, finite_number,
+    MAX_CHOICES, MAX_QUESTIONS, MAX_TEXT_LENGTH, Question, QuestionKind, canonical_zero,
+    finite_number,
 };
 
 const MAX_NODES: usize = 256;
@@ -122,6 +123,31 @@ pub enum LogicValueType {
     Choice,
     /// 多选集合。
     Choices,
+}
+
+impl LogicValueType {
+    /// 稳定的 snake_case 名称；序列化名与文本 DSL 共用这一处事实源。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Boolean => "boolean",
+            Self::Number => "number",
+            Self::Text => "text",
+            Self::Choice => "choice",
+            Self::Choices => "choices",
+        }
+    }
+
+    /// 从文本 DSL 类型名解析值类型。
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "boolean" => Some(Self::Boolean),
+            "number" => Some(Self::Number),
+            "text" => Some(Self::Text),
+            "choice" => Some(Self::Choice),
+            "choices" => Some(Self::Choices),
+            _ => None,
+        }
+    }
 }
 
 /// 求值结果；布尔位置的 Missing 对应三值逻辑中的 unknown。
@@ -294,8 +320,8 @@ impl CompiledExpression {
 
     /// 求值时必然读取的题目集合；计算变量引用展开为其依赖的题目。
     ///
-    /// `variables` 须已包含本表达式直接或间接依赖的全部计算变量，由文档编译器按
-    /// 拓扑顺序提供；未出现的变量视为没有依赖。
+    /// `variables` 由文档编译器按拓扑序完整提供：任何被引用的计算变量都必须已展开。
+    /// 缺失即内部不变量违约，应当显式失败而不是静默当作“无依赖”掩盖依赖。
     pub(crate) fn required_reads(
         &self,
         variables: &BTreeMap<Uuid, BTreeSet<Uuid>>,
@@ -524,16 +550,7 @@ fn numeric(raw: &str) -> Option<f64> {
         return None;
     }
     let value: Value = serde_json::from_str(raw).ok()?;
-    finite_number(&value, Uuid::nil()).ok().map(positive_zero)
-}
-
-fn positive_zero(value: f64) -> f64 {
-    // 位级判断消除负零；普通数字比较不使用模糊容差。
-    if value.to_bits() & 0x7fff_ffff_ffff_ffff == 0 {
-        0.0
-    } else {
-        value
-    }
+    finite_number(&value, Uuid::nil()).ok().map(canonical_zero)
 }
 
 fn compile_node(
@@ -740,7 +757,7 @@ fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<Logic
     match binding.value_type {
         LogicValueType::Boolean => Err(invalid()),
         LogicValueType::Number => finite_number(raw, id)
-            .map(positive_zero)
+            .map(canonical_zero)
             .map(LogicValue::Number)
             .map_err(|_| invalid()),
         LogicValueType::Text => raw
@@ -788,7 +805,8 @@ impl Node {
             NodeKind::Literal(_) | NodeKind::Answered(_) => BTreeSet::new(),
             NodeKind::Answer(id) => {
                 if bindings[id].variable {
-                    variables.get(id).cloned().unwrap_or_default()
+                    // 拓扑序保证依赖已展开；缺失说明编译器漏填，直接崩而不是掩盖。
+                    variables[id].clone()
                 } else {
                     [*id].into_iter().collect()
                 }
@@ -920,7 +938,7 @@ impl Node {
                 if !value.is_finite() {
                     return Err(error(LogicErrorCode::ArithmeticError, &self.path, None));
                 }
-                Ok(Number(positive_zero(value)))
+                Ok(Number(canonical_zero(value)))
             }
         }
     }

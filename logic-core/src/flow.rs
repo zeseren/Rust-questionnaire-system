@@ -14,6 +14,15 @@ use crate::logic::{
 };
 use crate::logic_document::{CompiledDocumentLogic, rewrite};
 
+/// 流程节点总数上限。
+const MAX_FLOW_NODES: usize = 256;
+/// 单个分支节点的条件数上限。
+const MAX_BRANCHES: usize = 16;
+/// 未配置流程时虚拟入口页面的身份。
+const IMPLICIT_PAGE_ID: Uuid = Uuid::nil();
+/// 未配置流程时虚拟结束节点的身份。
+const IMPLICIT_END_ID: Uuid = Uuid::from_u128(1);
+
 /// 节点数组采用拓扑顺序，入口必须是第一个页面。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -195,12 +204,12 @@ impl CompiledFlow {
         Self {
             nodes: vec![
                 Node::Page {
-                    id: Uuid::nil(),
+                    id: IMPLICIT_PAGE_ID,
                     questions: questions.iter().map(|question| question.id).collect(),
                     next: 1,
                 },
                 Node::End {
-                    id: Uuid::from_u128(1),
+                    id: IMPLICIT_END_ID,
                     outcome: FlowOutcome::Complete,
                 },
             ],
@@ -209,7 +218,8 @@ impl CompiledFlow {
     fn id(&self, index: usize) -> Uuid {
         match &self.nodes[index] {
             Node::Page { id, .. } | Node::End { id, .. } => *id,
-            Node::Branch { .. } => Uuid::nil(),
+            // 编译器不会把分支节点写入访问路径，路径身份只来自页面与结束节点。
+            Node::Branch { .. } => unreachable!("分支节点不进入访问路径"),
         }
     }
 }
@@ -222,7 +232,7 @@ pub(crate) fn compile_flow(
     context: &CompilationContext,
 ) -> Result<CompiledFlow, LogicError> {
     let invalid = || error(LogicErrorCode::InvalidFlow, "$.logic.flow", None);
-    if flow.nodes.len() > 256 {
+    if flow.nodes.len() > MAX_FLOW_NODES {
         return Err(error(LogicErrorCode::LimitExceeded, "$.logic.flow", None));
     }
     if !matches!(flow.nodes.first(), Some(FlowNode::Page { id, .. }) if *id == flow.entry) {
@@ -249,7 +259,7 @@ pub(crate) fn compile_flow(
             }
         }
         if let FlowNode::Branch { branches, .. } = node
-            && (branches.is_empty() || branches.len() > 16)
+            && (branches.is_empty() || branches.len() > MAX_BRANCHES)
         {
             return Err(invalid());
         }
@@ -288,7 +298,12 @@ pub(crate) fn compile_flow(
     // 变量按拓扑顺序展开：每个变量只依赖更早的变量，因此读取集合可逐层复用。
     let mut variable_reads = BTreeMap::new();
     for id in logic.variable_order() {
-        variable_reads.insert(*id, logic.variables()[id].required_reads(&variable_reads));
+        variable_reads.insert(
+            *id,
+            logic
+                .variable_expression(*id)
+                .required_reads(&variable_reads),
+        );
     }
     let check_available =
         |expression: &CompiledExpression, node: usize, path: &str| -> Result<(), LogicError> {
@@ -474,7 +489,7 @@ impl<'a> FlowEvaluator<'a> {
         Ok(Self::from_compiled(document, logic))
     }
 
-    /// 调用方须先校验同一文档的草稿字段，并传入该文档的编译结果。
+    /// 调用方保证文档已通过草稿字段校验（发布版本在发布边界已完成校验），并传入该文档的编译结果。
     pub(crate) fn from_compiled(document: &'a Document, mut logic: CompiledDocumentLogic) -> Self {
         let flow = logic
             .flow

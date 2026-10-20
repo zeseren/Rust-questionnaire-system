@@ -1,19 +1,60 @@
 //! 共享的归属查询和行锁。所有回收写操作先锁用户，再锁问卷，形成一致的并发顺序。
+//!
+//! 只读路径共用 `read_snapshot`，列表查询共用 `title_column` 与 `owned_survey_meta`，
+//! 避免各模块重复配置隔离级别或把整份 JsonBinary 草稿搬进内存。
 
 use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait,
-    IntoActiveModel, QueryFilter, QuerySelect, Set, sea_query::LockType,
+    AccessMode, ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    DatabaseTransaction, EntityTrait, FromQueryResult, IntoActiveModel, IsolationLevel,
+    QueryFilter, QuerySelect, Set, TransactionTrait,
+    sea_query::{Expr, LockType, SimpleExpr, extension::postgres::PgExpr},
 };
 use uuid::Uuid;
 
 use crate::{
     auth,
-    entities::{survey, user},
+    entities::{SurveyStatus, survey, user},
     error::{AppError, AppResult},
-    surveys::SurveyStatus,
 };
+
+/// 可重复读的只读事务：同一响应内的总数与分页数据来自同一快照，且不取写锁。
+pub(crate) async fn read_snapshot(db: &DatabaseConnection) -> AppResult<DatabaseTransaction> {
+    Ok(db
+        .begin_with_config(
+            Some(IsolationLevel::RepeatableRead),
+            Some(AccessMode::ReadOnly),
+        )
+        .await?)
+}
+
+/// 只从草稿 JSONB 中取出标题列，供各列表投影复用。
+pub(crate) fn title_column() -> SimpleExpr {
+    Expr::col(survey::Column::Draft).cast_json_field("title")
+}
+
+/// 归属校验只需要 ID 与当前版本，不加载 1 MiB 的草稿。
+#[derive(FromQueryResult)]
+pub(crate) struct SurveyMeta {
+    pub id: Uuid,
+    pub current_version_id: Option<Uuid>,
+}
+
+pub(crate) async fn owned_survey_meta(
+    db: &impl ConnectionTrait,
+    owner_id: Uuid,
+    id: Uuid,
+) -> AppResult<SurveyMeta> {
+    survey::Entity::find_by_id(id)
+        .filter(survey::Column::OwnerId.eq(owner_id))
+        .select_only()
+        .columns([survey::Column::Id, survey::Column::CurrentVersionId])
+        .into_model::<SurveyMeta>()
+        .one(db)
+        .await?
+        .ok_or_else(AppError::not_found)
+}
 
 pub(crate) async fn lock_user_record(tx: &DatabaseTransaction, id: Uuid) -> AppResult<user::Model> {
     user::Entity::find_by_id(id)
@@ -82,30 +123,37 @@ pub(crate) async fn lock_owned_survey(
     Ok(survey)
 }
 
+/// 把“回收中但已过截止时间”物化为已关闭；状态未变化时不产生写入。
 pub(crate) async fn expire_survey(
     tx: &DatabaseTransaction,
     survey: survey::Model,
     now: DateTime<Utc>,
 ) -> AppResult<survey::Model> {
-    if survey.status == "collecting" && survey.deadline.is_some_and(|deadline| deadline <= now) {
-        let mut update = survey.into_active_model();
-        update.status = Set("closed".to_owned());
-        update.updated_at = Set(now);
-        return Ok(update.update(tx).await?);
+    if survey.status.effective(survey.deadline, now) == survey.status {
+        return Ok(survey);
     }
-    Ok(survey)
+    let mut update = survey.into_active_model();
+    update.status = Set(SurveyStatus::Closed);
+    update.updated_at = Set(now);
+    Ok(update.update(tx).await?)
 }
 
-pub(crate) fn ensure_collecting(survey: &survey::Model, now: DateTime<Utc>) -> AppResult<()> {
-    if survey.taken_down {
+/// 新提交的资格检查；成功重试不调用本函数。
+pub(crate) fn ensure_collecting(
+    status: SurveyStatus,
+    deadline: Option<DateTime<Utc>>,
+    taken_down: bool,
+    now: DateTime<Utc>,
+) -> AppResult<()> {
+    if taken_down {
         return Err(AppError::conflict("taken_down", "问卷已被下架"));
     }
-    if survey.deadline.is_some_and(|deadline| deadline <= now) {
-        return Err(AppError::conflict("deadline_passed", "问卷已到截止时间"));
-    }
-    match SurveyStatus::from_stored(&survey.status)? {
+    match status.effective(deadline, now) {
         SurveyStatus::Collecting => Ok(()),
         SurveyStatus::Unpublished => Err(AppError::not_found()),
+        SurveyStatus::Closed if status == SurveyStatus::Collecting => {
+            Err(AppError::conflict("deadline_passed", "问卷已到截止时间"))
+        }
         SurveyStatus::Closed => Err(AppError::conflict("collection_closed", "问卷已关闭回收")),
         SurveyStatus::Archived => Err(AppError::conflict("archived", "问卷已归档")),
     }

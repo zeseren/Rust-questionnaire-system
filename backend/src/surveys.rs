@@ -9,10 +9,9 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    AccessMode, ActiveModelTrait, ColumnTrait, Condition, DatabaseTransaction, EntityTrait,
-    FromQueryResult, IntoActiveModel, IsolationLevel, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set, TransactionTrait,
-    sea_query::{Expr, extension::postgres::PgExpr},
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseTransaction, EntityTrait, FromQueryResult,
+    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    sea_query::Expr,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
@@ -25,65 +24,11 @@ use crate::{
     domain::{Document, ValidationError},
     entities::{survey, version},
     error::{AppError, AppResult, ErrorResponse},
-    http::{ApiJson, ApiPath, ApiQuery, Pagination},
+    http::{ApiJson, ApiPath, ApiQuery, Page, Pagination},
     repository,
 };
 
-/// 业务状态与管理员下架标志相互独立；到期问卷在读取时也显示为已关闭。
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SurveyStatus {
-    Unpublished,
-    Collecting,
-    Closed,
-    Archived,
-}
-
-impl SurveyStatus {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Unpublished => "unpublished",
-            Self::Collecting => "collecting",
-            Self::Closed => "closed",
-            Self::Archived => "archived",
-        }
-    }
-
-    pub(crate) fn from_stored(value: &str) -> AppResult<Self> {
-        match value {
-            "unpublished" => Ok(Self::Unpublished),
-            "collecting" => Ok(Self::Collecting),
-            "closed" => Ok(Self::Closed),
-            "archived" => Ok(Self::Archived),
-            _ => Err(AppError::internal("数据库中的问卷状态无效")),
-        }
-    }
-}
-
-/// anonymous 不关联账号；login_once 对同一问卷按账号跨版本限交一次。
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum FillingMode {
-    Anonymous,
-    LoginOnce,
-}
-
-impl FillingMode {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Anonymous => "anonymous",
-            Self::LoginOnce => "login_once",
-        }
-    }
-
-    pub(crate) fn from_stored(value: &str) -> AppResult<Self> {
-        match value {
-            "anonymous" => Ok(Self::Anonymous),
-            "login_once" => Ok(Self::LoginOnce),
-            _ => Err(AppError::internal("数据库中的填写模式无效")),
-        }
-    }
-}
+pub(crate) use crate::entities::{FillingMode, SurveyStatus};
 
 /// 创建时可以提交空文档；不完整的题面可以保存，但不能发布。
 #[derive(Debug, Deserialize, ToSchema)]
@@ -170,14 +115,6 @@ pub(crate) struct SurveySummary {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
-pub(crate) struct SurveyPage {
-    pub items: Vec<SurveySummary>,
-    pub total: u64,
-    pub page: u64,
-    pub page_size: u64,
-}
-
 /// 预览只读取已保存草稿并提供发布校验结果，不保存或提交正式答卷。
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SurveyPreview {
@@ -199,14 +136,6 @@ pub(crate) struct VersionSummary {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-pub(crate) struct VersionPage {
-    pub items: Vec<VersionSummary>,
-    pub total: u64,
-    pub page: u64,
-    pub page_size: u64,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct PublishedSurvey {
     pub survey: SurveyDetail,
     pub version: VersionSummary,
@@ -217,8 +146,8 @@ pub(crate) struct PublishedSurvey {
 struct SurveyListRow {
     id: Uuid,
     title: String,
-    status: String,
-    mode: Option<String>,
+    status: SurveyStatus,
+    mode: Option<FillingMode>,
     deadline: Option<DateTime<Utc>>,
     taken_down: bool,
     revision: i64,
@@ -285,7 +214,7 @@ async fn create(
         ("page_size" = Option<u64>, Query, description = "每页条数，默认 20，最大 100")
     ),
     responses(
-        (status = 200, description = "按更新时间和问卷 ID 倒序的本人问卷", body = SurveyPage),
+        (status = 200, description = "按更新时间和问卷 ID 倒序的本人问卷", body = Page<SurveySummary>),
         (status = 401, description = "未登录或账号不可用", body = ErrorResponse),
         (status = 400, description = "查询参数格式错误", body = ErrorResponse),
         (status = 422, description = "筛选或分页参数不合法", body = ErrorResponse),
@@ -296,7 +225,7 @@ async fn list(
     State(state): State<AppState>,
     user: AuthUser,
     ApiQuery(filters): ApiQuery<SurveyFilters>,
-) -> AppResult<Json<SurveyPage>> {
+) -> AppResult<Json<Page<SurveySummary>>> {
     Ok(Json(list_surveys(&state, user.id, filters).await?))
 }
 
@@ -377,11 +306,7 @@ async fn preview(
         survey_id: record.id,
         revision: record.revision,
         document,
-        mode: record
-            .mode
-            .as_deref()
-            .map(FillingMode::from_stored)
-            .transpose()?,
+        mode: record.mode,
         publishable: validation_error.is_none(),
         validation_error,
     }))
@@ -592,7 +517,7 @@ async fn archive(
         ("page_size" = Option<u64>, Query, description = "每页条数，默认 20，最大 100")
     ),
     responses(
-        (status = 200, description = "发布版本元数据和当前版本标志", body = VersionPage),
+        (status = 200, description = "发布版本元数据和当前版本标志", body = Page<VersionSummary>),
         (status = 401, description = "未登录或账号不可用", body = ErrorResponse),
         (status = 404, description = "资源不存在或不属于当前用户", body = ErrorResponse),
         (status = 400, description = "路径或查询参数格式错误", body = ErrorResponse),
@@ -605,7 +530,7 @@ async fn versions(
     user: AuthUser,
     ApiPath(id): ApiPath<Uuid>,
     ApiQuery(pagination): ApiQuery<Pagination>,
-) -> AppResult<Json<VersionPage>> {
+) -> AppResult<Json<Page<VersionSummary>>> {
     Ok(Json(list_versions(&state, user.id, id, pagination).await?))
 }
 
@@ -637,7 +562,7 @@ async fn insert_draft(
     Ok(survey::ActiveModel {
         id: Set(Uuid::new_v4()),
         owner_id: Set(owner_id),
-        status: Set(SurveyStatus::Unpublished.as_str().to_owned()),
+        status: Set(SurveyStatus::Unpublished),
         mode: Set(None),
         deadline: Set(None),
         taken_down: Set(false),
@@ -655,8 +580,8 @@ async fn list_surveys(
     state: &AppState,
     owner_id: Uuid,
     filters: SurveyFilters,
-) -> AppResult<SurveyPage> {
-    let (offset, limit) = filters.pagination.bounds()?;
+) -> AppResult<Page<SurveySummary>> {
+    let bounds = filters.pagination.bounds()?;
     let now = Utc::now();
     let mut query = survey::Entity::find().filter(survey::Column::OwnerId.eq(owner_id));
     if let Some(title) = filters.title {
@@ -669,32 +594,26 @@ async fn list_surveys(
     if let Some(status) = filters.status {
         let condition = match status {
             SurveyStatus::Collecting => Condition::all()
-                .add(survey::Column::Status.eq("collecting"))
+                .add(survey::Column::Status.eq(SurveyStatus::Collecting))
                 .add(
                     Condition::any()
                         .add(survey::Column::Deadline.is_null())
                         .add(survey::Column::Deadline.gt(now)),
                 ),
             SurveyStatus::Closed => Condition::any()
-                .add(survey::Column::Status.eq("closed"))
+                .add(survey::Column::Status.eq(SurveyStatus::Closed))
                 .add(
                     Condition::all()
-                        .add(survey::Column::Status.eq("collecting"))
+                        .add(survey::Column::Status.eq(SurveyStatus::Collecting))
                         .add(survey::Column::Deadline.lte(now)),
                 ),
             SurveyStatus::Unpublished | SurveyStatus::Archived => {
-                Condition::all().add(survey::Column::Status.eq(status.as_str()))
+                Condition::all().add(survey::Column::Status.eq(status))
             }
         };
         query = query.filter(condition);
     }
-    let tx = state
-        .db
-        .begin_with_config(
-            Some(IsolationLevel::RepeatableRead),
-            Some(AccessMode::ReadOnly),
-        )
-        .await?;
+    let tx = repository::read_snapshot(&state.db).await?;
     let total = query.clone().count(&tx).await?;
     let rows = query
         .select_only()
@@ -709,45 +628,31 @@ async fn list_surveys(
             survey::Column::CreatedAt,
             survey::Column::UpdatedAt,
         ])
-        .column_as(
-            Expr::col(survey::Column::Draft).cast_json_field("title"),
-            "title",
-        )
+        .column_as(repository::title_column(), "title")
         .order_by_desc(survey::Column::UpdatedAt)
         .order_by_desc(survey::Column::Id)
-        .offset(offset)
-        .limit(limit)
+        .offset(bounds.offset)
+        .limit(bounds.limit)
         .into_model::<SurveyListRow>()
         .all(&tx)
         .await?;
     let items = rows
         .into_iter()
-        .map(|row| {
-            Ok(SurveySummary {
-                id: row.id,
-                title: row.title,
-                status: effective_status(&row.status, row.deadline, now)?,
-                mode: row
-                    .mode
-                    .as_deref()
-                    .map(FillingMode::from_stored)
-                    .transpose()?,
-                deadline: row.deadline,
-                taken_down: row.taken_down,
-                revision: row.revision,
-                current_version_id: row.current_version_id,
-                created_at: row.created_at,
-                updated_at: row.updated_at,
-            })
+        .map(|row| SurveySummary {
+            id: row.id,
+            title: row.title,
+            status: row.status.effective(row.deadline, now),
+            mode: row.mode,
+            deadline: row.deadline,
+            taken_down: row.taken_down,
+            revision: row.revision,
+            current_version_id: row.current_version_id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         })
-        .collect::<AppResult<Vec<_>>>()?;
+        .collect();
     tx.commit().await?;
-    Ok(SurveyPage {
-        items,
-        total,
-        page: offset / limit + 1,
-        page_size: limit,
-    })
+    Ok(Page::new(items, total, bounds))
 }
 
 async fn save_survey_draft(
@@ -785,10 +690,11 @@ async fn copy_survey(
 ) -> AppResult<SurveyDetail> {
     let tx = state.db.begin().await?;
     let source = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
-    let source_document = if source.status == "archived" {
-        version::Entity::find()
-            .filter(version::Column::SurveyId.eq(id))
-            .order_by_desc(version::Column::Number)
+    let source_document = if source.status == SurveyStatus::Archived {
+        let version_id = source
+            .current_version_id
+            .ok_or_else(|| AppError::internal("归档问卷缺少发布版本"))?;
+        version::Entity::find_by_id(version_id)
             .one(&tx)
             .await?
             .ok_or_else(|| AppError::internal("归档问卷缺少发布版本"))?
@@ -814,7 +720,7 @@ async fn delete_survey(
 ) -> AppResult<()> {
     let tx = state.db.begin().await?;
     let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
-    if record.status != "unpublished" || record.current_version_id.is_some() {
+    if record.status != SurveyStatus::Unpublished {
         return Err(AppError::conflict(
             "survey_published",
             "发布过的问卷不能删除，请使用归档",
@@ -898,7 +804,7 @@ async fn publish_survey(
     let updated = survey::ActiveModel {
         id: Set(id),
         status: Set(if first_publish {
-            "collecting".to_owned()
+            SurveyStatus::Collecting
         } else {
             record.status
         }),
@@ -936,7 +842,7 @@ async fn update_collection(
     ensure_editable(&record)?;
     if let Some(mode) = input.mode
         && record.current_version_id.is_some()
-        && record.mode.as_deref() != Some(mode.as_str())
+        && record.mode != Some(mode)
     {
         return Err(AppError::conflict(
             "mode_frozen",
@@ -946,7 +852,7 @@ async fn update_collection(
     let deadline_changed = input.deadline.is_some();
     let mut active = record.into_active_model();
     if let Some(mode) = input.mode {
-        active.mode = Set(Some(mode.as_str().to_owned()));
+        active.mode = Set(Some(mode));
     }
     if let Some(deadline) = input.deadline {
         active.deadline = Set(deadline);
@@ -982,7 +888,7 @@ async fn change_status(
     let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
     let now = Utc::now();
     let record = repository::expire_survey(&tx, record, now).await?;
-    let current = SurveyStatus::from_stored(&record.status)?;
+    let current = record.status;
     let target = match (action, current) {
         (
             CollectionAction::Archive,
@@ -1013,7 +919,7 @@ async fn change_status(
     };
     let updated = if target != current {
         let mut active = record.into_active_model();
-        active.status = Set(target.as_str().to_owned());
+        active.status = Set(target);
         active.updated_at = Set(now);
         active.update(&tx).await?
     } else {
@@ -1029,17 +935,11 @@ async fn list_versions(
     owner_id: Uuid,
     id: Uuid,
     pagination: Pagination,
-) -> AppResult<VersionPage> {
-    let (offset, limit) = pagination.bounds()?;
-    let tx = state
-        .db
-        .begin_with_config(
-            Some(IsolationLevel::RepeatableRead),
-            Some(AccessMode::ReadOnly),
-        )
-        .await?;
-    let record = repository::owned_survey(&tx, owner_id, id).await?;
-    let query = version::Entity::find().filter(version::Column::SurveyId.eq(id));
+) -> AppResult<Page<VersionSummary>> {
+    let bounds = pagination.bounds()?;
+    let tx = repository::read_snapshot(&state.db).await?;
+    let meta = repository::owned_survey_meta(&tx, owner_id, id).await?;
+    let query = version::Entity::find().filter(version::Column::SurveyId.eq(meta.id));
     let total = query.clone().count(&tx).await?;
     let rows = query
         .select_only()
@@ -1049,8 +949,8 @@ async fn list_versions(
             version::Column::PublishedAt,
         ])
         .order_by_desc(version::Column::Number)
-        .offset(offset)
-        .limit(limit)
+        .offset(bounds.offset)
+        .limit(bounds.limit)
         .into_model::<VersionListRow>()
         .all(&tx)
         .await?;
@@ -1060,20 +960,15 @@ async fn list_versions(
             id: row.id,
             number: row.number,
             published_at: row.published_at,
-            is_current: record.current_version_id == Some(row.id),
+            is_current: meta.current_version_id == Some(row.id),
         })
         .collect();
     tx.commit().await?;
-    Ok(VersionPage {
-        items,
-        total,
-        page: offset / limit + 1,
-        page_size: limit,
-    })
+    Ok(Page::new(items, total, bounds))
 }
 
 fn ensure_editable(record: &survey::Model) -> AppResult<()> {
-    if record.status == "archived" {
+    if record.status == SurveyStatus::Archived {
         return Err(AppError::conflict(
             "survey_archived",
             "已归档问卷不能编辑或发布，可以复制为新问卷",
@@ -1102,27 +997,11 @@ fn ensure_future_deadline(deadline: Option<DateTime<Utc>>, now: DateTime<Utc>) -
     Ok(())
 }
 
-pub(crate) fn effective_status(
-    status: &str,
-    deadline: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> AppResult<SurveyStatus> {
-    let status = SurveyStatus::from_stored(status)?;
-    if status == SurveyStatus::Collecting && deadline.is_some_and(|deadline| deadline <= now) {
-        return Ok(SurveyStatus::Closed);
-    }
-    Ok(status)
-}
-
 fn survey_detail(record: survey::Model, now: DateTime<Utc>) -> AppResult<SurveyDetail> {
     Ok(SurveyDetail {
         id: record.id,
-        status: effective_status(&record.status, record.deadline, now)?,
-        mode: record
-            .mode
-            .as_deref()
-            .map(FillingMode::from_stored)
-            .transpose()?,
+        status: record.status.effective(record.deadline, now),
+        mode: record.mode,
         deadline: record.deadline,
         taken_down: record.taken_down,
         revision: record.revision,
