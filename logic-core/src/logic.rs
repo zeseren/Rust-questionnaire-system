@@ -943,3 +943,447 @@ impl Node {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use serde_json::{Number, Value, json};
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::domain::{Question, QuestionKind};
+
+    fn id(value: u128) -> Uuid {
+        Uuid::from_u128(value)
+    }
+
+    fn 数字题(value: u128) -> Question {
+        Question {
+            id: id(value),
+            title: format!("数字题 {value}"),
+            required: false,
+            kind: QuestionKind::Number {
+                integer: false,
+                min: None,
+                max: None,
+            },
+        }
+    }
+
+    fn 编译(expression: Value, questions: &[Question]) -> CompiledExpression {
+        compile_expression(
+            &json!({"dsl_version": 1, "semantics_version": 1, "expression": expression}),
+            questions,
+        )
+        .expect("测试表达式应可编译")
+    }
+
+    #[test]
+    fn 值类型名称在序列化与文本_dsl_之间一致() {
+        for (value_type, name) in [
+            (LogicValueType::Boolean, "boolean"),
+            (LogicValueType::Number, "number"),
+            (LogicValueType::Text, "text"),
+            (LogicValueType::Choice, "choice"),
+            (LogicValueType::Choices, "choices"),
+        ] {
+            assert_eq!(value_type.as_str(), name);
+            assert_eq!(LogicValueType::from_name(name), Some(value_type));
+        }
+        for 未知 in ["", "bool", "Choice", "choices ", "number2"] {
+            assert_eq!(LogicValueType::from_name(未知), None, "{未知}");
+        }
+        assert_eq!(
+            serde_json::to_value(LogicValueType::Choices).unwrap(),
+            json!("choices"),
+            "序列化名复用同一事实源"
+        );
+    }
+
+    #[test]
+    fn 错误路径重定位只替换表达式前缀() {
+        let 错误 = error(
+            LogicErrorCode::InvalidSyntax,
+            "$.expression.left",
+            Some(id(1)),
+        );
+        let 重定位 = 错误.relocate("$.logic.rules[0].visible_if");
+        assert_eq!(重定位.path, "$.logic.rules[0].visible_if.left");
+        assert_eq!(重定位.question_id, Some(id(1)));
+
+        // 根路径不含可替换前缀，必须保持原样。
+        let 根 = error(LogicErrorCode::UnsupportedVersion, "$", None).relocate("$.logic.flow");
+        assert_eq!(根.path, "$");
+        assert_eq!(根.code, LogicErrorCode::UnsupportedVersion);
+    }
+
+    #[test]
+    fn 预算放行深度与节点数边界并拒绝超限() {
+        fn 嵌套深度(depth: usize) -> Value {
+            let mut expression = json!({"op": "boolean", "value": true});
+            for _ in 1..depth {
+                expression = json!({"op": "not", "expression": expression});
+            }
+            expression
+        }
+
+        assert!(
+            check_raw_budget(Some(&嵌套深度(MAX_DEPTH)), 1, &mut 0).is_ok(),
+            "深度恰好 {MAX_DEPTH} 应通过"
+        );
+        let 错误 = check_raw_budget(Some(&嵌套深度(MAX_DEPTH + 1)), 1, &mut 0).unwrap_err();
+        assert_eq!(错误.code, LogicErrorCode::LimitExceeded);
+        assert_eq!(错误.path, "$.expression");
+
+        let 叶子 = json!({"op": "boolean", "value": true});
+        let 恰好 = json!({"op": "all", "expressions": vec![叶子.clone(); MAX_NODES - 1]});
+        assert!(
+            check_raw_budget(Some(&恰好), 1, &mut 0).is_ok(),
+            "节点数恰好 {MAX_NODES} 应通过"
+        );
+        let 超限 = json!({"op": "all", "expressions": vec![叶子; MAX_NODES]});
+        let 错误 = check_raw_budget(Some(&超限), 1, &mut 0).unwrap_err();
+        assert_eq!(错误.code, LogicErrorCode::LimitExceeded);
+    }
+
+    #[test]
+    fn 数字常量只接受无空白_json_数字() {
+        for (原文, 期望) in [
+            ("0", 0.0),
+            ("1", 1.0),
+            ("1.5", 1.5),
+            ("1e3", 1000.0),
+            ("-2.5", -2.5),
+        ] {
+            assert_eq!(numeric(原文), Some(期望), "{原文}");
+        }
+        assert_eq!(
+            numeric("-0").map(f64::to_bits),
+            Some(0.0_f64.to_bits()),
+            "负零归一为正零"
+        );
+
+        for 原文 in [
+            " 1", "1 ", "+1", "01", ".5", "1.", "1e400", "NaN", "Infinity", "", "-",
+        ] {
+            assert_eq!(numeric(原文), None, "应拒绝 {原文:?}");
+        }
+    }
+
+    #[test]
+    fn 选择器校验题型选项归属与重复() {
+        let mut bindings = BTreeMap::new();
+        bindings.insert(
+            id(1),
+            Binding {
+                value_type: LogicValueType::Choice,
+                options: [id(101), id(102)].into_iter().collect(),
+                variable: false,
+            },
+        );
+        bindings.insert(
+            id(2),
+            Binding {
+                value_type: LogicValueType::Choices,
+                options: [id(201)].into_iter().collect(),
+                variable: false,
+            },
+        );
+        bindings.insert(
+            id(3),
+            Binding {
+                value_type: LogicValueType::Text,
+                options: BTreeSet::new(),
+                variable: false,
+            },
+        );
+        bindings.insert(
+            id(4),
+            Binding {
+                value_type: LogicValueType::Number,
+                options: BTreeSet::new(),
+                variable: true,
+            },
+        );
+        let 路径 = "$.expression";
+
+        let 空 = selection(&id(1).to_string(), Vec::new(), false, 路径, &bindings).unwrap_err();
+        assert_eq!(空.code, LogicErrorCode::InvalidSyntax);
+        assert_eq!(空.question_id, Some(id(1)));
+        assert_eq!(空.path, 路径);
+
+        let 超量 = selection(
+            &id(2).to_string(),
+            vec![id(201).to_string(); MAX_CHOICES + 1],
+            true,
+            路径,
+            &bindings,
+        )
+        .unwrap_err();
+        assert_eq!(超量.code, LogicErrorCode::InvalidSyntax);
+        assert_eq!(超量.question_id, Some(id(2)));
+
+        let 重复 = selection(
+            &id(2).to_string(),
+            vec![id(201).to_string(); 2],
+            true,
+            路径,
+            &bindings,
+        )
+        .unwrap_err();
+        assert_eq!(重复.code, LogicErrorCode::InvalidReference);
+        assert_eq!(重复.question_id, Some(id(2)));
+
+        let 非选择 = selection(
+            &id(3).to_string(),
+            vec![id(101).to_string()],
+            false,
+            路径,
+            &bindings,
+        )
+        .unwrap_err();
+        assert_eq!(非选择.code, LogicErrorCode::TypeMismatch);
+        assert_eq!(非选择.question_id, Some(id(3)));
+
+        let 跨题 = selection(
+            &id(1).to_string(),
+            vec![id(201).to_string()],
+            false,
+            路径,
+            &bindings,
+        )
+        .unwrap_err();
+        assert_eq!(跨题.code, LogicErrorCode::InvalidReference);
+        assert_eq!(跨题.question_id, Some(id(1)));
+
+        let 未知 = selection(
+            &id(999).to_string(),
+            vec![id(101).to_string()],
+            false,
+            路径,
+            &bindings,
+        )
+        .unwrap_err();
+        assert_eq!(未知.code, LogicErrorCode::InvalidReference);
+        assert_eq!(未知.question_id, Some(id(999)));
+
+        let 变量 = selection(
+            &id(4).to_string(),
+            vec![id(101).to_string()],
+            false,
+            路径,
+            &bindings,
+        )
+        .unwrap_err();
+        assert_eq!(变量.code, LogicErrorCode::InvalidReference);
+        assert_eq!(变量.question_id, Some(id(4)));
+
+        assert_eq!(
+            selection(
+                &id(2).to_string(),
+                vec![id(201).to_string()],
+                true,
+                路径,
+                &bindings
+            )
+            .unwrap(),
+            (id(2), vec![id(201)])
+        );
+    }
+
+    #[test]
+    fn 答案读取按绑定类型校验并规范化() {
+        let 布尔 = Binding {
+            value_type: LogicValueType::Boolean,
+            options: BTreeSet::new(),
+            variable: true,
+        };
+        let 错误 = read_answer(Some(&json!(true)), &布尔, id(1)).unwrap_err();
+        assert_eq!(错误.code, LogicErrorCode::InvalidAnswer);
+        assert_eq!(错误.question_id, Some(id(1)));
+        assert_eq!(错误.path, format!("$.answers.{}", id(1)));
+        assert_eq!(
+            read_answer(None, &布尔, id(1)).unwrap(),
+            LogicValue::Missing
+        );
+        assert_eq!(
+            read_answer(Some(&Value::Null), &布尔, id(1)).unwrap(),
+            LogicValue::Missing
+        );
+
+        let 数字 = Binding {
+            value_type: LogicValueType::Number,
+            options: BTreeSet::new(),
+            variable: true,
+        };
+        assert_eq!(
+            read_answer(Some(&json!(2.5)), &数字, id(2)).unwrap(),
+            LogicValue::Number(2.5)
+        );
+        let 负零 = read_answer(
+            Some(&Value::Number(Number::from_f64(-0.0).unwrap())),
+            &数字,
+            id(2),
+        )
+        .unwrap();
+        assert!(
+            matches!(负零, LogicValue::Number(number) if number.to_bits() == 0.0_f64.to_bits()),
+            "数字答案中的负零归一为正零"
+        );
+        let 错误 = read_answer(Some(&json!("2.5")), &数字, id(2)).unwrap_err();
+        assert_eq!(错误.code, LogicErrorCode::InvalidAnswer);
+
+        let 文本 = Binding {
+            value_type: LogicValueType::Text,
+            options: BTreeSet::new(),
+            variable: true,
+        };
+        assert_eq!(
+            read_answer(Some(&json!(" 原文 ")), &文本, id(3)).unwrap(),
+            LogicValue::Text(" 原文 ".into())
+        );
+        let 错误 = read_answer(Some(&json!(1)), &文本, id(3)).unwrap_err();
+        assert_eq!(错误.code, LogicErrorCode::InvalidAnswer);
+
+        let 单选 = Binding {
+            value_type: LogicValueType::Choice,
+            options: [id(101)].into_iter().collect(),
+            variable: false,
+        };
+        assert_eq!(
+            read_answer(Some(&json!(id(101).to_string())), &单选, id(4)).unwrap(),
+            LogicValue::Choice(id(101))
+        );
+        for 值 in [json!(id(999).to_string()), json!("not-a-uuid"), json!(101)] {
+            let 错误 = read_answer(Some(&值), &单选, id(4)).unwrap_err();
+            assert_eq!(错误.code, LogicErrorCode::InvalidAnswer, "{值}");
+            assert_eq!(错误.question_id, Some(id(4)));
+        }
+
+        let 多选 = Binding {
+            value_type: LogicValueType::Choices,
+            options: [id(101), id(102), id(103)].into_iter().collect(),
+            variable: false,
+        };
+        assert_eq!(
+            read_answer(
+                Some(&json!([id(102).to_string(), id(101).to_string()])),
+                &多选,
+                id(5)
+            )
+            .unwrap(),
+            LogicValue::Choices(vec![id(101), id(102)]),
+            "多选答案按身份排序去重后返回"
+        );
+        let 重复 = read_answer(
+            Some(&json!([id(101).to_string(), id(101).to_string()])),
+            &多选,
+            id(5),
+        )
+        .unwrap_err();
+        assert_eq!(重复.code, LogicErrorCode::InvalidAnswer);
+        let 超量 = read_answer(
+            Some(&json!(vec![id(101).to_string(); MAX_CHOICES + 1])),
+            &多选,
+            id(5),
+        )
+        .unwrap_err();
+        assert_eq!(超量.code, LogicErrorCode::InvalidAnswer);
+        let 非数组 = read_answer(Some(&json!(id(101).to_string())), &多选, id(5)).unwrap_err();
+        assert_eq!(非数组.code, LogicErrorCode::InvalidAnswer);
+    }
+
+    #[test]
+    fn 存在性守护决定必然读取的题目集合() {
+        let questions = [数字题(1), 数字题(2)];
+        let 答 =
+            |question: u128| json!({"op": "answered", "question_id": id(question).to_string()});
+        let 比较 = |question: u128| {
+            json!({
+                "op": "compare",
+                "comparison": "eq",
+                "left": {"op": "answer", "question_id": id(question).to_string()},
+                "right": {"op": "number", "value": "1"},
+            })
+        };
+
+        // answered 只判断有无答案，本身不读取答案内容。
+        let 表达式 = 编译(答(1), &questions);
+        assert!(表达式.required_reads(&BTreeMap::new()).is_empty());
+        assert_eq!(表达式.root.presence_guards(true), BTreeSet::from([id(1)]));
+        assert!(表达式.root.presence_guards(false).is_empty());
+
+        // 常量字面量没有任何题目依赖与存在性守护。
+        let 常量 = 编译(json!({"op": "boolean", "value": true}), &questions);
+        assert!(常量.required_reads(&BTreeMap::new()).is_empty());
+        assert!(常量.root.presence_guards(true).is_empty());
+
+        // all 中 answered(q1) 守护同一题的 answer 读取。
+        let 守护 = 编译(
+            json!({"op": "all", "expressions": [答(1), 比较(1)]}),
+            &questions,
+        );
+        assert!(
+            守护.required_reads(&BTreeMap::new()).is_empty(),
+            "已由 answered(q1) 守护的读取不再计入必然读取"
+        );
+        let 未守护 = 编译(
+            json!({"op": "all", "expressions": [答(1), 比较(2)]}),
+            &questions,
+        );
+        assert_eq!(
+            未守护.required_reads(&BTreeMap::new()),
+            BTreeSet::from([id(2)])
+        );
+
+        // any 不能保证存在性，后续读取仍保留。
+        let 表达式 = 编译(
+            json!({"op": "any", "expressions": [答(1), 比较(1)]}),
+            &questions,
+        );
+        assert_eq!(
+            表达式.required_reads(&BTreeMap::new()),
+            BTreeSet::from([id(1)])
+        );
+
+        // not(answered(q)) 只在整体为 false 时守护。
+        let 取反 = 编译(json!({"op": "not", "expression": 答(1)}), &questions);
+        assert!(取反.root.presence_guards(true).is_empty());
+        assert_eq!(取反.root.presence_guards(false), BTreeSet::from([id(1)]));
+        let 组合 = 编译(
+            json!({"op": "all", "expressions": [json!({"op": "not", "expression": 答(1)}), 比较(1)]}),
+            &questions,
+        );
+        assert_eq!(
+            组合.required_reads(&BTreeMap::new()),
+            BTreeSet::from([id(1)]),
+            "否定存在性不提供守护"
+        );
+
+        // all 的守护集合是各分支守护的并集。
+        let 全部 = 编译(
+            json!({"op": "all", "expressions": [答(1), 答(2)]}),
+            &questions,
+        );
+        assert_eq!(
+            全部.root.presence_guards(true),
+            BTreeSet::from([id(1), id(2)])
+        );
+
+        // coalesce 只把回退分支视为必然读取。
+        let 短路 = 编译(
+            json!({"op": "coalesce", "value": {"op": "answer", "question_id": id(1).to_string()}, "fallback": {"op": "number", "value": "0"}}),
+            &questions,
+        );
+        assert!(短路.required_reads(&BTreeMap::new()).is_empty());
+        let 回退 = 编译(
+            json!({"op": "coalesce", "value": {"op": "number", "value": "0"}, "fallback": {"op": "answer", "question_id": id(2).to_string()}}),
+            &questions,
+        );
+        assert_eq!(
+            回退.required_reads(&BTreeMap::new()),
+            BTreeSet::from([id(2)])
+        );
+    }
+}

@@ -76,12 +76,12 @@ where
 }
 
 #[derive(Debug, Deserialize)]
-struct SurveyFilters {
+pub(crate) struct SurveyFilters {
     /// 按草稿标题进行不区分大小写的字面子串筛选。
-    title: Option<String>,
-    status: Option<SurveyStatus>,
+    pub(crate) title: Option<String>,
+    pub(crate) status: Option<SurveyStatus>,
     #[serde(flatten)]
-    pagination: Pagination,
+    pub(crate) pagination: Pagination,
 }
 
 /// 管理详情不暴露数据库 Entity，也不包含任何答卷或账号认证信息。
@@ -840,15 +840,7 @@ async fn update_collection(
     // 必须在覆盖 deadline 之前执行，否则延期会抹掉“已经到期”的事实。
     let record = repository::expire_survey(&tx, record, now).await?;
     ensure_editable(&record)?;
-    if let Some(mode) = input.mode
-        && record.current_version_id.is_some()
-        && record.mode != Some(mode)
-    {
-        return Err(AppError::conflict(
-            "mode_frozen",
-            "首次发布后不能更改填写模式",
-        ));
-    }
+    validate_mode_change(record.current_version_id, record.mode, input.mode)?;
     let deadline_changed = input.deadline.is_some();
     let mut active = record.into_active_model();
     if let Some(mode) = input.mode {
@@ -871,7 +863,7 @@ async fn update_collection(
 }
 
 #[derive(Clone, Copy)]
-enum CollectionAction {
+pub(crate) enum CollectionAction {
     Close,
     Resume,
     Archive,
@@ -889,34 +881,7 @@ async fn change_status(
     let now = Utc::now();
     let record = repository::expire_survey(&tx, record, now).await?;
     let current = record.status;
-    let target = match (action, current) {
-        (
-            CollectionAction::Archive,
-            SurveyStatus::Collecting | SurveyStatus::Closed | SurveyStatus::Archived,
-        ) => SurveyStatus::Archived,
-        (_, SurveyStatus::Archived) => {
-            return Err(AppError::conflict(
-                "survey_archived",
-                "已归档问卷不能更改状态",
-            ));
-        }
-        (_, SurveyStatus::Unpublished) => {
-            return Err(AppError::conflict("survey_not_published", "问卷尚未发布"));
-        }
-        (CollectionAction::Close, SurveyStatus::Collecting | SurveyStatus::Closed) => {
-            SurveyStatus::Closed
-        }
-        (CollectionAction::Resume, SurveyStatus::Closed) => {
-            ensure_future_deadline(record.deadline, now)?;
-            SurveyStatus::Collecting
-        }
-        (CollectionAction::Resume, SurveyStatus::Collecting) => {
-            return Err(AppError::conflict(
-                "survey_not_closed",
-                "只有已关闭问卷可以恢复回收",
-            ));
-        }
-    };
+    let target = next_collection_status(action, current, record.deadline, now)?;
     let updated = if target != current {
         let mut active = record.into_active_model();
         active.status = Set(target);
@@ -967,7 +932,60 @@ async fn list_versions(
     Ok(Page::new(items, total, bounds))
 }
 
-fn ensure_editable(record: &survey::Model) -> AppResult<()> {
+/// 纯状态转移：动作与当前状态的组合决定目标状态或冲突错误，不读写数据库。
+///
+/// 归档优先于其它规则；未发布问卷不能关闭、恢复或归档；恢复回收还要求截止时间未到。
+pub(crate) fn next_collection_status(
+    action: CollectionAction,
+    current: SurveyStatus,
+    deadline: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> AppResult<SurveyStatus> {
+    match (action, current) {
+        (
+            CollectionAction::Archive,
+            SurveyStatus::Collecting | SurveyStatus::Closed | SurveyStatus::Archived,
+        ) => Ok(SurveyStatus::Archived),
+        (_, SurveyStatus::Archived) => Err(AppError::conflict(
+            "survey_archived",
+            "已归档问卷不能更改状态",
+        )),
+        (_, SurveyStatus::Unpublished) => {
+            Err(AppError::conflict("survey_not_published", "问卷尚未发布"))
+        }
+        (CollectionAction::Close, SurveyStatus::Collecting | SurveyStatus::Closed) => {
+            Ok(SurveyStatus::Closed)
+        }
+        (CollectionAction::Resume, SurveyStatus::Closed) => {
+            ensure_future_deadline(deadline, now)?;
+            Ok(SurveyStatus::Collecting)
+        }
+        (CollectionAction::Resume, SurveyStatus::Collecting) => Err(AppError::conflict(
+            "survey_not_closed",
+            "只有已关闭问卷可以恢复回收",
+        )),
+    }
+}
+
+/// 纯模式冻结检查：首次发布之后只能在请求中重复原模式。
+pub(crate) fn validate_mode_change(
+    current_version_id: Option<Uuid>,
+    current_mode: Option<FillingMode>,
+    requested_mode: Option<FillingMode>,
+) -> AppResult<()> {
+    if let Some(mode) = requested_mode
+        && current_version_id.is_some()
+        && current_mode != Some(mode)
+    {
+        return Err(AppError::conflict(
+            "mode_frozen",
+            "首次发布后不能更改填写模式",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_editable(record: &survey::Model) -> AppResult<()> {
     if record.status == SurveyStatus::Archived {
         return Err(AppError::conflict(
             "survey_archived",
@@ -977,7 +995,7 @@ fn ensure_editable(record: &survey::Model) -> AppResult<()> {
     Ok(())
 }
 
-fn ensure_revision(record: &survey::Model, revision: i64) -> AppResult<()> {
+pub(crate) fn ensure_revision(record: &survey::Model, revision: i64) -> AppResult<()> {
     if record.revision != revision {
         return Err(AppError::conflict(
             "revision_conflict",
@@ -987,7 +1005,10 @@ fn ensure_revision(record: &survey::Model, revision: i64) -> AppResult<()> {
     Ok(())
 }
 
-fn ensure_future_deadline(deadline: Option<DateTime<Utc>>, now: DateTime<Utc>) -> AppResult<()> {
+pub(crate) fn ensure_future_deadline(
+    deadline: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> AppResult<()> {
     if deadline.is_some_and(|deadline| deadline <= now) {
         return Err(AppError::conflict(
             "deadline_expired",
@@ -997,7 +1018,7 @@ fn ensure_future_deadline(deadline: Option<DateTime<Utc>>, now: DateTime<Utc>) -
     Ok(())
 }
 
-fn survey_detail(record: survey::Model, now: DateTime<Utc>) -> AppResult<SurveyDetail> {
+pub(crate) fn survey_detail(record: survey::Model, now: DateTime<Utc>) -> AppResult<SurveyDetail> {
     Ok(SurveyDetail {
         id: record.id,
         status: record.status.effective(record.deadline, now),

@@ -62,13 +62,13 @@ struct ResponseListQuery {
 
 /// 发布版本及本次报表实际使用的时间范围。
 #[derive(Serialize, ToSchema)]
-struct ReportSelection {
-    version_id: Uuid,
-    version_number: i32,
+pub(crate) struct ReportSelection {
+    pub(crate) version_id: Uuid,
+    pub(crate) version_number: i32,
     /// 所有返回时间与自然日趋势的展示时区。
-    timezone: &'static str,
-    from: Option<DateTime<FixedOffset>>,
-    to: Option<DateTime<FixedOffset>>,
+    pub(crate) timezone: &'static str,
+    pub(crate) from: Option<DateTime<FixedOffset>>,
+    pub(crate) to: Option<DateTime<FixedOffset>>,
 }
 
 /// 列表不返回内部填写者账号、幂等作用域或哈希。
@@ -125,10 +125,10 @@ pub(crate) struct RatingFrequency {
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct TextResponse {
-    receipt_id: Uuid,
-    submitted_at: DateTime<FixedOffset>,
+    pub(crate) receipt_id: Uuid,
+    pub(crate) submitted_at: DateTime<FixedOffset>,
     /// 原始文本，不自动判断情感或回答有效性。
-    value: String,
+    pub(crate) value: String,
 }
 
 /// 六种题型按实际类型返回对应统计，不使用无意义的通用空字段。
@@ -474,7 +474,7 @@ impl TimeRange {
         Ok(Self { from, to })
     }
 
-    fn selection(&self, version_id: Uuid, version_number: i32) -> ReportSelection {
+    pub(crate) fn selection(&self, version_id: Uuid, version_number: i32) -> ReportSelection {
         ReportSelection {
             version_id,
             version_number,
@@ -486,7 +486,7 @@ impl TimeRange {
 }
 
 /// 显式版本优先；省略时回退到当前发布版本。未发布问卷没有可读取的答卷版本。
-fn resolve_version_id(
+pub(crate) fn resolve_version_id(
     current_version_id: Option<Uuid>,
     version_id: Option<Uuid>,
 ) -> AppResult<Uuid> {
@@ -604,7 +604,7 @@ pub(crate) struct SnapshotRow {
     pub(crate) question_states: Option<BTreeMap<Uuid, AnswerState>>,
 }
 
-fn report_evaluator(document: &Document) -> AppResult<Option<FlowEvaluator<'_>>> {
+pub(crate) fn report_evaluator(document: &Document) -> AppResult<Option<FlowEvaluator<'_>>> {
     document
         .logic
         .as_ref()
@@ -613,7 +613,7 @@ fn report_evaluator(document: &Document) -> AppResult<Option<FlowEvaluator<'_>>>
         .map_err(|error| AppError::internal(error))
 }
 
-fn snapshot_row(
+pub(crate) fn snapshot_row(
     evaluator: Option<&FlowEvaluator<'_>>,
     receipt_id: Uuid,
     submitted_at: DateTime<Utc>,
@@ -635,7 +635,7 @@ fn snapshot_row(
     })
 }
 
-fn plain_question_states(
+pub(crate) fn plain_question_states(
     document: &Document,
     answers: &BTreeMap<Uuid, Value>,
 ) -> BTreeMap<Uuid, AnswerState> {
@@ -850,12 +850,12 @@ fn summarize_choices(
         .collect())
 }
 
-fn invalid_stored_answer() -> AppError {
+pub(crate) fn invalid_stored_answer() -> AppError {
     // 不在诊断信息里拼接答案正文。
     AppError::internal("已保存答案与发布题型不一致")
 }
 
-fn update_mean(mean: &mut f64, value: f64, count: u64) {
+pub(crate) fn update_mean(mean: &mut f64, value: f64, count: u64) {
     let weight = 1.0 / count as f64;
     // 同号时差值不会溢出；异号时改用加权形式，避免 MAX - (-MAX) 溢出。
     if mean.is_sign_positive() == value.is_sign_positive() {

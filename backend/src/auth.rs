@@ -347,7 +347,7 @@ async fn create_user(
     })
 }
 
-fn normalize_username(mut username: String) -> AppResult<String> {
+pub(crate) fn normalize_username(mut username: String) -> AppResult<String> {
     if !(3..=32).contains(&username.len())
         || !username
             .bytes()
@@ -361,14 +361,14 @@ fn normalize_username(mut username: String) -> AppResult<String> {
     Ok(username)
 }
 
-fn validate_password(password: &str) -> AppResult<()> {
+pub(crate) fn validate_password(password: &str) -> AppResult<()> {
     if !(8..=128).contains(&password.chars().take(129).count()) {
         return Err(AppError::validation("密码长度须为 8—128 个字符"));
     }
     Ok(())
 }
 
-fn invalid_credentials() -> AppError {
+pub(crate) fn invalid_credentials() -> AppError {
     AppError::new(
         StatusCode::UNAUTHORIZED,
         "invalid_credentials",
@@ -376,7 +376,7 @@ fn invalid_credentials() -> AppError {
     )
 }
 
-async fn hash_password(password: String) -> AppResult<String> {
+pub(crate) async fn hash_password(password: String) -> AppResult<String> {
     tokio::task::spawn_blocking(move || {
         // Argon2id v19 自动生成随机盐；随机源失败仍通过统一错误出口返回。
         let hash: PasswordHash = Argon2::default()
@@ -388,7 +388,7 @@ async fn hash_password(password: String) -> AppResult<String> {
     .map_err(|error| AppError::internal(error))?
 }
 
-async fn verify_password(password: String, encoded_hash: String) -> AppResult<bool> {
+pub(crate) async fn verify_password(password: String, encoded_hash: String) -> AppResult<bool> {
     tokio::task::spawn_blocking(move || {
         let hash = PasswordHash::new(&encoded_hash).map_err(|error| AppError::internal(error))?;
         match Argon2::default().verify_password(password.as_bytes(), &hash) {
@@ -423,7 +423,7 @@ async fn lock_unchanged_credentials(
     Ok(Some(current))
 }
 
-fn new_session_token() -> AppResult<String> {
+pub(crate) fn new_session_token() -> AppResult<String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| AppError::internal(error))?;
     Ok(hex::encode(bytes))
@@ -438,7 +438,7 @@ pub(crate) fn hash_secret(token: &str) -> String {
     hash_secret_bytes(token.as_bytes())
 }
 
-fn session_token(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn session_token(headers: &HeaderMap) -> Option<&str> {
     let mut found = None;
     for header in headers.get_all(header::COOKIE) {
         for cookie in Cookie::split_parse(header.to_str().ok()?) {
@@ -462,7 +462,7 @@ fn session_token(headers: &HeaderMap) -> Option<&str> {
     found
 }
 
-fn session_cookie(token: &str, max_age: i64, secure: bool) -> AppResult<HeaderValue> {
+pub(crate) fn session_cookie(token: &str, max_age: i64, secure: bool) -> AppResult<HeaderValue> {
     let cookie = Cookie::build(("session", token))
         .http_only(true)
         .same_site(SameSite::Lax)

@@ -23,6 +23,7 @@
 | `backend/src/reports.rs` | 报表与导出 | 按版本与 `[from, to)` 时间筛选的答卷分页列表、单份详情、三态统计聚合与防公式注入 CSV 导出 |
 | `backend/src/admin.rs` | 平台治理 | 管理员分页查看用户/问卷/审计日志，同事务执行账号禁用/启用与问卷下架/恢复并记录原因 |
 | `logic-core/src/*` | `questionnaire-logic` | 纯领域核心（`domain.rs`、`identity.rs`、`logic.rs`、`logic_document.rs`、`flow.rs`、`logic_text.rs`）；由 `backend/src/lib.rs` 通过 `pub use questionnaire_logic::domain;` 聚合再导出 |
+| `logic-core/tests/`、`logic-wasm/tests/`、`backend/src/tests/` | 测试分层 | 领域契约集成测试、WASM JSON 信封边界测试与后端模块化单元/HTTP 边界测试；全部纯内存运行 |
 
 ---
 
@@ -215,7 +216,30 @@ $Stats | Select-Object version_number, total_count, timezone
 
 ---
 
-## 6. 数据库备份与独立恢复
+## 6. 测试结构
+
+测试按「模块内单元 → 跨模块契约 → 边界信封」三档组织，`cargo test --locked --workspace` 全部执行，无需数据库或环境变量：
+
+| 目标 / 文件 | 覆盖内容 |
+| --- | --- |
+| `logic-core/src/*.rs` 内的 `#[cfg(test)]` | 模块内部不变量：身份严格解析、表达式类型检查与三值求值、变量拓扑排序、流程状态机、文本 DSL 词法与格式化 |
+| `logic-core/tests/domain.rs` | 文档与答案的草稿/发布校验、容量边界与题目级错误定位 |
+| `logic-core/tests/logic.rs` | 与 `fixtures/survey-logic/expressions.json` 共读的单表达式语义 |
+| `logic-core/tests/flow.rs` | 与 `fixtures/survey-logic/flows.json` 共读的前向流程、改答清理与路径重建 |
+| `logic-core/tests/logic_text.rs` | 与 `fixtures/survey-logic/texts.json` 共读的文本 DSL 解析、错误行列与格式化往返 |
+| `logic-wasm/tests/smoke.rs` | WASM JSON 字符串信封：成功值解码、错误对象字段与领域错误分类穿透 |
+| `backend/src/tests/config.rs` | 环境变量解析、默认值与非法值边界 |
+| `backend/src/tests/error_and_http.rs` | `AppError` 信封、状态码映射、抽取器与分页参数 |
+| `backend/src/tests/security_and_router.rs` | CSRF/Origin 守卫、固定窗口限流、安全响应头与路由合并 |
+| `backend/src/tests/auth_and_admin.rs` | 纯策略与 DTO 边界：用户名/密码规则、Argon2id 哈希验证、Session Cookie 解析与生成、管理员角色与治理原因校验 |
+| `backend/src/tests/surveys_and_submissions.rs` | 纯策略与契约：有效状态计算、实体枚举与 `schema.sql` 对齐、回收资格优先级、乐观锁与状态转移矩阵、模式冻结、UUIDv4 幂等键与提交载荷哈希 |
+| `backend/src/tests/reports.rs` | 三态统计恒等式、时间区间筛选与 CSV 公式注入防护 |
+
+编写约定：单元测试只验证本模块不变量，跨模块语义放进 `logic-core/tests/` 的契约集成测试，服务端真实 HTTP 路由与中间件行为在 `backend/src/tests/` 断言，避免同一路径被多层重复覆盖。
+
+---
+
+## 7. 数据库备份与独立恢复
 
 1. **导出自定义格式备份**（勿通过 PowerShell 文本管道重定向二进制流）：
    ```powershell

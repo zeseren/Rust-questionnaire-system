@@ -28,12 +28,26 @@ impl Config {
     /// # Errors
     /// 必填值缺失、值格式错误或 HTTP/HTTPS 与 Cookie 安全设置矛盾时失败。
     pub fn from_env() -> anyhow::Result<Self> {
-        let database_url = env::var("DATABASE_URL").context("请设置 DATABASE_URL")?;
+        Self::from_lookup(|name| env::var(name))
+    }
+
+    /// 从任意「名称 → 原始值」查询函数解析配置。
+    ///
+    /// 生产入口传入 `env::var`；测试可直接注入查找表，从而覆盖全部配置分支
+    /// （包括 `VarError::NotUnicode`）而不修改全局环境变量。
+    ///
+    /// # Errors
+    /// 必填值缺失、值格式错误或 HTTP/HTTPS 与 Cookie 安全设置矛盾时失败。
+    pub(crate) fn from_lookup<F>(lookup: F) -> anyhow::Result<Self>
+    where
+        F: Fn(&str) -> Result<String, env::VarError>,
+    {
+        let database_url = lookup("DATABASE_URL").context("请设置 DATABASE_URL")?;
         let database = url::Url::parse(&database_url).context("DATABASE_URL 格式错误")?;
         if !matches!(database.scheme(), "postgres" | "postgresql") {
             bail!("DATABASE_URL 必须使用 PostgreSQL");
         }
-        let public_origin = value("PUBLIC_ORIGIN", "http://localhost:3000")?;
+        let public_origin = value(&lookup, "PUBLIC_ORIGIN", "http://localhost:3000")?;
         let origin = url::Url::parse(&public_origin).context("PUBLIC_ORIGIN 格式错误")?;
         if !matches!(origin.scheme(), "http" | "https")
             || origin.host_str().is_none()
@@ -41,7 +55,7 @@ impl Config {
         {
             bail!("PUBLIC_ORIGIN 必须是无路径的 http(s) origin，例如 http://localhost:3000");
         }
-        let cookie_secure: bool = value("COOKIE_SECURE", "false")?
+        let cookie_secure: bool = value(&lookup, "COOKIE_SECURE", "false")?
             .parse()
             .context("COOKIE_SECURE 必须为 true 或 false")?;
         if origin.scheme() == "https" && !cookie_secure {
@@ -57,18 +71,18 @@ impl Config {
         }
         let config = Self {
             database_url,
-            listen: value("LISTEN_ADDR", "127.0.0.1:3000")?
+            listen: value(&lookup, "LISTEN_ADDR", "127.0.0.1:3000")?
                 .parse()
                 .context("LISTEN_ADDR 必须是 IP:端口")?,
             public_origin,
             cookie_secure,
-            session_ttl_seconds: value("SESSION_TTL_SECONDS", "86400")?
+            session_ttl_seconds: value(&lookup, "SESSION_TTL_SECONDS", "86400")?
                 .parse()
                 .context("SESSION_TTL_SECONDS 必须是整数秒")?,
-            auth_requests_per_minute: value("AUTH_REQUESTS_PER_MINUTE", "60")?
+            auth_requests_per_minute: value(&lookup, "AUTH_REQUESTS_PER_MINUTE", "60")?
                 .parse()
                 .context("AUTH_REQUESTS_PER_MINUTE 必须是正整数")?,
-            submissions_per_minute: value("SUBMISSIONS_PER_MINUTE", "600")?
+            submissions_per_minute: value(&lookup, "SUBMISSIONS_PER_MINUTE", "600")?
                 .parse()
                 .context("SUBMISSIONS_PER_MINUTE 必须是正整数")?,
         };
@@ -82,8 +96,11 @@ impl Config {
     }
 }
 
-fn value(name: &str, default: &str) -> anyhow::Result<String> {
-    match env::var(name) {
+fn value<F>(lookup: &F, name: &str, default: &str) -> anyhow::Result<String>
+where
+    F: Fn(&str) -> Result<String, env::VarError>,
+{
+    match lookup(name) {
         Ok(value) => Ok(value),
         Err(env::VarError::NotPresent) => Ok(default.to_owned()),
         Err(error) => Err(error).with_context(|| format!("{name} 不是有效文本")),

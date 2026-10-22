@@ -1,8 +1,8 @@
 //! 会话仅保存在内存，只有外观偏好写入本地存储。
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { api, ApiError, message } from './api'
-import type { User } from './types'
+import { api, ApiError, message } from './api.ts'
+import type { User } from './types.ts'
 
 export const useAuth = defineStore('auth', () => {
   const user = ref<User | null>(null)

@@ -3,13 +3,15 @@
 import { decode, encode } from './json.ts'
 
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-    public question_id: string | null = null,
-  ) {
+  readonly status: number
+  readonly code: string
+  readonly question_id: string | null
+
+  constructor(status: number, code: string, message: string, questionId: string | null = null) {
     super(message)
+    this.status = status
+    this.code = code
+    this.question_id = questionId
   }
 }
 export function message(error: unknown, fallback = '操作未完成，请稍后重试。'): string {

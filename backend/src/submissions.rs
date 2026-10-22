@@ -229,14 +229,7 @@ async fn read_public_survey(
         .one(&tx)
         .await?
         .ok_or_else(|| AppError::internal("current version is missing"))?;
-    let mode_notice = match mode {
-        FillingMode::Anonymous => {
-            "公开匿名：即使已登录，答卷也不关联账号。不承诺按自然人限次，也不宣称不可追踪或严格一人一票。"
-        }
-        FillingMode::LoginOnce => {
-            "登录限次：同一账号对本问卷跨版本最多提交一次。平台保留内部账号关联用于限次，不能称为完全匿名；发布者页面及导出不提供账号信息。"
-        }
-    };
+    let privacy = privacy_notice(mode);
     let document = serde_json::from_value(published.document)?;
     tx.commit().await?;
     Ok(PublicSurvey {
@@ -246,12 +239,7 @@ async fn read_public_survey(
         mode,
         deadline: survey.deadline,
         document,
-        privacy: PrivacyNotice {
-            mode_notice,
-            data_visibility: "答卷、统计和导出仅向本问卷发布者开放，不默认公开结果；管理员治理接口不提供他人答卷。数据库运维权限与业务角色不同。",
-            sensitive_data_notice: "请阅读调查目的，仅提交调查所需的非敏感信息，不要填写密码、证件号码等不必要的敏感信息。当前系统用于教学演示及知情同意的非敏感调查。",
-            public_link_notice: "公开链接不是保密访问控制，获得链接的人可能访问题面。系统不采集设备指纹或地理位置进入答卷，匿名不意味着数据库运维人员无法接触数据。",
-        },
+        privacy,
     })
 }
 
@@ -261,13 +249,7 @@ async fn submit_response(
     id: Uuid,
     request: SubmitRequest,
 ) -> AppResult<(StatusCode, SubmissionReceipt)> {
-    if request.idempotency_key.get_version() != Some(Version::Random)
-        || request.idempotency_key.get_variant() != Variant::RFC4122
-    {
-        return Err(AppError::validation(
-            "idempotency_key 必须是安全随机生成的 UUIDv4",
-        ));
-    }
+    validate_idempotency_key(request.idempotency_key)?;
     // 只保存秘密的 SHA-256；UUID 的文本大小写、连字符格式不会改变其身份。
     let key_hash = auth::hash_secret_bytes(request.idempotency_key.as_bytes());
     let locked = lock_public_survey(state, headers, id).await?;
@@ -315,11 +297,7 @@ async fn submit_response(
     // 只有已校验且适用的答案进入下游条件，客户端不能指定可信历史或可见题目。
     let document: Document = serde_json::from_value(published.document)?;
     let answers = document.validate_answers(request.answers)?;
-    let payload = NormalizedPayload {
-        version_id: request.version_id,
-        answers: &answers,
-    };
-    let payload_hash = auth::hash_secret_bytes(&serde_json::to_vec(&payload)?);
+    let payload_hash = submission_payload_hash(request.version_id, &answers)?;
     if let Some((receipt_id, _, original_hash)) = previous {
         if original_hash != payload_hash {
             return Err(idempotency_conflict());
@@ -446,7 +424,52 @@ async fn ensure_not_submitted(
     Ok(())
 }
 
-fn idempotency_conflict() -> AppError {
+/// 幂等秘密必须是浏览器安全随机生成的 UUIDv4（RFC 4122 变体）。
+///
+/// 随机版本与变体是「同一逻辑提交只生成一次」的前提；顺序 UUID 或自定义变体
+/// 会让不同客户端猜中同一作用域记录。
+pub(crate) fn validate_idempotency_key(key: Uuid) -> AppResult<()> {
+    if key.get_version() != Some(Version::Random) || key.get_variant() != Variant::RFC4122 {
+        return Err(AppError::validation(
+            "idempotency_key 必须是安全随机生成的 UUIDv4",
+        ));
+    }
+    Ok(())
+}
+
+/// 规范化载荷的稳定摘要：同一版本与同一规范化答案必然得到同一哈希。
+///
+/// 生成方式与存储一致，成功后重试才能与首次提交比对出 idempotency_conflict。
+pub(crate) fn submission_payload_hash(
+    version_id: Uuid,
+    answers: &BTreeMap<Uuid, Value>,
+) -> AppResult<String> {
+    let payload = NormalizedPayload {
+        version_id,
+        answers,
+    };
+    Ok(auth::hash_secret_bytes(&serde_json::to_vec(&payload)?))
+}
+
+/// 填写前的知情提示：只有登录限次模式保留账号关联用于限次，不能宣称为完全匿名。
+pub(crate) fn privacy_notice(mode: FillingMode) -> PrivacyNotice {
+    let mode_notice = match mode {
+        FillingMode::Anonymous => {
+            "公开匿名：即使已登录，答卷也不关联账号。不承诺按自然人限次，也不宣称不可追踪或严格一人一票。"
+        }
+        FillingMode::LoginOnce => {
+            "登录限次：同一账号对本问卷跨版本最多提交一次。平台保留内部账号关联用于限次，不能称为完全匿名；发布者页面及导出不提供账号信息。"
+        }
+    };
+    PrivacyNotice {
+        mode_notice,
+        data_visibility: "答卷、统计和导出仅向本问卷发布者开放，不默认公开结果；管理员治理接口不提供他人答卷。数据库运维权限与业务角色不同。",
+        sensitive_data_notice: "请阅读调查目的，仅提交调查所需的非敏感信息，不要填写密码、证件号码等不必要的敏感信息。当前系统用于教学演示及知情同意的非敏感调查。",
+        public_link_notice: "公开链接不是保密访问控制，获得链接的人可能访问题面。系统不采集设备指纹或地理位置进入答卷，匿名不意味着数据库运维人员无法接触数据。",
+    }
+}
+
+pub(crate) fn idempotency_conflict() -> AppError {
     AppError::conflict(
         "idempotency_conflict",
         "此提交标识已用于不同载荷，请使用原版本与原答案重试",

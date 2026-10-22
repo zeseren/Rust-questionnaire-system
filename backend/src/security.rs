@@ -16,13 +16,14 @@ use std::{
 };
 
 pub(crate) struct Limits {
-    auth: Mutex<Window>,
-    submissions: Mutex<Window>,
+    pub(crate) auth: Mutex<Window>,
+    pub(crate) submissions: Mutex<Window>,
 }
 
-struct Window {
-    started: Instant,
-    count: u32,
+/// 单桶的固定窗口计数；测试可直接构造并注入合成时刻。
+pub(crate) struct Window {
+    pub(crate) started: Instant,
+    pub(crate) count: u32,
 }
 
 impl Limits {
@@ -41,10 +42,15 @@ impl Limits {
 }
 
 fn admit(window: &Mutex<Window>, maximum: u32) -> AppResult<()> {
+    admit_at(window, maximum, Instant::now())
+}
+
+/// 在给定的当前时刻执行窗口重置与计数；纯逻辑便于测试 60 秒窗口的精确边界。
+pub(crate) fn admit_at(window: &Mutex<Window>, maximum: u32, now: Instant) -> AppResult<()> {
     // 临界区只有计数赋值，中毒时数据仍然完整；恢复使用，避免此后每个请求都返回 500。
     let mut window = window.lock().unwrap_or_else(PoisonError::into_inner);
-    if window.started.elapsed() >= Duration::from_secs(60) {
-        window.started = Instant::now();
+    if now.saturating_duration_since(window.started) >= Duration::from_secs(60) {
+        window.started = now;
         window.count = 0;
     }
     if window.count >= maximum {
@@ -74,7 +80,7 @@ pub(crate) async fn guard(State(state): State<AppState>, request: Request, next:
     response
 }
 
-fn check(state: &AppState, request: &Request) -> AppResult<()> {
+pub(crate) fn check(state: &AppState, request: &Request) -> AppResult<()> {
     let method = request.method();
     if !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
         let origin = request

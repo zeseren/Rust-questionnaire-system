@@ -43,7 +43,7 @@
 | `logic-core/src/logic.rs`、`logic_document.rs`、`flow.rs` | 表达式类型检查与三值逻辑求值、计算变量拓扑排序与题目规则、前向流程状态机与路径重建 |
 | `logic-core/src/logic_text.rs`、`logic_text.pest` | 词法预算预检、pest Pratt 优先级解析、别名绑定与唯一 `format_logic_text` 实现 |
 | `logic-wasm/src/lib.rs`、`frontend/src/wasm/` | WASM JSON 字符串信封边界与前端入库五件套（`pkg/`）及 TS 包装（`index.ts`） |
-| `fixtures/survey-logic/`、`backend/tests/`、`frontend/tests/` | 双端共读的语义回归样例、Rust 领域回归测试、前端 Node 回归测试 |
+| `fixtures/survey-logic/`、`logic-core/tests/`、`logic-wasm/tests/`、`backend/src/tests/`、`frontend/tests/` | 双端共读的语义夹具、领域契约集成测试、WASM 信封边界测试、后端模块化单元与 HTTP 边界测试、前端分层测试与浏览器环境桩 |
 
 ## Development Commands
 
@@ -60,7 +60,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo build --release --locked -p questionnaire-api
 Set-Location frontend; pnpm install --frozen-lockfile
 pnpm run dev                                                  # 启动前端开发服（固定 http://localhost:5173）
-pnpm run test:regression                                      # 运行前端 Node 测试
+pnpm run test:regression                                      # 运行前端分层 Node 测试（tests/{contract,unit,integration}）
 pnpm run build                                                # vue-tsc 类型检查 + Vite 生产打包
 pnpm run format:check                                         # Prettier 格式检查
 pnpm run wasm:build                                           # 仅在改动 logic-core/ 或 logic-wasm/ 时重建并同步 WASM 产物
@@ -91,6 +91,19 @@ pnpm run wasm:build                                           # 仅在改动 log
 
 ## Testing & QA
 
+测试按边界分层，禁止在同一个文件里混装传输断言与领域语义：
+
+| 层级 | 位置 | 覆盖内容 |
+| --- | --- | --- |
+| `logic-core` 单元 | `logic-core/src/*.rs` 内的 `#[cfg(test)]` 模块 | 各模块内部不变量：身份严格解析、表达式、变量拓扑排序、流程状态机与文本 DSL |
+| `logic-core` 契约集成 | `logic-core/tests/{domain,logic,flow,logic_text}.rs` | 领域校验、三值逻辑、前向流程与文本 DSL 的跨模块契约，并与 `fixtures/survey-logic/` 共读人工预期 |
+| `logic-wasm` 边界 | `logic-wasm/tests/smoke.rs` | JSON 字符串信封的成功/错误形状与错误分类穿透 |
+| `backend` 单元与 HTTP | `backend/src/tests/{config,error_and_http,security_and_router,auth_and_admin,surveys_and_submissions,reports}.rs` | 配置解析、错误信封与抽取器、CSRF/限流/路由、认证与治理、问卷生命周期与提交、报表聚合与导出 |
+| `frontend` 契约 | `frontend/tests/contract/` | 与 Rust 共读 `fixtures/survey-logic/`（`documents`、`expressions`、`flows`、`input-contracts`、`submissions`、`texts`），断言两端语义一致 |
+| `frontend` 单元 | `frontend/tests/unit/` | 17 个模块：`value-contract`、`numbers`、`json`、`format`、`logic-errors`、`answers`、`documents`、`condition-builder`、`flow-tools`、`editor-logic`、`survey-templates`、`logic-text-tools`、`api`、`resource`、`stores`、`router`、`wasm-envelope` |
+| `frontend` 集成 | `frontend/tests/integration/` | `editor-workflow`、`flow-inputs`：编辑器工具与 `FlowSession` 输入适配的跨模块流程 |
+| 共享测试基建 | `frontend/tests/helpers/` | `fixtures.mjs` 夹具缓存、`documents.mjs` 固定身份构造器、`browser.mjs` 按需安装且 `t.after` 自动清理的浏览器环境桩 |
+
 - 修改 Rust 代码必跑：受影响的 `cargo test`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 与 `rustfmt`。
-- 修改前端代码必跑：`pnpm run test:regression`、`pnpm run typecheck`（或 `pnpm run build`）与 `prettier`。
+- 修改前端代码必跑：`pnpm run test:regression`（递归执行 `frontend/tests/` 下的分层测试）、`pnpm run typecheck`（或 `pnpm run build`）与 `prettier`。
 - 修改 `logic-core/` 或 `logic-wasm/` 必跑：先在 `frontend/` 执行 `pnpm run wasm:build` 同步 `src/wasm/pkg/`，再运行两端测试验证语义一致。

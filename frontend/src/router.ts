@@ -1,6 +1,6 @@
 //! 路由守卫只控制入口展示，资源权限仍由后端验证。
 import { createRouter, createWebHistory } from 'vue-router'
-import { useAuth, useNotice } from './stores'
+import { useAuth, useNotice } from './stores.ts'
 
 export function safeReturn(value: unknown): string {
   return typeof value === 'string' &&

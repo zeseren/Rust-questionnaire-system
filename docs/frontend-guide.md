@@ -32,7 +32,7 @@
 | 自定义代理目标 | `frontend/.env` 设 `API_PROXY_TARGET=http://...` | 仅由 Vite 服务端读取，不暴露给浏览器包 |
 | 类型检查与构建 | `pnpm run build` | 依次执行 `vue-tsc --noEmit` 与 `vite build`，产物输出至 `frontend/dist/` |
 | 本地预览构建产物 | `pnpm run preview` | 需先停止 `dev`，同样监听 `http://localhost:5173` 并代理 `/api` |
-| 回归测试与格式化 | `pnpm run test:regression`、`pnpm run format:check` | Node 内置测试运行器执行 `tests/*.test.mjs`；Prettier 检查代码风格 |
+| 回归测试与格式化 | `pnpm run test:regression`、`pnpm run format:check` | Node 内置测试运行器递归执行 `tests/{contract,unit,integration}/` 下的分层测试；Prettier 检查代码风格 |
 
 ---
 
@@ -43,7 +43,8 @@ frontend/
 ├── index.html                  # 应用入口与首绘前主题设置脚本（同步 data-theme 与 theme-color）
 ├── vite.config.ts              # 固定 5173 端口与 /api 同源代理配置
 ├── scripts/copy-wasm.mjs       # 将 wasm-pack 产物五件套同步到 src/wasm/pkg/
-├── tests/                      # 7 个回归测试文件（21 项用例，直接加载真实入库 WASM）
+├── tests/                      # 分层测试：contract/ 跨端契约、unit/ 纯函数与基础设施、integration/ 跨模块流程
+│   └── helpers/                # fixtures.mjs 夹具缓存、documents.mjs 固定身份构造器、browser.mjs 环境桩
 └── src/
     ├── main.ts / App.vue       # 应用挂载、左侧编辑部导航栏、顶栏、全局提示与会话过期弹窗
     ├── router.ts / stores.ts   # 路由守卫与 Pinia 状态（useAuth、useAppearance、useNotice）
@@ -136,3 +137,26 @@ frontend/
 
 - **双环境兼容**：Vite 浏览器构建使用 `pkg/logic_wasm.js` bundler 胶水；Node 测试环境（`node --test`）通过 `pkg/logic_wasm_bg.js` 配合 `readFileSync` 加载本地 `logic_wasm_bg.wasm`。
 - **重建命令**：修改 `logic-core/` 或 `logic-wasm/` 后，在 `frontend/` 下运行 `pnpm run wasm:build` 即可重新编译并更新 `src/wasm/pkg/` 下的五件套入库产物。
+
+---
+
+## 7. 测试结构与约定
+
+`frontend/tests/` 按依赖边界分层，`pnpm run test:regression`（`node --test`）会递归执行全部 `*.test.mjs`：
+
+| 目录 / 文件 | 覆盖内容 |
+| --- | --- |
+| `tests/contract/` | 与 Rust 共读 `fixtures/survey-logic/` 的跨端语义契约：`documents`、`expressions`、`flows`、`input-contracts`、`submissions`、`texts` |
+| `tests/unit/`（17 个模块） | 纯函数与基础设施契约：`value-contract`、`numbers`、`json`、`format`、`logic-errors`、`answers`、`documents`、`condition-builder`、`flow-tools`、`editor-logic`、`survey-templates`、`logic-text-tools`、`api`、`resource`、`stores`、`router`、`wasm-envelope` |
+| `tests/integration/` | 跨模块流程：`editor-workflow`、`flow-inputs`，组合编辑器工具、`FlowSession` 与页面级输入适配 |
+| `tests/helpers/fixtures.mjs` | `fixtures/survey-logic/` 的进程内只读缓存与命名夹具读取 |
+| `tests/helpers/documents.mjs` | 固定 v4 UUID 的问卷/题目构造器，断言可直接引用常量 |
+| `tests/helpers/browser.mjs` | 浏览器环境桩：`installBrowserEnv(t, options)` 按需安装 `window`/`document`/`localStorage`/`matchMedia`/`history`/`fetch`/`URL` 与定时器 |
+
+其中 `unit/api`、`unit/resource`、`unit/stores`、`unit/router`、`unit/wasm-envelope` 分别覆盖传输契约与下载链路、加载序号竞态与卸载作废、Pinia 状态迁移、开放重定向防护与守卫/`afterEach` 行为、WASM 信封错误还原。
+
+约定：
+
+- 单元测试直接导入 `src/*.ts`（依赖 Node 原生类型擦除），不启动 Vite、不打包，也不 mock 被测模块本身；外部边界（`fetch`、本地存储、媒体查询、定时器）统一由环境桩替换。
+- `installBrowserEnv(t, options)` 通过 `t.after(restore)` 自动卸载，禁止在测试间遗留全局变量；需要同步断言 30 秒截止或对象地址释放时传入 `timers: 'manual'`。
+- 契约测试只断言与 Rust 共读夹具的语义；跨模块组合行为放进 `tests/integration/`，避免重复覆盖同一代码路径。

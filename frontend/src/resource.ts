@@ -1,6 +1,6 @@
 //! 只展示最新请求的结果，避免快速筛选时旧响应覆盖当前页面。
 import { onBeforeUnmount, ref, shallowRef, watch, type WatchSource } from 'vue'
-import { message } from './api'
+import { message } from './api.ts'
 
 export function useResource<T>(loader: () => Promise<T>, sources: WatchSource[] = []) {
   const data = shallowRef<T | null>(null)

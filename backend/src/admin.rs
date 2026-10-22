@@ -29,14 +29,14 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(audits))
 }
 
-fn require_admin(user: &AuthUser) -> AppResult<()> {
+pub(crate) fn require_admin(user: &AuthUser) -> AppResult<()> {
     if user.role != UserRole::Admin {
         return Err(AppError::forbidden());
     }
     Ok(())
 }
 
-fn reason(value: &str) -> AppResult<()> {
+pub(crate) fn reason(value: &str) -> AppResult<()> {
     if value.contains('\0') {
         return Err(AppError::validation("治理原因不能包含 NUL 字符"));
     }
@@ -89,9 +89,9 @@ async fn users(
 
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-struct ChangeUser {
-    disabled: bool,
-    reason: String,
+pub(crate) struct ChangeUser {
+    pub(crate) disabled: bool,
+    pub(crate) reason: String,
 }
 
 #[utoipa::path(patch, path="/api/admin/users/{id}", params(("id"=Uuid,Path)), request_body=ChangeUser, responses((status=204,description="状态和审计已原子保存"),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse),(status=404,body=ErrorResponse),(status=422,body=ErrorResponse)), security(("cookieAuth"=[])))]
@@ -144,28 +144,28 @@ async fn change_user(
 
 // 列表与详情只从 JSONB 中取标题，不把整份 Document 加载到内存。
 #[derive(FromQueryResult)]
-struct SurveyRow {
-    id: Uuid,
-    owner_id: Uuid,
-    title: String,
-    status: SurveyStatus,
-    taken_down: bool,
-    deadline: Option<DateTime<Utc>>,
-    current_version_id: Option<Uuid>,
+pub(crate) struct SurveyRow {
+    pub(crate) id: Uuid,
+    pub(crate) owner_id: Uuid,
+    pub(crate) title: String,
+    pub(crate) status: SurveyStatus,
+    pub(crate) taken_down: bool,
+    pub(crate) deadline: Option<DateTime<Utc>>,
+    pub(crate) current_version_id: Option<Uuid>,
 }
 
 #[derive(Serialize, ToSchema)]
-struct SurveyItem {
-    id: Uuid,
-    owner_id: Uuid,
-    title: String,
-    status: SurveyStatus,
-    taken_down: bool,
-    deadline: Option<DateTime<Utc>>,
-    current_version_id: Option<Uuid>,
+pub(crate) struct SurveyItem {
+    pub(crate) id: Uuid,
+    pub(crate) owner_id: Uuid,
+    pub(crate) title: String,
+    pub(crate) status: SurveyStatus,
+    pub(crate) taken_down: bool,
+    pub(crate) deadline: Option<DateTime<Utc>>,
+    pub(crate) current_version_id: Option<Uuid>,
 }
 impl SurveyItem {
-    fn from_row(row: SurveyRow, now: DateTime<Utc>) -> Self {
+    pub(crate) fn from_row(row: SurveyRow, now: DateTime<Utc>) -> Self {
         Self {
             status: row.status.effective(row.deadline, now),
             id: row.id,
@@ -256,9 +256,9 @@ async fn survey_detail(
 
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-struct ChangeSurvey {
-    taken_down: bool,
-    reason: String,
+pub(crate) struct ChangeSurvey {
+    pub(crate) taken_down: bool,
+    pub(crate) reason: String,
 }
 
 #[utoipa::path(patch, path="/api/admin/surveys/{id}", params(("id"=Uuid,Path)), request_body=ChangeSurvey, responses((status=204,description="治理标志和审计已原子保存；不改变回收状态"),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse),(status=404,body=ErrorResponse),(status=422,body=ErrorResponse)), security(("cookieAuth"=[])))]
