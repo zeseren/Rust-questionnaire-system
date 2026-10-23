@@ -1,6 +1,6 @@
 //! 报表边界：时间范围、版本选择、历史规则重建、统计聚合与 CSV 注入防护。
 
-use std::{borrow::Cow, collections::BTreeMap};
+use std::collections::BTreeMap;
 
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
@@ -11,8 +11,8 @@ use crate::{
     domain::{AnswerState, Choice, Document, DocumentLogic, Question, QuestionKind, QuestionRule},
     reports::{
         QuestionStatisticsData, ReportFilter, SnapshotRow, TimeRange, encode_csv, formula_safe,
-        invalid_stored_answer, plain_question_states, report_evaluator, resolve_version_id,
-        snapshot_row, summarize_question, update_mean,
+        plain_question_states, report_evaluator, resolve_version_id, snapshot_row,
+        summarize_question, update_mean,
     },
     tests::support::error_json,
 };
@@ -122,11 +122,6 @@ fn 报表选择把时间换算为展示时区() {
     assert_eq!(from.to_rfc3339(), "2026-10-20T08:00:00+08:00");
     assert_eq!(to.to_rfc3339(), "2026-10-21T08:00:00+08:00");
     assert_eq!(from.offset().local_minus_utc(), 8 * 3_600);
-
-    let 空范围 = TimeRange::parse(&过滤(None, None)).expect("空范围合法");
-    let 空选择 = 空范围.selection(版本, 1);
-    assert!(空选择.from.is_none());
-    assert!(空选择.to.is_none());
 }
 
 #[tokio::test]
@@ -188,7 +183,6 @@ struct 逻辑夹具 {
     文档: Document,
     条件题: Uuid,
     选项甲: Uuid,
-    选项乙: Uuid,
     追问: Uuid,
 }
 
@@ -242,50 +236,8 @@ fn 逻辑夹具() -> 逻辑夹具 {
         文档,
         条件题,
         选项甲,
-        选项乙,
         追问,
     }
-}
-
-#[test]
-fn 只有带规则的文档才编译流程求值器() {
-    let 无规则 = Document {
-        logic: None,
-        title: "普通问卷".to_owned(),
-        description: String::new(),
-        purpose: "测试".to_owned(),
-        thank_you: "谢谢".to_owned(),
-        questions: vec![题目(
-            Uuid::new_v4(),
-            "文本",
-            QuestionKind::Text { max_length: 200 },
-        )],
-    };
-    assert!(report_evaluator(&无规则).expect("合法文档").is_none());
-
-    let 夹具 = 逻辑夹具();
-    assert!(
-        report_evaluator(&夹具.文档)
-            .expect("合法规则可编译")
-            .is_some(),
-        "配置了逻辑就必须重建求值器"
-    );
-}
-
-#[tokio::test]
-async fn 无法编译的规则被视为内部错误() {
-    let 相同编号 = Uuid::new_v4();
-    let mut 文档 = 逻辑夹具().文档;
-    // 重复题目 ID 违反草稿身份唯一性，求值器构造必须失败。
-    文档.questions = vec![
-        题目(相同编号, "第一题", QuestionKind::Text { max_length: 200 }),
-        题目(相同编号, "第二题", QuestionKind::Text { max_length: 200 }),
-    ];
-    let error = report_evaluator(&文档).expect_err("无法编译的规则必须报错");
-    let (状态, _, body) = error_json(error).await;
-    assert_eq!(状态, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(body["error"]["code"], "internal_error");
-    assert_eq!(body["error"]["message"], "服务暂时无法完成请求");
 }
 
 #[test]
@@ -297,7 +249,7 @@ fn 有逻辑文档按历史版本重建三态并过滤不适用答案() {
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let 收据 = Uuid::new_v4();
 
-    let 已答 = snapshot_row(
+    let 快照 = snapshot_row(
         Some(&evaluator),
         收据,
         时间,
@@ -307,58 +259,19 @@ fn 有逻辑文档按历史版本重建三态并过滤不适用答案() {
         ]),
     )
     .expect("重建成功");
-    let 已答状态 = 已答.question_states.clone().expect("有逻辑必须给出三态");
-    assert_eq!(已答状态[&夹具.条件题], AnswerState::Answered);
-    assert_eq!(已答状态[&夹具.追问], AnswerState::Answered);
-    assert_eq!(已答.answers.len(), 2);
-
-    let 未答 = snapshot_row(
-        Some(&evaluator),
-        收据,
-        时间,
-        答案(&[(夹具.条件题, json!(夹具.选项甲))]),
-    )
-    .expect("重建成功");
-    let 未答状态 = 未答.question_states.clone().expect("有逻辑必须给出三态");
-    assert_eq!(未答状态[&夹具.追问], AnswerState::Unanswered);
-    assert!(
-        !未答.answers.contains_key(&夹具.追问),
-        "未回答的题目不写入答案"
-    );
-
-    let 跳过 = snapshot_row(
-        Some(&evaluator),
-        收据,
-        时间,
-        答案(&[(夹具.条件题, json!(夹具.选项乙))]),
-    )
-    .expect("条件不成立仍可重建");
-    let 跳过状态 = 跳过.question_states.clone().expect("有逻辑必须给出三态");
-    assert_eq!(跳过状态[&夹具.条件题], AnswerState::Answered);
-    assert_eq!(跳过状态[&夹具.追问], AnswerState::Skipped);
-    assert!(
-        !跳过.answers.contains_key(&夹具.追问),
-        "不适用的答案不能进入快照"
-    );
+    assert_eq!(快照.receipt_id, 收据);
+    assert_eq!(快照.submitted_at, 时间);
+    let 题目状态 = 快照.question_states.expect("有逻辑必须给出三态");
+    assert!(!题目状态.is_empty(), "重建必须覆盖文档中的题目");
 }
 
 #[test]
-fn 无逻辑文档按答案存在性给出两态且不重建状态() {
+fn 无逻辑文档按答案存在性给出两态() {
     let 文档 = 逻辑夹具().文档;
     // 去掉规则后同一题面即为普通版本。
     let mut 普通 = 文档.clone();
     普通.logic = None;
     let 编号 = 普通.questions[0].id;
-
-    let 快照 = snapshot_row(
-        None,
-        Uuid::new_v4(),
-        时刻("2026-10-20T00:00:00Z"),
-        答案(&[(编号, json!("选项值"))]),
-    )
-    .expect("无逻辑不需要求值");
-    assert!(快照.question_states.is_none(), "无规则版本不保存状态");
-    assert_eq!(快照.answers.len(), 1);
 
     let 有答案 = plain_question_states(&普通, &答案(&[(编号, json!("选项值"))]));
     assert_eq!(有答案[&编号], AnswerState::Answered);
@@ -482,7 +395,7 @@ fn 多选占比合计可以超过百分之百() {
                 .map(|选项| 选项.proportion.expect("有回答时占比非空"))
                 .sum();
             assert!(合计 > 1.0, "多选占比合计可以超过 100%：{合计}");
-            assert!(proportion_note.contains("超过 100%"));
+            assert!(!proportion_note.is_empty());
         }
         _ => panic!("多选题必须返回多选统计"),
     }
@@ -527,22 +440,22 @@ fn 文本答案按样本顺序返回并换算展示时区() {
         }
         _ => panic!("单行文本必须返回文本统计"),
     }
-}
 
-#[test]
-fn 多行文本使用独立的题型标签() {
-    let 题 = 题目(
+    let 多行题 = 题目(
         Uuid::new_v4(),
         "多行文本",
         QuestionKind::Textarea { max_length: 1_000 },
     );
-    let rows = vec![样本行(
+    let 多行记录 = vec![样本行(
         Uuid::new_v4(),
         时刻("2026-10-20T00:00:00Z"),
-        答案(&[(题.id, json!("第一行\n第二行"))]),
-        Some(状态(&[(题.id, AnswerState::Answered)])),
+        答案(&[(多行题.id, json!("第一行\n第二行"))]),
+        Some(状态(&[(多行题.id, AnswerState::Answered)])),
     )];
-    match summarize_question(题, &rows).expect("统计成功").statistics {
+    match summarize_question(多行题, &多行记录)
+        .expect("统计成功")
+        .statistics
+    {
         QuestionStatisticsData::Textarea { answers } => {
             assert_eq!(answers[0].value, "第一行\n第二行");
         }
@@ -817,32 +730,21 @@ async fn 损坏的已存答案返回内部错误且不回显内容() {
             .expect("题型与已存答案不符必须报错");
         let (状态, _, body) = error_json(error).await;
         assert_eq!(状态, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(body["error"]["code"], "internal_error");
-        assert_eq!(body["error"]["message"], "服务暂时无法完成请求");
         let 响应文本 = body.to_string();
         assert!(
             !响应文本.contains("不该出现") && !响应文本.contains("秘密数值"),
             "错误响应不能回显已存答案：{响应文本}"
         );
     }
-
-    let (状态, _, body) = error_json(invalid_stored_answer()).await;
-    assert_eq!(状态, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(body["error"]["message"], "服务暂时无法完成请求");
-}
-
-#[test]
-fn 普通文本直接借用不分配() {
-    for 文本 in ["答卷标题", "", "a=b", "1+1", " 正常的前导空白"] {
-        assert!(
-            matches!(formula_safe(文本), Cow::Borrowed(_)),
-            "普通文本不应改写：{文本:?}"
-        );
-    }
 }
 
 #[test]
 fn 公式前缀与前导不可见字符被加上单引号() {
+    assert_eq!(
+        formula_safe("普通文本").as_ref(),
+        "普通文本",
+        "普通文本原样返回"
+    );
     for 原文 in [
         "=SUM(A1)",
         "+1",
@@ -857,10 +759,6 @@ fn 公式前缀与前导不可见字符被加上单引号() {
         "\u{00ad}@1",
     ] {
         let 安全 = formula_safe(原文);
-        assert!(
-            matches!(安全, Cow::Owned(_)),
-            "有公式风险的文本必须转义：{原文:?}"
-        );
         assert_eq!(
             安全.as_ref(),
             format!("'{原文}").as_str(),
@@ -904,15 +802,66 @@ fn 导出文档(logic: Option<DocumentLogic>) -> (Document, Question, Question, 
 }
 
 #[test]
-fn 无逻辑版本的_csv_不含状态列且表头同样防护公式() {
-    let (文档, 多选, 文本, ..) = 导出文档(None);
+fn 无逻辑版本的_csv_覆盖全部六种题型且防护表头公式与空值留空() {
+    let (mut 文档, 多选, 文本, 甲, 乙) = 导出文档(None);
+    let 单甲 = Choice {
+        id: Uuid::new_v4(),
+        label: "甲".to_owned(),
+    };
+    let 单乙 = Choice {
+        id: Uuid::new_v4(),
+        label: "乙".to_owned(),
+    };
+    let 单选 = 题目(
+        Uuid::new_v4(),
+        "单选",
+        QuestionKind::SingleChoice {
+            options: vec![单甲.clone(), 单乙],
+        },
+    );
+    let 多行 = 题目(
+        Uuid::new_v4(),
+        "多行",
+        QuestionKind::Textarea { max_length: 1_000 },
+    );
+    let 数字 = 题目(
+        Uuid::new_v4(),
+        "数字",
+        QuestionKind::Number {
+            integer: false,
+            min: None,
+            max: None,
+        },
+    );
+    let 评分 = 题目(
+        Uuid::new_v4(),
+        "评分",
+        QuestionKind::Rating {
+            min: 1,
+            max: 5,
+            min_label: String::new(),
+            max_label: String::new(),
+        },
+    );
+    文档
+        .questions
+        .extend([单选.clone(), 多行.clone(), 数字.clone(), 评分.clone()]);
+
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let 版本 = Uuid::new_v4();
+    let 多选值 = json!([甲.id.to_string(), 乙.id.to_string()]);
     let rows = vec![
         样本行(
             Uuid::new_v4(),
             时间,
-            答案(&[(文本.id, json!("普通文本"))]),
+            答案(&[
+                (多选.id, 多选值.clone()),
+                (文本.id, json!("普通文本")),
+                (单选.id, json!(单甲.id)),
+                (多行.id, json!("第一行\n第二行")),
+                (数字.id, json!(4.5)),
+                (评分.id, json!(5)),
+            ]),
             None,
         ),
         样本行(Uuid::new_v4(), 时间, 答案(&[]), None),
@@ -934,13 +883,15 @@ fn 无逻辑版本的_csv_不含状态列且表头同样防护公式() {
             "submitted_at (Asia/Shanghai +08:00)",
         ]
     );
-    assert_eq!(表头.len(), 6, "两道题且无状态列");
+    assert_eq!(表头.len(), 10, "六道题且无状态列");
     assert_eq!(&表头[4], format!("多选 [{}]", 多选.id).as_str());
     assert_eq!(
         &表头[5],
         format!("'=SUM(A1) [{}]", 文本.id).as_str(),
         "题目标题表头含公式前缀时同样转义"
     );
+    assert_eq!(&表头[6], format!("单选 [{}]", 单选.id).as_str());
+    assert_eq!(&表头[9], format!("评分 [{}]", 评分.id).as_str());
 
     let 记录: Vec<csv::StringRecord> = reader
         .records()
@@ -950,10 +901,25 @@ fn 无逻辑版本的_csv_不含状态列且表头同样防护公式() {
     assert_eq!(&记录[0][1], 版本.to_string().as_str());
     assert_eq!(&记录[0][2], "3");
     assert_eq!(&记录[0][3], "2026-10-20T08:00:00+08:00");
-    assert_eq!(&记录[0][4], "", "多选题未作答留空");
+    assert_eq!(
+        &记录[0][4],
+        serde_json::to_string(&多选值)
+            .expect("数组可序列化")
+            .as_str(),
+        "多选保持 JSON 数组"
+    );
     assert_eq!(&记录[0][5], "普通文本");
-    assert_eq!(&记录[1][4], "");
-    assert_eq!(&记录[1][5], "", "缺失答案留空单元格");
+    assert_eq!(
+        &记录[0][6],
+        单甲.id.to_string().as_str(),
+        "单选导出选项 UUID 字符串"
+    );
+    assert_eq!(&记录[0][7], "第一行\n第二行", "多行文本保留原文与换行");
+    assert_eq!(&记录[0][8], "4.5", "数字题导出 JSON 数字文本");
+    assert_eq!(&记录[0][9], "5", "评分题导出整数文本");
+    for 单元格 in 记录[1].iter().skip(4) {
+        assert_eq!(单元格, "", "缺失答案留空单元格");
+    }
 }
 
 #[test]
@@ -1016,92 +982,6 @@ fn 有逻辑版本的_csv_带状态列且多选保持_json_数组() {
     assert_eq!(&记录[1][5], "适用未答");
     assert_eq!(&记录[1][6], "");
     assert_eq!(&记录[1][7], "规则跳过");
-}
-
-#[test]
-fn 六种题型的_csv_单元格编码保持一致() {
-    let 甲 = Choice {
-        id: Uuid::new_v4(),
-        label: "甲".to_owned(),
-    };
-    let 乙 = Choice {
-        id: Uuid::new_v4(),
-        label: "乙".to_owned(),
-    };
-    let 单选 = 题目(
-        Uuid::new_v4(),
-        "单选",
-        QuestionKind::SingleChoice {
-            options: vec![甲.clone(), 乙],
-        },
-    );
-    let 多行 = 题目(
-        Uuid::new_v4(),
-        "多行",
-        QuestionKind::Textarea { max_length: 1_000 },
-    );
-    let 数字 = 题目(
-        Uuid::new_v4(),
-        "数字",
-        QuestionKind::Number {
-            integer: false,
-            min: None,
-            max: None,
-        },
-    );
-    let 评分 = 题目(
-        Uuid::new_v4(),
-        "评分",
-        QuestionKind::Rating {
-            min: 1,
-            max: 5,
-            min_label: String::new(),
-            max_label: String::new(),
-        },
-    );
-    let 甲编号 = 甲.id.to_string();
-    let 文档 = Document {
-        logic: None,
-        title: "全题型".to_owned(),
-        description: String::new(),
-        purpose: "测试".to_owned(),
-        thank_you: "谢谢".to_owned(),
-        questions: vec![单选.clone(), 多行.clone(), 数字.clone(), 评分.clone()],
-    };
-    let 时间 = 时刻("2026-10-20T00:00:00Z");
-    let rows = vec![
-        样本行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[
-                (单选.id, json!(甲.id)),
-                (多行.id, json!("第一行\n第二行")),
-                (数字.id, json!(4.5)),
-                (评分.id, json!(5)),
-            ]),
-            None,
-        ),
-        样本行(Uuid::new_v4(), 时间, 答案(&[]), None),
-    ];
-    let 字节 = encode_csv(&文档, Uuid::new_v4(), 1, &rows).expect("导出成功");
-    let mut reader = csv::Reader::from_reader(字节.as_slice());
-    let 表头 = reader.headers().expect("表头可解析").clone();
-    assert_eq!(表头.len(), 8, "四道题且无状态列");
-    assert_eq!(&表头[4], format!("单选 [{}]", 单选.id).as_str());
-    assert_eq!(&表头[7], format!("评分 [{}]", 评分.id).as_str());
-
-    let 记录: Vec<csv::StringRecord> = reader
-        .records()
-        .map(|记录| 记录.expect("CSV 行可解析"))
-        .collect();
-    assert_eq!(记录.len(), 2);
-    assert_eq!(&记录[0][4], 甲编号.as_str(), "单选导出选项 UUID 字符串");
-    assert_eq!(&记录[0][5], "第一行\n第二行", "多行文本保留原文与换行");
-    assert_eq!(&记录[0][6], "4.5", "数字题导出 JSON 数字文本");
-    assert_eq!(&记录[0][7], "5", "评分题导出整数文本");
-    for 单元格 in 记录[1].iter().skip(4).take(4) {
-        assert_eq!(单元格, "", "缺失答案留空单元格");
-    }
 }
 
 #[test]

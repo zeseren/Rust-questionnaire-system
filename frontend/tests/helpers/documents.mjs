@@ -1,7 +1,7 @@
 //! 固定身份的问卷构造器：单元测试不依赖随机 UUID，断言可以直接引用常量。
 
 /** 全部为合法的 v4 UUID，同一构造器多次调用复用同一身份。 */
-export const FIXED_IDS = Object.freeze({
+const FIXED_IDS = Object.freeze({
   question: Object.freeze({
     single_choice: '00000000-0000-4000-8000-000000000001',
     multiple_choice: '00000000-0000-4000-8000-000000000002',
@@ -107,9 +107,4 @@ export function surveyDocument(questions, overrides = {}) {
     questions,
     ...overrides,
   }
-}
-
-/** 明确表达测试意图的深拷贝包装。 */
-export function cloneDocument(value) {
-  return structuredClone(value)
 }

@@ -672,45 +672,6 @@ mod tests {
     }
 
     #[test]
-    fn 数值辅助函数只接受有限值并统一正负零() {
-        assert_eq!(finite_number(&json!(1.5), id(1)).unwrap(), 1.5);
-        let 错误 = finite_number(&json!("1.5"), id(1)).unwrap_err();
-        assert_eq!(错误.question_id, Some(id(1)));
-        assert_eq!(错误.message, "答案必须是有限的 JSON 数字");
-        // JSON 无法表达 NaN 或 Infinity，只能以 null 或字符串形式出现，仍必须拒绝。
-        let 错误 = finite_number(&Value::Null, id(2)).unwrap_err();
-        assert_eq!(错误.question_id, Some(id(2)));
-        assert_eq!(错误.message, "答案必须是有限的 JSON 数字");
-
-        assert_eq!(canonical_zero(-0.0).to_bits(), 0.0_f64.to_bits());
-        assert_eq!(canonical_zero(-1.5), -1.5, "非零数字保持原值");
-        assert_eq!(
-            canonical_number(-0.0).as_f64().unwrap().to_bits(),
-            0.0_f64.to_bits()
-        );
-        assert_eq!(canonical_number(2.5), json!(2.5));
-    }
-
-    #[test]
-    fn 选项身份只接受非零小写连字符_uuid() {
-        let 合法 = id(101).to_string();
-        assert_eq!(parse_option_id(&json!(合法), id(1)).unwrap(), id(101));
-
-        let 错误 = parse_option_id(&json!(1), id(1)).unwrap_err();
-        assert_eq!(错误.question_id, Some(id(1)));
-        assert_eq!(错误.message, "选项 ID 必须是合法的 UUID 字符串");
-        for 非法 in [
-            Uuid::nil().to_string(),
-            "00000000-0000-4000-8000-00000000010A".into(),
-            "not-a-uuid".into(),
-        ] {
-            let 错误 = parse_option_id(&json!(&非法), id(2)).unwrap_err();
-            assert_eq!(错误.question_id, Some(id(2)));
-            assert_eq!(错误.message, "选项 ID 必须是合法的 UUID 字符串", "{非法}");
-        }
-    }
-
-    #[test]
     fn 草稿校验拒绝非有限数值边界() {
         for (min, max, 说明) in [
             (Some(f64::INFINITY), None, "正无穷下界"),

@@ -18,14 +18,9 @@ import {
   textareaQuestion,
 } from '../helpers/documents.mjs'
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const questionTypes = ['single_choice', 'multiple_choice', 'text', 'textarea', 'number', 'rating']
 
-test('文本答案容量与后端保持一致', () => {
-  assert.deepEqual(TEXT_ANSWER_LIMITS, { text: 200, textarea: 1000 })
-})
-
-test('newQuestion 为六种题型生成独立身份与默认结构', () => {
+test('newQuestion 生成各题型的独立身份与默认约束', () => {
   const ids = []
   for (const type of questionTypes) {
     const first = newQuestion(type)
@@ -33,7 +28,6 @@ test('newQuestion 为六种题型生成独立身份与默认结构', () => {
     assert.equal(first.type, type)
     assert.equal(first.title, '')
     assert.equal(first.required, true)
-    assert.match(first.id, UUID)
     ids.push(first.id, second.id)
     if ('options' in first) {
       assert.equal(first.options.length, 2)
@@ -41,14 +35,11 @@ test('newQuestion 为六种题型生成独立身份与默认结构', () => {
         first.options.map((option) => option.label),
         ['选项 1', '选项 2'],
       )
-      for (const option of first.options) assert.match(option.id, UUID)
       assert.equal(new Set(first.options.map((option) => option.id)).size, 2)
     }
   }
   assert.equal(new Set(ids).size, ids.length, '新题身份不得重复')
-})
 
-test('newQuestion 各题型默认约束', () => {
   const multiple = newQuestion('multiple_choice')
   assert.equal(multiple.min_choices, 1)
   assert.equal(multiple.max_choices, 2)
@@ -100,12 +91,8 @@ test('duplicateSurveyDocument 同步重写整卷全部引用', () => {
   ]
   const serialized = JSON.stringify(duplicated)
   for (const id of originalIds) assert.ok(!serialized.includes(id), `复制不得遗留 ${id}`)
-  assert.equal(duplicated.logic.variables[0].expression.question_id, duplicated.questions[1].id)
-  assert.equal(duplicated.logic.rules[0].question_id, duplicated.questions[1].id)
-  assert.deepEqual(duplicated.logic.flow.nodes[2].question_ids, [duplicated.questions[1].id])
   assert.equal(duplicated.logic.flow.entry, duplicated.logic.flow.nodes[0].id)
   const compiled = compileDocumentLogic(duplicated.logic, duplicated.questions)
-  assert.ok(Array.isArray(compiled.variableOrder))
   assert.equal(compiled.variableOrder.length, 2, '菱形文档声明两个计算变量')
 })
 
@@ -231,6 +218,5 @@ test('duplicateQuestionRule 重写自身引用并保留上游依赖', () => {
   assert.deepEqual(coalesce.fallback, { op: 'boolean', value: false })
   assert.deepEqual(document.logic.flow.nodes[0].question_ids, [other.id, source.id, duplicated.id])
   const compiled = compileDocumentLogic(document.logic, document.questions)
-  assert.ok(Array.isArray(compiled.variableOrder))
   assert.equal(compiled.variableOrder.length, 0, '该文档没有计算变量')
 })

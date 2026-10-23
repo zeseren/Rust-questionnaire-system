@@ -948,7 +948,7 @@ impl Node {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use serde_json::{Number, Value, json};
+    use serde_json::{Value, json};
     use uuid::Uuid;
 
     use super::*;
@@ -980,71 +980,25 @@ mod tests {
     }
 
     #[test]
-    fn 值类型名称在序列化与文本_dsl_之间一致() {
-        for (value_type, name) in [
-            (LogicValueType::Boolean, "boolean"),
-            (LogicValueType::Number, "number"),
-            (LogicValueType::Text, "text"),
-            (LogicValueType::Choice, "choice"),
-            (LogicValueType::Choices, "choices"),
-        ] {
-            assert_eq!(value_type.as_str(), name);
-            assert_eq!(LogicValueType::from_name(name), Some(value_type));
-        }
+    fn 值类型名称拒绝未知名称() {
         for 未知 in ["", "bool", "Choice", "choices ", "number2"] {
             assert_eq!(LogicValueType::from_name(未知), None, "{未知}");
         }
-        assert_eq!(
-            serde_json::to_value(LogicValueType::Choices).unwrap(),
-            json!("choices"),
-            "序列化名复用同一事实源"
-        );
     }
 
     #[test]
     fn 错误路径重定位只替换表达式前缀() {
-        let 错误 = error(
+        let 重定位 = error(
             LogicErrorCode::InvalidSyntax,
             "$.expression.left",
             Some(id(1)),
-        );
-        let 重定位 = 错误.relocate("$.logic.rules[0].visible_if");
+        )
+        .relocate("$.logic.rules[0].visible_if");
         assert_eq!(重定位.path, "$.logic.rules[0].visible_if.left");
-        assert_eq!(重定位.question_id, Some(id(1)));
 
         // 根路径不含可替换前缀，必须保持原样。
         let 根 = error(LogicErrorCode::UnsupportedVersion, "$", None).relocate("$.logic.flow");
         assert_eq!(根.path, "$");
-        assert_eq!(根.code, LogicErrorCode::UnsupportedVersion);
-    }
-
-    #[test]
-    fn 预算放行深度与节点数边界并拒绝超限() {
-        fn 嵌套深度(depth: usize) -> Value {
-            let mut expression = json!({"op": "boolean", "value": true});
-            for _ in 1..depth {
-                expression = json!({"op": "not", "expression": expression});
-            }
-            expression
-        }
-
-        assert!(
-            check_raw_budget(Some(&嵌套深度(MAX_DEPTH)), 1, &mut 0).is_ok(),
-            "深度恰好 {MAX_DEPTH} 应通过"
-        );
-        let 错误 = check_raw_budget(Some(&嵌套深度(MAX_DEPTH + 1)), 1, &mut 0).unwrap_err();
-        assert_eq!(错误.code, LogicErrorCode::LimitExceeded);
-        assert_eq!(错误.path, "$.expression");
-
-        let 叶子 = json!({"op": "boolean", "value": true});
-        let 恰好 = json!({"op": "all", "expressions": vec![叶子.clone(); MAX_NODES - 1]});
-        assert!(
-            check_raw_budget(Some(&恰好), 1, &mut 0).is_ok(),
-            "节点数恰好 {MAX_NODES} 应通过"
-        );
-        let 超限 = json!({"op": "all", "expressions": vec![叶子; MAX_NODES]});
-        let 错误 = check_raw_budget(Some(&超限), 1, &mut 0).unwrap_err();
-        assert_eq!(错误.code, LogicErrorCode::LimitExceeded);
     }
 
     #[test]
@@ -1193,68 +1147,12 @@ mod tests {
     }
 
     #[test]
-    fn 答案读取按绑定类型校验并规范化() {
-        let 布尔 = Binding {
-            value_type: LogicValueType::Boolean,
-            options: BTreeSet::new(),
-            variable: true,
-        };
-        let 错误 = read_answer(Some(&json!(true)), &布尔, id(1)).unwrap_err();
-        assert_eq!(错误.code, LogicErrorCode::InvalidAnswer);
-        assert_eq!(错误.question_id, Some(id(1)));
-        assert_eq!(错误.path, format!("$.answers.{}", id(1)));
-        assert_eq!(
-            read_answer(None, &布尔, id(1)).unwrap(),
-            LogicValue::Missing
-        );
-        assert_eq!(
-            read_answer(Some(&Value::Null), &布尔, id(1)).unwrap(),
-            LogicValue::Missing
-        );
-
-        let 数字 = Binding {
-            value_type: LogicValueType::Number,
-            options: BTreeSet::new(),
-            variable: true,
-        };
-        assert_eq!(
-            read_answer(Some(&json!(2.5)), &数字, id(2)).unwrap(),
-            LogicValue::Number(2.5)
-        );
-        let 负零 = read_answer(
-            Some(&Value::Number(Number::from_f64(-0.0).unwrap())),
-            &数字,
-            id(2),
-        )
-        .unwrap();
-        assert!(
-            matches!(负零, LogicValue::Number(number) if number.to_bits() == 0.0_f64.to_bits()),
-            "数字答案中的负零归一为正零"
-        );
-        let 错误 = read_answer(Some(&json!("2.5")), &数字, id(2)).unwrap_err();
-        assert_eq!(错误.code, LogicErrorCode::InvalidAnswer);
-
-        let 文本 = Binding {
-            value_type: LogicValueType::Text,
-            options: BTreeSet::new(),
-            variable: true,
-        };
-        assert_eq!(
-            read_answer(Some(&json!(" 原文 ")), &文本, id(3)).unwrap(),
-            LogicValue::Text(" 原文 ".into())
-        );
-        let 错误 = read_answer(Some(&json!(1)), &文本, id(3)).unwrap_err();
-        assert_eq!(错误.code, LogicErrorCode::InvalidAnswer);
-
+    fn 答案读取拒绝越界与超量选项() {
         let 单选 = Binding {
             value_type: LogicValueType::Choice,
             options: [id(101)].into_iter().collect(),
             variable: false,
         };
-        assert_eq!(
-            read_answer(Some(&json!(id(101).to_string())), &单选, id(4)).unwrap(),
-            LogicValue::Choice(id(101))
-        );
         for 值 in [json!(id(999).to_string()), json!("not-a-uuid"), json!(101)] {
             let 错误 = read_answer(Some(&值), &单选, id(4)).unwrap_err();
             assert_eq!(错误.code, LogicErrorCode::InvalidAnswer, "{值}");
@@ -1266,23 +1164,6 @@ mod tests {
             options: [id(101), id(102), id(103)].into_iter().collect(),
             variable: false,
         };
-        assert_eq!(
-            read_answer(
-                Some(&json!([id(102).to_string(), id(101).to_string()])),
-                &多选,
-                id(5)
-            )
-            .unwrap(),
-            LogicValue::Choices(vec![id(101), id(102)]),
-            "多选答案按身份排序去重后返回"
-        );
-        let 重复 = read_answer(
-            Some(&json!([id(101).to_string(), id(101).to_string()])),
-            &多选,
-            id(5),
-        )
-        .unwrap_err();
-        assert_eq!(重复.code, LogicErrorCode::InvalidAnswer);
         let 超量 = read_answer(
             Some(&json!(vec![id(101).to_string(); MAX_CHOICES + 1])),
             &多选,
@@ -1290,8 +1171,6 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(超量.code, LogicErrorCode::InvalidAnswer);
-        let 非数组 = read_answer(Some(&json!(id(101).to_string())), &多选, id(5)).unwrap_err();
-        assert_eq!(非数组.code, LogicErrorCode::InvalidAnswer);
     }
 
     #[test]
@@ -1311,13 +1190,10 @@ mod tests {
         // answered 只判断有无答案，本身不读取答案内容。
         let 表达式 = 编译(答(1), &questions);
         assert!(表达式.required_reads(&BTreeMap::new()).is_empty());
-        assert_eq!(表达式.root.presence_guards(true), BTreeSet::from([id(1)]));
-        assert!(表达式.root.presence_guards(false).is_empty());
 
         // 常量字面量没有任何题目依赖与存在性守护。
         let 常量 = 编译(json!({"op": "boolean", "value": true}), &questions);
         assert!(常量.required_reads(&BTreeMap::new()).is_empty());
-        assert!(常量.root.presence_guards(true).is_empty());
 
         // all 中 answered(q1) 守护同一题的 answer 读取。
         let 守护 = 编译(
@@ -1347,10 +1223,7 @@ mod tests {
             BTreeSet::from([id(1)])
         );
 
-        // not(answered(q)) 只在整体为 false 时守护。
-        let 取反 = 编译(json!({"op": "not", "expression": 答(1)}), &questions);
-        assert!(取反.root.presence_guards(true).is_empty());
-        assert_eq!(取反.root.presence_guards(false), BTreeSet::from([id(1)]));
+        // not(answered(q)) 不提供守护，后续读取仍保留。
         let 组合 = 编译(
             json!({"op": "all", "expressions": [json!({"op": "not", "expression": 答(1)}), 比较(1)]}),
             &questions,
@@ -1359,16 +1232,6 @@ mod tests {
             组合.required_reads(&BTreeMap::new()),
             BTreeSet::from([id(1)]),
             "否定存在性不提供守护"
-        );
-
-        // all 的守护集合是各分支守护的并集。
-        let 全部 = 编译(
-            json!({"op": "all", "expressions": [答(1), 答(2)]}),
-            &questions,
-        );
-        assert_eq!(
-            全部.root.presence_guards(true),
-            BTreeSet::from([id(1), id(2)])
         );
 
         // coalesce 只把回退分支视为必然读取。

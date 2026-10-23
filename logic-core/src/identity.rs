@@ -109,13 +109,11 @@ mod tests {
     use serde::Deserialize;
     use uuid::Uuid;
 
-    use super::parse;
+    use super::{INVALID_ID, parse};
 
     /// 合法的非零小写连字符 UUID。
     const 合法: &str = "00000000-0000-0000-0000-000000000001";
     const 合法二: &str = "00000000-0000-0000-0000-000000000002";
-    /// 反序列化错误必须复用与解析入口相同的文案。
-    const 文案: &str = "身份 ID 必须是非零的小写连字符 UUID";
 
     #[derive(Debug, Deserialize)]
     struct 单值 {
@@ -172,7 +170,7 @@ mod tests {
         let 错误 =
             serde_json::from_str::<单值>(r#"{"id":"00000000-0000-0000-0000-000000000000"}"#)
                 .unwrap_err();
-        assert!(错误.to_string().contains(文案), "{错误}");
+        assert!(错误.to_string().contains(INVALID_ID), "{错误}");
 
         let 错误 = serde_json::from_str::<单值>(r#"{"id":1}"#).unwrap_err();
         assert!(
@@ -193,7 +191,10 @@ mod tests {
             r#"{{"ids":["{合法}","00000000-0000-0000-0000-000000000000"]}}"#
         ))
         .unwrap_err();
-        assert!(错误.to_string().contains(文案), "非法元素应被拒绝：{错误}");
+        assert!(
+            错误.to_string().contains(INVALID_ID),
+            "非法元素应被拒绝：{错误}"
+        );
 
         let 错误 = serde_json::from_str::<数组>(r#"{"ids":{}}"#).unwrap_err();
         assert!(
@@ -224,6 +225,9 @@ mod tests {
             r#"{"answers":{"00000000-0000-0000-0000-000000000000":1}}"#,
         )
         .unwrap_err();
-        assert!(错误.to_string().contains(文案), "非法键应被拒绝：{错误}");
+        assert!(
+            错误.to_string().contains(INVALID_ID),
+            "非法键应被拒绝：{错误}"
+        );
     }
 }

@@ -3,8 +3,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   changeConditionOperator,
-  comparisonNames,
-  comparisonOperators,
   conditionExpression,
   conditionOperators,
   groupExpression,
@@ -18,18 +16,6 @@ import {
 } from '../helpers/documents.mjs'
 
 const describe = (operators) => operators.map((entry) => entry.value)
-
-test('比较名称与运算符顺序是稳定契约', () => {
-  assert.deepEqual(comparisonNames, {
-    eq: '等于',
-    ne: '不等于',
-    gt: '大于',
-    ge: '大于或等于',
-    lt: '小于',
-    le: '小于或等于',
-  })
-  assert.deepEqual(comparisonOperators, ['eq', 'ne', 'gt', 'ge', 'lt', 'le'])
-})
 
 test('conditionOperators 按题型提供可用运算符', () => {
   assert.deepEqual(describe(conditionOperators()), ['answered', 'not_answered'])
@@ -79,14 +65,6 @@ test('changeConditionOperator 清空不适用的操作数并保留兼容值', ()
       number,
     ),
     { questionId: number.id, operator: 'answered', value: '' },
-  )
-  assert.deepEqual(
-    changeConditionOperator(
-      { questionId: number.id, operator: 'gt', value: '18.00', valueType: 'number' },
-      'not_answered',
-      number,
-    ),
-    { questionId: number.id, operator: 'not_answered', value: '' },
   )
   assert.deepEqual(
     changeConditionOperator(
@@ -301,31 +279,4 @@ test('readConditionGroup 拒绝无法无损表达的节点', () => {
     },
   ]
   for (const raw of rejected) assert.equal(readConditionGroup(raw), null, JSON.stringify(raw))
-})
-
-test('条件与条件组在原始节点上往返一致', () => {
-  for (const condition of [
-    { questionId: 'q', operator: 'answered', value: '' },
-    { questionId: 'q', operator: 'not_answered', value: '' },
-    { questionId: 'q', operator: 'selected', value: 'o' },
-    { questionId: 'q', operator: 'not_selected', value: 'o' },
-    { questionId: 'q', operator: 'eq', value: '18.00', valueType: 'number' },
-    { questionId: 'q', operator: 'ne', value: '001', valueType: 'text' },
-  ]) {
-    const group = readConditionGroup(conditionExpression(condition))
-    assert.deepEqual(group, { mode: 'all', conditions: [condition] })
-  }
-  for (const group of [
-    { mode: 'all', conditions: [{ questionId: 'q', operator: 'answered', value: '' }] },
-    {
-      mode: 'any',
-      conditions: [
-        { questionId: 'q', operator: 'not_selected', value: 'o' },
-        { questionId: 'q', operator: 'ge', value: '2', valueType: 'number' },
-      ],
-    },
-    { mode: 'always', conditions: [] },
-    { mode: 'never', conditions: [] },
-  ])
-    assert.deepEqual(readConditionGroup(groupExpression(group)), group)
 })

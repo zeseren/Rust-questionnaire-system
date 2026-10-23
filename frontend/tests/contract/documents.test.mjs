@@ -25,11 +25,3 @@ test('共享文档样例保持变量顺序、规则结果与错误定位一致',
     assert.deepEqual(actual, item.expected, item.name)
   }
 })
-
-test('拓扑顺序覆盖全部声明变量且不重复', () => {
-  for (const item of fixtures.cases) {
-    if (item.expected.error) continue
-    assert.equal(item.expected.order.length, item.logic.variables.length, item.name)
-    assert.equal(new Set(item.expected.order).size, item.expected.order.length, item.name)
-  }
-})

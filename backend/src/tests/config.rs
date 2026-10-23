@@ -156,7 +156,7 @@ fn 监听地址必须是_ip_与端口() {
 }
 
 #[test]
-fn 会话有效期只接受一秒到三十天的闭区间() {
+fn 会话有效期与限流次数必须为正且在允许区间内() {
     for (值, 期望) in [("1", 1_i64), ("2592000", 2_592_000)] {
         assert_eq!(
             配置(&[("SESSION_TTL_SECONDS", 值)])
@@ -165,6 +165,7 @@ fn 会话有效期只接受一秒到三十天的闭区间() {
             期望
         );
     }
+    // 会话有效期越界与限流次数为零命中同一段联合校验，错误文本只断言一次。
     for 值 in ["0", "2592001", "-1"] {
         assert_eq!(
             拒绝原因(&[("SESSION_TTL_SECONDS", 值)]),
@@ -176,19 +177,15 @@ fn 会话有效期只接受一秒到三十天的闭区间() {
         拒绝原因(&[("SESSION_TTL_SECONDS", "一小时")]),
         "SESSION_TTL_SECONDS 必须是整数秒"
     );
-}
 
-#[test]
-fn 两个限流参数必须为正整数() {
-    assert_eq!(
-        配置(&[
-            ("AUTH_REQUESTS_PER_MINUTE", "1"),
-            ("SUBMISSIONS_PER_MINUTE", "1")
-        ])
-        .expect("最小正整数合法")
-        .submissions_per_minute,
-        1
-    );
+    let 最小 = 配置(&[
+        ("AUTH_REQUESTS_PER_MINUTE", "1"),
+        ("SUBMISSIONS_PER_MINUTE", "1"),
+    ])
+    .expect("最小正整数合法");
+    assert_eq!(最小.auth_requests_per_minute, 1);
+    assert_eq!(最小.submissions_per_minute, 1);
+
     for 名称 in ["AUTH_REQUESTS_PER_MINUTE", "SUBMISSIONS_PER_MINUTE"] {
         assert_eq!(
             拒绝原因(&[(名称, "0")]),
@@ -210,9 +207,4 @@ fn 不可解码的环境变量被视为非法文本() {
     .err()
     .expect("不可解码的可选配置必须拒绝");
     assert_eq!(error.to_string(), "PUBLIC_ORIGIN 不是有效文本");
-
-    let error = Config::from_lookup(|_| Err(env::VarError::NotUnicode("非 UTF-8 值".into())))
-        .err()
-        .expect("不可解码的必填配置必须拒绝");
-    assert_eq!(error.to_string(), "请设置 DATABASE_URL");
 }

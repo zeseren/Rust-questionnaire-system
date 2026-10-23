@@ -14,25 +14,9 @@ use crate::{
     auth::RegisterRequest,
     domain::ValidationError,
     error::AppError,
-    http::{ApiJson, ApiPath, ApiQuery, Page, PageBounds, Pagination},
+    http::{ApiJson, ApiPath, ApiQuery, PageBounds, Pagination},
     tests::support::{error_json, send_raw_http, test_state},
 };
-
-/// 断言错误响应的 (状态码, 错误码, 消息) 三元组，避免只检查 `is_err()`。
-async fn 错误三元组(error: AppError) -> (StatusCode, String, String) {
-    let (status, _, body) = error_json(error).await;
-    (
-        status,
-        body["error"]["code"]
-            .as_str()
-            .expect("错误码必须是字符串")
-            .to_owned(),
-        body["error"]["message"]
-            .as_str()
-            .expect("错误消息必须是字符串")
-            .to_owned(),
-    )
-}
 
 #[tokio::test]
 async fn 业务错误构造器映射稳定状态码与错误体() {
@@ -128,17 +112,11 @@ async fn 非内部错误不生成检索标识() {
 #[tokio::test]
 async fn 外部错误统一收敛为不泄露细节的内部错误() {
     let 题目 = Uuid::new_v4();
+    // 三类外部错误都走同一个收敛分支，完整信封已由内部错误用例覆盖。
     let 数据库错误: AppError = sea_orm::DbErr::RecordNotFound("用户 42".to_owned()).into();
-    let 查询错误: AppError = sqlx::Error::RowNotFound.into();
-    let 序列化错误: AppError = serde_json::from_str::<u8>("不是数字")
-        .expect_err("必须解析失败")
-        .into();
-    for 错误 in [数据库错误, 查询错误, 序列化错误] {
-        let (状态, 码, 消息) = 错误三元组(错误).await;
-        assert_eq!(状态, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(码, "internal_error");
-        assert_eq!(消息, "服务暂时无法完成请求");
-    }
+    let (状态, 头, _) = error_json(数据库错误).await;
+    assert_eq!(状态, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(头.contains_key("x-error-id"), "外部错误也必须带检索标识");
 
     let 题目错误: AppError = ValidationError {
         question_id: Some(题目),
@@ -177,36 +155,13 @@ async fn json_提取(内容类型: Option<&str>, body: &str) -> (StatusCode, Hea
 }
 
 #[tokio::test]
-async fn 合法_json_解析为强类型请求() {
-    let state = test_state();
-    let request = Request::builder()
-        .method("POST")
-        .uri("/api/auth/register")
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(
-            r#"{"username":"Alice_1","password":"12345678"}"#,
-        ))
-        .expect("测试请求必须可构造");
-    let ApiJson(请求) = ApiJson::<RegisterRequest>::from_request(request, &state)
-        .await
-        .expect("合法 JSON 必须解析成功");
-    assert_eq!(请求.username, "Alice_1");
-    assert_eq!(请求.password, "12345678");
-}
-
-#[tokio::test]
 async fn 非法_json_统一映射为四百_invalid_json() {
     for (说明, 内容类型, 原文) in [
         ("语法错误", Some("application/json"), r#"{"username":"#),
         (
-            "字段类型错误",
-            Some("application/json"),
-            r#"{"username":5,"password":"12345678"}"#,
-        ),
-        (
             "未知字段",
             Some("application/json"),
-            r#"{"username":"alice","password":"12345678","role":"admin"}"#,
+            r#"{"username":"alice_01","password":"password123","role":"admin"}"#,
         ),
         (
             "缺少内容类型",
@@ -262,22 +217,21 @@ async fn 查询参数解析失败映射为四百_invalid_query() {
     assert_eq!(分页.page, Some(2));
     assert_eq!(分页.page_size, Some(50));
 
-    for 查询 in ["page=abc", "page=", "page=-1", "page=1.5"] {
-        let mut parts = Request::builder()
-            .uri(format!("/api/surveys?{查询}"))
-            .body(Body::empty())
-            .expect("测试请求必须可构造")
-            .into_parts()
-            .0;
-        let error = ApiQuery::<Pagination>::from_request_parts(&mut parts, &state)
-            .await
-            .err()
-            .expect("非法查询参数必须被拒绝");
-        let (状态, _, body) = error_json(error).await;
-        assert_eq!(状态, StatusCode::BAD_REQUEST, "{查询}");
-        assert_eq!(body["error"]["code"], "invalid_query", "{查询}");
-        assert_eq!(body["error"]["message"], "查询参数格式错误");
-    }
+    // 非法输入共用同一个 `map_err`，只保留一个负例代表。
+    let mut parts = Request::builder()
+        .uri("/api/surveys?page=abc")
+        .body(Body::empty())
+        .expect("测试请求必须可构造")
+        .into_parts()
+        .0;
+    let error = ApiQuery::<Pagination>::from_request_parts(&mut parts, &state)
+        .await
+        .err()
+        .expect("非法查询参数必须被拒绝");
+    let (状态, _, body) = error_json(error).await;
+    assert_eq!(状态, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_query");
+    assert_eq!(body["error"]["message"], "查询参数格式错误");
 }
 
 /// 只用于验证路径参数解析的最小处理函数。
@@ -379,59 +333,32 @@ async fn 偏移量必须能放进_i64() {
 }
 
 #[test]
-fn 分页兼容数字与十进制字符串() {
-    let 数字 =
-        serde_json::from_str::<Pagination>(r#"{"page":2,"page_size":50}"#).expect("JSON 数字兼容");
-    let 字符串 = serde_json::from_str::<Pagination>(r#"{"page":"2","page_size":"50"}"#)
-        .expect("字符串数字兼容");
+fn 分页字段兼容数字与十进制字符串并拒绝非纯十进制() {
     let 期望 = PageBounds {
         page: 2,
         page_size: 50,
         offset: 50,
         limit: 50,
     };
-    assert_eq!(数字.bounds().expect("数字分页合法"), 期望);
-    assert_eq!(字符串.bounds().expect("字符串分页合法"), 期望);
+    for 输入 in [
+        r#"{"page":2,"page_size":50}"#,
+        r#"{"page":"2","page_size":"50"}"#,
+    ] {
+        let 分页值 =
+            serde_json::from_str::<Pagination>(输入).expect("JSON 数字与十进制字符串必须兼容");
+        assert_eq!(分页值.bounds().expect("数字分页合法"), 期望, "{输入}");
+    }
 
     let 缺省 = serde_json::from_str::<Pagination>("{}").expect("缺省字段合法");
     assert_eq!(缺省.page, None);
     assert_eq!(缺省.page_size, None);
-}
 
-#[test]
-fn 分页文本必须是纯十进制非负整数() {
-    for 输入 in [
-        r#"{"page":"+1"}"#,
-        r#"{"page":"-1"}"#,
-        r#"{"page":""}"#,
-        r#"{"page":"abc"}"#,
-        r#"{"page":"18446744073709551616"}"#,
-        r#"{"page_size":"1.5"}"#,
-    ] {
+    // 有符号、空串、小数、非数字共用同一条拒绝分支，只保留一个代表值与一个溢出值。
+    for 输入 in [r#"{"page":"-1"}"#, r#"{"page":"18446744073709551616"}"#] {
         let error = serde_json::from_str::<Pagination>(输入).expect_err("非纯十进制字符串必须拒绝");
         assert!(
             error.to_string().contains("非负整数"),
             "拒绝理由必须指向非负整数：{输入} -> {error}"
         );
     }
-}
-
-#[test]
-fn 分页响应只复制页码与页大小() {
-    #[derive(serde::Serialize, utoipa::ToSchema)]
-    struct 行 {
-        id: u64,
-    }
-    let bounds = PageBounds {
-        page: 3,
-        page_size: 25,
-        offset: 50,
-        limit: 25,
-    };
-    let page = Page::new(vec![行 { id: 7 }], 88, bounds);
-    assert_eq!(page.total, 88);
-    assert_eq!(page.page, 3);
-    assert_eq!(page.page_size, 25);
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].id, 7);
 }

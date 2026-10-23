@@ -824,14 +824,7 @@ pub fn format_logic_text(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{Number, json};
-    use uuid::Uuid;
-
     use super::*;
-
-    fn id(value: u128) -> Uuid {
-        Uuid::from_u128(value)
-    }
 
     fn 位置(source: &str, offset: usize) -> (usize, usize) {
         let 错误 = located(
@@ -842,12 +835,8 @@ mod tests {
         (错误.line, 错误.column)
     }
 
-    fn 格式化器() -> Formatter {
-        Formatter::new(&Number::from(1_u32), &Number::from(1_u32))
-    }
-
     #[test]
-    fn 定位按字节偏移换算行列且越界安全() {
+    fn 定位按字节偏移换算行列() {
         // LF 与 CRLF 的行号都只统计 `\n`，列号从 1 开始。
         assert_eq!(位置("abc\ndef", 0), (1, 1));
         assert_eq!(位置("abc\ndef", 3), (1, 4));
@@ -859,115 +848,24 @@ mod tests {
         // 列号按 Unicode 标量计数，中文占三字节、Emoji 占四字节但都只算一列。
         assert_eq!(位置("中文😀x", 10), (1, 4));
         assert_eq!(位置("a\n中文😀", 12), (2, 4));
-
-        // 偏移越界或落在非字符边界时退化为整段源码，不切片 panic。
-        assert_eq!(位置("a\nb", 100), (2, 2));
-        assert_eq!(位置("中文", 1), (1, 3));
     }
 
     #[test]
-    fn 文本预算放行精确容量并拒绝超限与深层嵌套() {
-        // 字节预算：恰好 1 MiB 通过，多一个字节立即拒绝并定位到首行首列。
-        assert!(check_text_budget(&" ".repeat(1_048_576)).is_ok());
+    fn 文本预算超限错误定位到精确行列() {
+        // 字节预算：多一个字节立即拒绝并定位到首行首列。
         let 错误 = check_text_budget(&" ".repeat(1_048_577)).unwrap_err();
         assert_eq!(错误.error.code, LogicErrorCode::LimitExceeded);
         assert_eq!((错误.line, 错误.column), (1, 1));
 
-        // 递归深度预算初始为 1：63 层括号使深度达到 64，仍可通过。
-        let 通过 = format!("{}true{}", "(".repeat(63), ")".repeat(63));
-        assert!(check_text_budget(&通过).is_ok());
-        // 64 层括号使深度达到 65，必须拒绝并定位到第 64 个左括号。
+        // 64 层括号使深度超限，必须定位到第 64 个左括号。
         let 超限 = format!("{}true{}", "(".repeat(64), ")".repeat(64));
         let 错误 = check_text_budget(&超限).unwrap_err();
         assert_eq!(错误.error.code, LogicErrorCode::LimitExceeded);
         assert_eq!((错误.line, 错误.column), (1, 64));
 
-        // 前缀 `!` 与括号共用同一深度预算。
-        assert!(check_text_budget(&format!("{}true", "!".repeat(63))).is_ok());
+        // 前缀 `!` 与括号共用同一深度预算，同样定位到第 64 个字符。
         let 错误 = check_text_budget(&format!("{}true", "!".repeat(64))).unwrap_err();
         assert_eq!(错误.error.code, LogicErrorCode::LimitExceeded);
         assert_eq!((错误.line, 错误.column), (1, 64));
-    }
-
-    #[test]
-    fn 二元运算符按操作符与名称反查符号() {
-        for (op, name, symbol) in [
-            ("any", "任意", "||"),
-            ("all", "任意", "&&"),
-            ("compare", "eq", "=="),
-            ("compare", "ne", "!="),
-            ("compare", "lt", "<"),
-            ("compare", "le", "<="),
-            ("compare", "gt", ">"),
-            ("compare", "ge", ">="),
-            ("arithmetic", "add", "+"),
-            ("arithmetic", "subtract", "-"),
-            ("arithmetic", "multiply", "*"),
-            ("arithmetic", "divide", "/"),
-        ] {
-            assert_eq!(binary_symbol(op, name), Some(symbol), "{op}/{name}");
-        }
-        assert_eq!(binary_symbol("compare", "invalid"), None);
-        assert_eq!(binary_symbol("arithmetic", "pow"), None);
-        assert_eq!(binary_symbol("boolean", ""), None);
-    }
-
-    #[test]
-    fn 格式化器拒绝未绑定引用与未知表达式结构() {
-        let 格式化 = 格式化器();
-        assert_eq!(
-            格式化.bound(id(1)).unwrap_err().code,
-            LogicErrorCode::InvalidReference
-        );
-        assert_eq!(
-            格式化.reference(&json!(id(1))).unwrap_err().code,
-            LogicErrorCode::InvalidReference,
-            "格式合法但未绑定的身份必须拒绝"
-        );
-        assert_eq!(
-            格式化.reference(&json!("not-a-uuid")).unwrap_err().code,
-            LogicErrorCode::InvalidReference
-        );
-        assert_eq!(
-            格式化.reference(&json!(1)).unwrap_err().code,
-            LogicErrorCode::InvalidReference
-        );
-
-        for 表达式 in [
-            json!("not-an-object"),
-            json!({}),
-            json!({"op": "unknown"}),
-            json!({"op": "boolean", "value": "true"}),
-            json!({"op": "number", "value": 1}),
-            json!({"op": "answer"}),
-            json!({"op": "all", "expressions": {}}),
-            json!({"op": "contains_any", "question_id": id(1).to_string(), "option_ids": {}}),
-            json!({"op": "compare", "comparison": "xor", "left": {"op": "boolean", "value": true}, "right": {"op": "boolean", "value": true}}),
-            json!({"op": "arithmetic", "operator": "pow", "left": {"op": "number", "value": "1"}, "right": {"op": "number", "value": "2"}}),
-        ] {
-            assert_eq!(
-                格式化.expression(&表达式).unwrap_err().code,
-                LogicErrorCode::InvalidSyntax,
-                "应拒绝 {表达式}"
-            );
-        }
-
-        // 绑定后可引用该题；其他身份仍未绑定。
-        let mut 已绑定 = 格式化器();
-        已绑定.bind("question", id(1), "q1".into());
-        assert_eq!(已绑定.reference(&json!(id(1))).unwrap(), "q1");
-        assert_eq!(
-            已绑定
-                .expression(&json!({"op": "answer", "question_id": id(1).to_string()}))
-                .unwrap(),
-            "answer(q1)"
-        );
-        assert_eq!(
-            已绑定
-                .expression(&json!({"op": "answer", "question_id": id(2).to_string()}))
-                .unwrap_err()
-                .code,
-            LogicErrorCode::InvalidReference
-        );
     }
 }

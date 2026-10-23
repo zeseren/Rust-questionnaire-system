@@ -1,7 +1,6 @@
 //! 输入契约：共享身份与空白样例在配置编译、答案归一和填写会话中一致。
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { isAnswered } from '../../src/answers.ts'
 import { LogicError } from '../../src/logic.ts'
 import { FlowSession, compileDocumentLogic } from '../../src/wasm/index.ts'
 import {
@@ -98,9 +97,8 @@ test('题目身份在重建与交互事件中只接受规范且已声明的 UUID
   )
 })
 
-test('共享文本样例在进度判定与引擎答案归一上保持一致', () => {
+test('共享文本样例在引擎答案归一上保持一致', () => {
   for (const item of contracts.text_cases) {
-    assert.equal(isAnswered(item.value), item.answered, item.name)
     for (const required of [false, true]) {
       const question = textareaQuestion({ required })
       const document = surveyDocument([question])

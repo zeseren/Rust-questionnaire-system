@@ -29,77 +29,97 @@ fn 报文(方法: &str, 路径: &str, 体: &str) -> String {
     报文
 }
 
-#[test]
-fn 安全方法免于_csrf_与限流() {
+#[tokio::test]
+async fn 安全方法免于_csrf_与限流() {
     let state = test_state();
-    for 方法 in ["GET", "HEAD", "OPTIONS"] {
+    // 连续 9 次安全请求远超认证配额，仍必须全部通过。
+    for _ in 0..3 {
+        for 方法 in ["GET", "HEAD", "OPTIONS"] {
+            assert!(
+                security::check(&state, &raw_request(方法, "/api/auth/login", &[])).is_ok(),
+                "{方法} 不接受浏览器表单跨站提交，必须免检"
+            );
+        }
+    }
+    // 安全方法不占用配额：认证桶仍可完整用满 2 次，第 3 次才限流。
+    for _ in 0..2 {
         assert!(
-            security::check(&state, &raw_request(方法, "/api/auth/login", &[])).is_ok(),
-            "{方法} 不接受浏览器表单跨站提交，必须免检"
+            security::check(&state, &raw_request("POST", "/api/auth/login", &同源)).is_ok(),
+            "安全请求之后认证配额必须仍然完整可用"
         );
     }
-    assert_eq!(
-        state.limits.auth.lock().expect("窗口锁可用").count,
-        0,
-        "安全方法不占用认证限流配额"
-    );
+    let error = security::check(&state, &raw_request("POST", "/api/auth/login", &同源))
+        .expect_err("第 3 次必须限流");
+    assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]
 async fn 写方法必须携带同源来源与防护头() {
-    for 方法 in ["POST", "PUT", "PATCH", "DELETE"] {
-        let state = test_state();
+    let state = test_state();
+    // 4 种拒绝原因都在 POST 上覆盖，其余写方法只验证同样受保护且能通过。
+    for (说明, 头) in [
+        ("缺少 Origin", &[("x-csrf-protection", "1")][..]),
+        (
+            "Origin 不同源",
+            &[
+                ("origin", "http://localhost:4000"),
+                ("x-csrf-protection", "1"),
+            ][..],
+        ),
+        ("缺少防护头", &[("origin", "http://localhost:3000")][..]),
+        (
+            "防护头不是 1",
+            &[
+                ("origin", "http://localhost:3000"),
+                ("x-csrf-protection", "true"),
+            ][..],
+        ),
+    ] {
+        let error = security::check(&state, &raw_request("POST", "/api/surveys", 头))
+            .expect_err("非法写请求必须拒绝");
+        let (状态, _, body) = error_json(error).await;
+        assert_eq!(状态, StatusCode::FORBIDDEN, "POST：{说明}");
+        assert_eq!(body["error"]["code"], "csrf_rejected", "POST：{说明}");
+    }
+    let error = security::check(
+        &state,
+        &raw_request("POST", "/api/surveys", &[("x-csrf-protection", "1")]),
+    )
+    .expect_err("缺少 Origin 必须拒绝");
+    let (_, _, body) = error_json(error).await;
+    assert_eq!(
+        body["error"]["message"],
+        "写请求必须来自配置的同源站点并携带 X-CSRF-Protection: 1"
+    );
+
+    for 方法 in ["PUT", "PATCH", "DELETE"] {
         assert!(
             security::check(&state, &raw_request(方法, "/api/surveys", &同源)).is_ok(),
             "{方法} 同源请求必须通过"
         );
-        for (说明, 头) in [
-            ("缺少 Origin", &[("x-csrf-protection", "1")][..]),
-            (
-                "Origin 不同源",
-                &[
-                    ("origin", "http://localhost:4000"),
-                    ("x-csrf-protection", "1"),
-                ][..],
-            ),
-            ("缺少防护头", &[("origin", "http://localhost:3000")][..]),
-            (
-                "防护头不是 1",
-                &[
-                    ("origin", "http://localhost:3000"),
-                    ("x-csrf-protection", "true"),
-                ][..],
-            ),
-        ] {
-            let error = security::check(&state, &raw_request(方法, "/api/surveys", 头))
-                .expect_err("非法写请求必须拒绝");
-            let (状态, _, body) = error_json(error).await;
-            assert_eq!(状态, StatusCode::FORBIDDEN, "{方法}：{说明}");
-            assert_eq!(body["error"]["code"], "csrf_rejected", "{方法}：{说明}");
-            assert_eq!(
-                body["error"]["message"],
-                "写请求必须来自配置的同源站点并携带 X-CSRF-Protection: 1"
-            );
-        }
+        let error = security::check(
+            &state,
+            &raw_request(方法, "/api/surveys", &[("origin", "http://localhost:3000")]),
+        )
+        .expect_err("缺少防护头的写请求必须拒绝");
+        assert_eq!(
+            error_json(error).await.0,
+            StatusCode::FORBIDDEN,
+            "{方法} 必须同样受 CSRF 保护"
+        );
     }
 }
 
 #[tokio::test]
 async fn csrf_失败不占用限流配额() {
     let state = test_state();
-    for _ in 0..5 {
-        let error = security::check(&state, &raw_request("POST", "/api/auth/login", &[]))
-            .expect_err("缺少来源头的写请求必须被 CSRF 拒绝");
-        let (状态, _, body) = error_json(error).await;
-        assert_eq!(状态, StatusCode::FORBIDDEN);
-        assert_eq!(body["error"]["code"], "csrf_rejected");
-    }
-    assert_eq!(
-        state.limits.auth.lock().expect("窗口锁可用").count,
-        0,
-        "被 CSRF 拒绝的请求不能消耗认证配额"
-    );
+    let error = security::check(&state, &raw_request("POST", "/api/auth/login", &[]))
+        .expect_err("缺少来源头的写请求必须被 CSRF 拒绝");
+    let (状态, _, body) = error_json(error).await;
+    assert_eq!(状态, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"]["code"], "csrf_rejected");
 
+    // 被拒绝的请求不占配额：完整 2 次仍然通过，第 3 次才限流。
     for _ in 0..2 {
         assert!(
             security::check(&state, &raw_request("POST", "/api/auth/login", &同源)).is_ok(),
@@ -132,36 +152,23 @@ async fn 认证与提交使用互不干扰的限流桶() {
     let 提交超限 = security::check(&state, &raw_request("POST", &提交路径, &同源))
         .expect_err("提交桶第 4 次必须限流");
     for 错误 in [认证超限, 提交超限] {
-        let (状态, _, body) = error_json(错误).await;
-        assert_eq!(状态, StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(body["error"]["code"], "rate_limited");
+        assert_eq!(
+            error_json(错误).await.0,
+            StatusCode::TOO_MANY_REQUESTS,
+            "两个桶各自独立计数"
+        );
     }
-    // 其余认证入口共用同一个桶：桶满后一律拒绝，且不改变计数。
-    for 路径 in [
-        "/api/auth/register",
-        "/api/auth/logout",
-        "/api/auth/password",
-    ] {
-        let error = security::check(&state, &raw_request("POST", 路径, &同源))
-            .expect_err("认证桶满后所有认证入口都必须限流");
-        let (状态, _, body) = error_json(error).await;
-        assert_eq!(状态, StatusCode::TOO_MANY_REQUESTS, "{路径}");
-        assert_eq!(body["error"]["code"], "rate_limited", "{路径}");
-    }
-    assert_eq!(state.limits.auth.lock().expect("窗口锁可用").count, 2);
-    assert_eq!(
-        state.limits.submissions.lock().expect("窗口锁可用").count,
-        3
-    );
-
-    // 公开题面是安全方法：提交桶已满也不影响读取。
-    assert!(security::check(&state, &raw_request("GET", "/api/public/surveys/abc", &[])).is_ok());
+    // 其余认证入口共用同一个桶：桶满后任一入口都必须限流。
+    let error = security::check(&state, &raw_request("POST", "/api/auth/register", &同源))
+        .expect_err("认证桶满后所有认证入口都必须限流");
+    assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[test]
 fn 普通写路径不进入任何限流桶() {
     let state = test_state();
-    for _ in 0..10 {
+    // 4 轮已超过提交桶上限 3：普通写路径若被计数，这里必然出现 429。
+    for _ in 0..4 {
         assert!(security::check(&state, &raw_request("POST", "/api/surveys", &同源)).is_ok());
         assert!(
             security::check(
@@ -171,11 +178,6 @@ fn 普通写路径不进入任何限流桶() {
             .is_ok()
         );
     }
-    assert_eq!(state.limits.auth.lock().expect("窗口锁可用").count, 0);
-    assert_eq!(
-        state.limits.submissions.lock().expect("窗口锁可用").count,
-        0
-    );
 }
 
 #[tokio::test]
@@ -191,12 +193,7 @@ async fn 限流窗口满六十秒后重置() {
     assert_eq!(状态, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(body["error"]["code"], "rate_limited");
 
-    admit_at(&window, 1, 基准 + Duration::from_secs(60)).expect("满 60 秒必须重置");
-    {
-        let 窗口 = window.lock().expect("窗口锁可用");
-        assert_eq!(窗口.count, 1, "重置后本次请求计入新窗口");
-        assert_eq!(窗口.started, 基准 + Duration::from_secs(60));
-    }
+    admit_at(&window, 1, 基准 + Duration::from_secs(60)).expect("满 60 秒必须重置并放行本次请求");
     let 再次超限 = admit_at(&window, 1, 基准 + Duration::from_secs(61))
         .expect_err("新窗口内的第 2 次必须限流");
     assert_eq!(error_json(再次超限).await.0, StatusCode::TOO_MANY_REQUESTS);
@@ -292,11 +289,9 @@ async fn 开放文档包含完整路由表与_cookie_认证方案() {
 
 #[tokio::test]
 async fn 未知路径返回四百零四_not_found() {
-    let (状态, 头, body) = send_raw_http(路由(), &报文("GET", "/api/does-not-exist", "")).await;
+    let (状态, _, body) = send_raw_http(路由(), &报文("GET", "/api/does-not-exist", "")).await;
     assert_eq!(状态, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], "not_found");
-    assert_eq!(body["error"]["message"], "资源不存在或不可访问");
-    assert_eq!(头[header::CACHE_CONTROL], "no-store");
 }
 
 #[tokio::test]

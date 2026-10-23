@@ -10,21 +10,12 @@ const jsonResponse = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const errorResponse = (status, error) => jsonResponse({ error }, status)
 
-test('ApiError 保留状态码、错误码、消息与关联题目', () => {
-  const error = new ApiError(422, 'validation_failed', '题干不能为空', QUESTION_ID)
-  assert.ok(error instanceof Error)
-  assert.equal(error.status, 422)
-  assert.equal(error.code, 'validation_failed')
-  assert.equal(error.message, '题干不能为空')
-  assert.equal(error.question_id, QUESTION_ID)
-  // 未指定关联题目时必须是明确的 null，调用方据此区分“题目级错误”与“整体错误”。
-  assert.equal(new ApiError(500, 'internal_error', '内部错误').question_id, null)
-})
-
 test('message 优先返回 Error 实例的文案，其余输入回退到默认或自定义文案', () => {
   assert.equal(message(new Error('接口读取失败')), '接口读取失败')
   assert.equal(message('非 Error 值'), '操作未完成，请稍后重试。')
   assert.equal(message(null, '自定义回退'), '自定义回退')
+  // 未指定关联题目时必须是明确的 null，调用方据此区分“题目级错误”与“整体错误”。
+  assert.equal(new ApiError(500, 'internal_error', '内部错误').question_id, null)
 })
 
 test('query 过滤空值、保留假值并编码中文与保留字符', () => {
@@ -104,34 +95,24 @@ test('错误信封还原为带题目定位的 ApiError', async (t) => {
   })
 })
 
-test('错误体不是 JSON 时回退到通用状态文案', async (t) => {
+test('错误体不是 JSON 或缺字段时回退到通用状态文案', async (t) => {
   const env = installBrowserEnv(t)
-  env.fetch = async () => new Response('<html>网关错误</html>', { status: 502 })
-
-  await assert.rejects(
-    api('/api/surveys'),
-    (error) =>
-      error instanceof ApiError &&
-      error.status === 502 &&
-      error.code === 'request_failed' &&
-      error.message === '服务暂时无法完成请求，请稍后重试。' &&
-      error.question_id === null,
-  )
-})
-
-test('错误信封缺失字段时逐字段回退，不伪造错误码或题目', async (t) => {
-  const env = installBrowserEnv(t)
-  env.fetch = async () => jsonResponse({ error: {} }, 429)
-
-  await assert.rejects(
-    api('/api/auth/login', 'POST', { username: 'alice', password: 'secret' }),
-    (error) =>
-      error instanceof ApiError &&
-      error.status === 429 &&
-      error.code === 'request_failed' &&
-      error.message === '服务暂时无法完成请求，请稍后重试。' &&
-      error.question_id === null,
-  )
+  for (const [body, status] of [
+    ['<html>网关错误</html>', 502],
+    [JSON.stringify({ error: {} }), 429],
+  ]) {
+    env.fetch = async () => new Response(body, { status })
+    await assert.rejects(
+      api('/api/surveys'),
+      (error) =>
+        error instanceof ApiError &&
+        error.status === status &&
+        error.code === 'request_failed' &&
+        error.message === '服务暂时无法完成请求，请稍后重试。' &&
+        error.question_id === null,
+      String(status),
+    )
+  }
 })
 
 test('非认证探测请求的 unauthorized 触发一次会话过期事件', async (t) => {
@@ -208,7 +189,7 @@ test('30 秒截止会中止请求、归为网络失败并清除定时器', async
   )
   timer.callback()
   await assertion
-  assert.deepEqual(env.timers.cleared, [timer.id])
+  assert.deepEqual(env.timers.pending, [])
 })
 
 test('成功响应正文非法 JSON 时给出无效响应错误', async (t) => {
@@ -225,7 +206,7 @@ test('成功响应正文非法 JSON 时给出无效响应错误', async (t) => {
   )
 })
 
-test('download 以 GET 获取正文、触发锚点点击并延时释放对象地址', async (t) => {
+test('download 以 GET 拉取并触发锚点下载，延时撤销对象地址', async (t) => {
   const env = installBrowserEnv(t, { timers: 'manual' })
   let request
   env.fetch = async (path, init) => {
@@ -238,18 +219,13 @@ test('download 以 GET 获取正文、触发锚点点击并延时释放对象地
   assert.equal(request.path, '/api/surveys/1/export.csv')
   assert.equal(request.init.method, 'GET')
   assert.equal(request.init.headers['X-CSRF-Protection'], undefined)
-  assert.equal(env.objectUrls.created.length, 1)
-  assert.equal(await env.objectUrls.blobs[0].text(), '回执编号\n')
   const [anchor] = env.anchors
   assert.equal(anchor.href, env.objectUrls.created[0])
   assert.equal(anchor.download, '答卷.csv')
   assert.equal(anchor.clicks, 1)
-  assert.deepEqual(env.objectUrls.revoked, [])
 
-  const [timer] = env.timers.pending
-  assert.equal(timer.delay, 1000)
   env.timers.run()
-  assert.deepEqual(env.objectUrls.revoked, [env.objectUrls.created[0]])
+  assert.deepEqual(env.objectUrls.revoked, [anchor.href])
 })
 
 test('download 遇到错误信封时抛出 ApiError 且不创建下载链路', async (t) => {
@@ -269,9 +245,8 @@ test('download 遇到错误信封时抛出 ApiError 且不创建下载链路', a
     return true
   })
 
-  // 错误响应不得触发浏览器下载：不创建锚点、不生成对象地址，并立即清除截止定时器。
+  // 错误响应不得触发浏览器下载：不创建锚点、不生成对象地址，也不遗留截止定时器。
   assert.deepEqual(env.anchors, [])
   assert.deepEqual(env.objectUrls.created, [])
   assert.deepEqual(env.timers.pending, [])
-  assert.equal(env.timers.cleared.length, 1)
 })

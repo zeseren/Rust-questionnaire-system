@@ -35,12 +35,10 @@ test('每种错误码映射唯一中文文案并保留定位', () => {
     assert.equal(error.path, '$.logic.rules[0]')
     assert.equal(error.question_id, null, '默认不关联题目')
   }
-})
 
-test('LogicError 透传关联题目', () => {
-  const error = new LogicError('required_answer', '$.answers', 'question-1')
-  assert.equal(error.question_id, 'question-1')
-  assert.equal(error.message, messages.required_answer)
+  const forwarded = new LogicError('required_answer', '$.answers', 'question-1')
+  assert.equal(forwarded.question_id, 'question-1')
+  assert.equal(forwarded.message, messages.required_answer)
 })
 
 test('LogicTextError 追加从 1 开始的行列后缀', () => {

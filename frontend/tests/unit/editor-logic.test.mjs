@@ -8,6 +8,9 @@ function document() {
   return readFlowDocument('diamond')
 }
 
+/** 诊断只需定位到可聚焦目标；文案本身由领域错误测试覆盖，这里不逐字镜像。 */
+const focusOf = (diagnostic) => ({ target: diagnostic.target, path: diagnostic.path })
+
 test('无流程规则与合法流程都不产生诊断', () => {
   assert.equal(
     logicDiagnostic({ dsl_version: 1, semantics_version: 1, variables: [], rules: [] }, []),
@@ -26,7 +29,6 @@ test('结构错误返回题目归属、节点或整体流程的精确目标', ()
         return {
           target: `logic-node-${document.logic.flow.nodes[0].id}`,
           path: '$.logic.flow.nodes[0]',
-          message: '入口必须是第一个页面。',
         }
       },
     },
@@ -37,7 +39,6 @@ test('结构错误返回题目归属、节点或整体流程的精确目标', ()
         return {
           target: `logic-node-${document.logic.flow.nodes[0].id}`,
           path: '$.logic.flow.nodes[0]',
-          message: '页面至少需要一道题，请分配题目或删除空页。',
         }
       },
     },
@@ -49,43 +50,18 @@ test('结构错误返回题目归属、节点或整体流程的精确目标', ()
         return {
           target: `logic-node-${node.id}`,
           path: '$.logic.flow.nodes[3]',
-          message: '页面包含已删除题目，请移除失效归属。',
         }
       },
     },
     {
-      name: '出口指向前方节点',
-      mutate: (document) => {
-        const node = document.logic.flow.nodes[2]
-        node.next = document.logic.flow.nodes[1].id
-        return {
-          target: `logic-node-${node.id}`,
-          path: '$.logic.flow.nodes[2]',
-          message: '出口必须指向后续存在的节点，请修正跳转。',
-        }
-      },
-    },
-    {
-      name: '出口指向自身',
+      // 指向前方节点、指向自身与指向不存在的节点命中同一守卫，保留一个代表。
+      name: '出口指向非后续节点',
       mutate: (document) => {
         const node = document.logic.flow.nodes[2]
         node.next = node.id
         return {
           target: `logic-node-${node.id}`,
           path: '$.logic.flow.nodes[2]',
-          message: '出口必须指向后续存在的节点，请修正跳转。',
-        }
-      },
-    },
-    {
-      name: '出口指向不存在的节点',
-      mutate: (document) => {
-        const node = document.logic.flow.nodes[2]
-        node.next = '00000000-0000-4000-8000-000000009999'
-        return {
-          target: `logic-node-${node.id}`,
-          path: '$.logic.flow.nodes[2]',
-          message: '出口必须指向后续存在的节点，请修正跳转。',
         }
       },
     },
@@ -97,7 +73,6 @@ test('结构错误返回题目归属、节点或整体流程的精确目标', ()
         return {
           target: `logic-node-${flow.nodes[3].id}`,
           path: '$.logic.flow.nodes[3]',
-          message: '没有前置节点指向这里，请配置进入路径或删除节点。',
         }
       },
     },
@@ -111,7 +86,6 @@ test('结构错误返回题目归属、节点或整体流程的精确目标', ()
         return {
           target: 'logic-membership',
           path: '$.logic.flow',
-          message: '每题须归属一个页面，页面顺序必须与题目顺序一致。请调整题目归属或题目顺序。',
         }
       },
     },
@@ -119,7 +93,12 @@ test('结构错误返回题目归属、节点或整体流程的精确目标', ()
   for (const item of cases) {
     const current = document()
     const expected = item.mutate(current)
-    assert.deepEqual(logicDiagnostic(current.logic, current.questions), expected, item.name)
+    const diagnostic = logicDiagnostic(current.logic, current.questions)
+    assert.deepEqual(focusOf(diagnostic), expected, item.name)
+    assert.ok(
+      typeof diagnostic.message === 'string' && diagnostic.message.length > 0,
+      `${item.name} 必须给出可读文案`,
+    )
   }
 })
 
@@ -130,8 +109,7 @@ test('编译错误按路径映射到变量、规则、节点、题目或编辑�
     op: 'answer',
     question_id: '00000000-0000-4000-8000-000000009999',
   }
-  assert.deepEqual(logicDiagnostic(variable.logic, variable.questions), {
-    message: '规则引用的题目或选项无效',
+  assert.deepEqual(focusOf(logicDiagnostic(variable.logic, variable.questions)), {
     target: `logic-variable-${variableId}`,
     path: '$.logic.variables[0].expression',
   })
@@ -141,16 +119,14 @@ test('编译错误按路径映射到变量、规则、节点、题目或编辑�
     op: 'answer',
     question_id: rule.questions[1].id,
   }
-  assert.deepEqual(logicDiagnostic(rule.logic, rule.questions), {
-    message: '规则的操作数类型不匹配',
+  assert.deepEqual(focusOf(logicDiagnostic(rule.logic, rule.questions)), {
     target: 'logic-rule-0',
     path: '$.logic.rules[0].validate',
   })
 
   const node = document()
   node.logic.flow.nodes[1].branches[0].when.option_id = '00000000-0000-4000-8000-000000009999'
-  assert.deepEqual(logicDiagnostic(node.logic, node.questions), {
-    message: '规则引用的题目或选项无效',
+  assert.deepEqual(focusOf(logicDiagnostic(node.logic, node.questions)), {
     target: `logic-node-${node.logic.flow.nodes[1].id}`,
     path: '$.logic.flow.nodes[1].branches[0].when',
   })
@@ -158,16 +134,14 @@ test('编译错误按路径映射到变量、规则、节点、题目或编辑�
   const question = document()
   question.questions[1].id = question.questions[0].id
   question.logic.flow.nodes[2].question_ids = [question.questions[0].id]
-  assert.deepEqual(logicDiagnostic(question.logic, question.questions), {
-    message: '规则引用的题目或选项无效',
+  assert.deepEqual(focusOf(logicDiagnostic(question.logic, question.questions)), {
     target: `question-${question.questions[0].id}`,
     path: '$.questions',
   })
 
   const fallback = document()
   fallback.logic.dsl_version = 2
-  assert.deepEqual(logicDiagnostic(fallback.logic, fallback.questions), {
-    message: '不支持此规则版本',
+  assert.deepEqual(focusOf(logicDiagnostic(fallback.logic, fallback.questions)), {
     target: 'logic-editor',
     path: '$',
   })

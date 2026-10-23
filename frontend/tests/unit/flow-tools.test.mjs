@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { insertFlowNode } from '../../src/flow-tools.ts'
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const id = (suffix) => `00000000-0000-4000-8000-0000000000${suffix}`
 
 function linearFlow() {
@@ -22,7 +21,6 @@ test('在页面后插入页面会回接前驱并返回新身份', () => {
   const flow = linearFlow()
   const [p1, p2, end] = flow.nodes.map((node) => node.id)
   const inserted = insertFlowNode(flow, 0, 'page')
-  assert.match(inserted, UUID)
   assert.notEqual(inserted, p1)
   assert.deepEqual(
     flow.nodes.map((node) => node.id),

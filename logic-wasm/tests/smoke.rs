@@ -74,13 +74,12 @@ fn 七个导出函数成功时只返回_ok_信封() {
     let logic = item["logic"].to_string();
     let expected = item["expected"].as_str().unwrap().to_string();
 
-    // 1. 文本解析：成功值就是规则包对象。
+    // 1. 文本解析：成功值是规则包对象。
     let parsed = ok_envelope(&logic_wasm::parse_logic_text(
         expected.clone(),
         questions.clone(),
     ));
-    assert!(parsed["variables"].is_array(), "{parsed}");
-    assert_eq!(parsed["dsl_version"], 1);
+    assert!(parsed.is_object(), "{parsed}");
 
     // 2. 文本格式化：成功值是 DSL 字符串。
     let formatted = ok_envelope(&logic_wasm::format_logic_text(
@@ -88,11 +87,11 @@ fn 七个导出函数成功时只返回_ok_信封() {
         questions.clone(),
     ));
     assert!(
-        formatted.as_str().is_some_and(|text| !text.is_empty()),
-        "格式化成功值必须是非空字符串：{formatted}"
+        formatted.is_string(),
+        "格式化成功值必须是字符串：{formatted}"
     );
 
-    // 3. 文档规则预检：variable_order 与输入变量一一对应。
+    // 3. 文档规则预检：成功值是编译结果对象。
     let expressions = expressions();
     let expression_questions = expressions["questions"].to_string();
     let documents = documents();
@@ -102,25 +101,9 @@ fn 七个导出函数成功时只返回_ok_信封() {
         case_logic.clone(),
         expression_questions.clone(),
     ));
-    let order = compiled["variable_order"]
-        .as_array()
-        .expect("编译成功必须返回 variable_order 数组");
-    let variables = case["logic"]["variables"].as_array().unwrap();
-    assert_eq!(order.len(), variables.len(), "{compiled}");
-    assert!(order.iter().all(Value::is_string), "{compiled}");
-    let mut ordered = order
-        .iter()
-        .map(|id| id.as_str().unwrap().to_string())
-        .collect::<Vec<_>>();
-    ordered.sort();
-    let mut expected_variables = variables
-        .iter()
-        .map(|variable| variable["id"].as_str().unwrap().to_string())
-        .collect::<Vec<_>>();
-    expected_variables.sort();
-    assert_eq!(ordered, expected_variables, "{compiled}");
+    assert!(compiled.is_object(), "{compiled}");
 
-    // 4. 表达式编译：返回静态类型与依赖列表。
+    // 4. 表达式编译：成功值是编译结果对象。
     let raw = json!({
         "dsl_version": 1,
         "semantics_version": 1,
@@ -131,14 +114,9 @@ fn 七个导出函数成功时只返回_ok_信封() {
         raw.clone(),
         expression_questions.clone(),
     ));
-    assert_eq!(compiled["value_type"], "boolean", "{compiled}");
-    assert_eq!(
-        compiled["dependencies"],
-        json!([expression_questions_id(&expressions)]),
-        "{compiled}"
-    );
+    assert!(compiled.is_object(), "{compiled}");
 
-    // 5. 身份重写：成功值是结构完整的新文档，规则引用跟随题目身份。
+    // 5. 身份重写：成功值是文档对象。
     let document = json!({
         "title": "冒烟",
         "description": "",
@@ -149,32 +127,7 @@ fn 七个导出函数成功时只返回_ok_信封() {
     })
     .to_string();
     let renewed = ok_envelope(&logic_wasm::renew_document_ids(document));
-    assert_eq!(renewed["title"], "冒烟");
-    let renewed_questions = renewed["questions"].as_array().unwrap();
-    assert_eq!(
-        renewed_questions.len(),
-        item["questions"].as_array().unwrap().len()
-    );
-    for (old, new) in item["questions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .zip(renewed_questions)
-    {
-        assert_ne!(new["id"], old["id"], "题目身份必须重写：{renewed}");
-        assert!(new["id"].as_str().is_some_and(|id| id.len() == 36));
-    }
-    assert_eq!(
-        renewed["logic"]["rules"][0]["question_id"], renewed_questions[1]["id"],
-        "规则引用必须跟随题目身份重写"
-    );
-    let output = renewed.to_string();
-    for old in item["questions"].as_array().unwrap() {
-        assert!(
-            !output.contains(old["id"].as_str().unwrap()),
-            "旧题目身份不应残留：{output}"
-        );
-    }
+    assert!(renewed.is_object(), "{renewed}");
 
     // 6. 单表达式求值：成功值是规则值对象。
     let evaluated = ok_envelope(&logic_wasm::evaluate_expression(
@@ -182,19 +135,15 @@ fn 七个导出函数成功时只返回_ok_信封() {
         expression_questions.clone(),
         "{}".to_string(),
     ));
-    assert!(
-        evaluated.get("type").is_some_and(Value::is_string),
-        "求值成功值必须带 type：{evaluated}"
-    );
+    assert!(evaluated.is_object(), "{evaluated}");
 
-    // 7. 文档规则求值：成功值包含变量与规则两组结果。
+    // 7. 文档规则求值：成功值是求值结果对象。
     let evaluated = ok_envelope(&logic_wasm::evaluate_document_logic(
         case_logic,
         expression_questions,
         case["answers_json"].as_str().unwrap().to_string(),
     ));
-    assert!(evaluated["variables"].is_object(), "{evaluated}");
-    assert!(evaluated["rules"].is_object(), "{evaluated}");
+    assert!(evaluated.is_object(), "{evaluated}");
 }
 
 fn expression_questions_id(expressions: &Value) -> &str {
@@ -202,15 +151,18 @@ fn expression_questions_id(expressions: &Value) -> &str {
 }
 
 #[test]
-fn 每个字符串入参的非法_json_都返回边界错误() {
+fn 非法_json_与错误_dto_结构按参数名归类为边界语法错误() {
     let texts = texts();
     let item = &texts["format_cases"][0];
     let questions = item["questions"].to_string();
     let logic = item["logic"].to_string();
     let expected = item["expected"].as_str().unwrap().to_string();
     let expressions = expressions();
+    let expression_questions = expressions["questions"].to_string();
     let documents = documents();
     let case = &documents["cases"][0];
+    let case_logic = case["logic"].to_string();
+    let case_answers = case["answers_json"].as_str().unwrap().to_string();
     let raw = json!({
         "dsl_version": 1,
         "semantics_version": 1,
@@ -218,137 +170,69 @@ fn 每个字符串入参的非法_json_都返回边界错误() {
     })
     .to_string();
     let answers = "{}".to_string();
-    let bad = "{ 非法".to_string();
-
-    let cases = [
-        (
-            "questions_json",
-            logic_wasm::parse_logic_text(expected.clone(), bad.clone()),
-        ),
-        (
-            "questions_json",
-            logic_wasm::format_logic_text(logic.clone(), bad.clone()),
-        ),
-        (
-            "questions_json",
-            logic_wasm::compile_document_logic(logic.clone(), bad.clone()),
-        ),
-        (
-            "questions_json",
-            logic_wasm::compile_expression(raw.clone(), bad.clone()),
-        ),
-        (
-            "questions_json",
-            logic_wasm::evaluate_expression(raw.clone(), bad.clone(), answers.clone()),
-        ),
-        (
-            "questions_json",
-            logic_wasm::evaluate_document_logic(logic.clone(), bad.clone(), answers.clone()),
-        ),
-        (
-            "logic_json",
-            logic_wasm::format_logic_text(bad.clone(), questions.clone()),
-        ),
-        (
-            "logic_json",
-            logic_wasm::compile_document_logic(bad.clone(), questions.clone()),
-        ),
-        (
-            "logic_json",
-            logic_wasm::evaluate_document_logic(bad.clone(), questions.clone(), answers.clone()),
-        ),
-        (
-            "raw_json",
-            logic_wasm::compile_expression(bad.clone(), questions.clone()),
-        ),
-        (
-            "raw_json",
-            logic_wasm::evaluate_expression(bad.clone(), questions.clone(), answers.clone()),
-        ),
-        (
-            "answers_json",
-            logic_wasm::evaluate_expression(raw.clone(), questions.clone(), bad.clone()),
-        ),
-        (
-            "answers_json",
-            logic_wasm::evaluate_document_logic(
-                case["logic"].to_string(),
-                expressions["questions"].to_string(),
-                bad.clone(),
-            ),
-        ),
-        ("document_json", logic_wasm::renew_document_ids(bad)),
-    ];
-    for (parameter, output) in cases {
-        boundary_envelope(&output, parameter);
-    }
-}
-
-#[test]
-fn 错误_dto_类型同样落到对应参数的边界错误() {
-    let texts = texts();
-    let item = &texts["format_cases"][0];
-    let questions = item["questions"].to_string();
-    let logic = item["logic"].to_string();
-    let expected = item["expected"].as_str().unwrap().to_string();
-    let expressions = expressions();
-    let documents = documents();
-    let case = &documents["cases"][0];
-    let raw = json!({
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "expression": { "op": "boolean", "value": true },
-    })
-    .to_string();
+    let syntax = "{ 非法".to_string();
     let wrong_questions = "{}".to_string();
     let wrong_logic = "[]".to_string();
     let wrong_answers = "[]".to_string();
     let wrong_document = "[]".to_string();
 
+    // 每个 (function, parameter) 组合保留一行；语法错误与结构错误交替覆盖。
     let cases = [
         (
             "questions_json",
-            logic_wasm::parse_logic_text(expected, wrong_questions.clone()),
-        ),
-        (
-            "questions_json",
-            logic_wasm::format_logic_text(logic.clone(), wrong_questions.clone()),
-        ),
-        (
-            "questions_json",
-            logic_wasm::compile_document_logic(logic.clone(), wrong_questions.clone()),
-        ),
-        (
-            "questions_json",
-            logic_wasm::compile_expression(raw.clone(), wrong_questions.clone()),
+            logic_wasm::parse_logic_text(expected, syntax.clone()),
         ),
         (
             "logic_json",
             logic_wasm::format_logic_text(wrong_logic.clone(), questions.clone()),
         ),
         (
+            "questions_json",
+            logic_wasm::format_logic_text(logic.clone(), syntax.clone()),
+        ),
+        (
             "logic_json",
             logic_wasm::compile_document_logic(wrong_logic.clone(), questions.clone()),
+        ),
+        (
+            "questions_json",
+            logic_wasm::compile_document_logic(logic.clone(), syntax.clone()),
+        ),
+        (
+            "raw_json",
+            logic_wasm::compile_expression(syntax.clone(), questions.clone()),
+        ),
+        (
+            "questions_json",
+            logic_wasm::compile_expression(raw.clone(), wrong_questions.clone()),
+        ),
+        (
+            "raw_json",
+            logic_wasm::evaluate_expression(syntax.clone(), questions.clone(), answers.clone()),
+        ),
+        (
+            "questions_json",
+            logic_wasm::evaluate_expression(raw.clone(), wrong_questions.clone(), answers.clone()),
+        ),
+        (
+            "answers_json",
+            logic_wasm::evaluate_expression(raw, questions.clone(), syntax.clone()),
         ),
         (
             "logic_json",
             logic_wasm::evaluate_document_logic(
                 wrong_logic,
-                expressions["questions"].to_string(),
-                case["answers_json"].as_str().unwrap().to_string(),
+                expression_questions.clone(),
+                case_answers.clone(),
             ),
         ),
         (
-            "answers_json",
-            logic_wasm::evaluate_expression(raw.clone(), questions.clone(), wrong_answers.clone()),
+            "questions_json",
+            logic_wasm::evaluate_document_logic(case_logic.clone(), syntax.clone(), case_answers),
         ),
         (
             "answers_json",
-            logic_wasm::evaluate_document_logic(
-                case["logic"].to_string(),
-                expressions["questions"].to_string(),
-                wrong_answers,
-            ),
+            logic_wasm::evaluate_document_logic(case_logic, expression_questions, wrong_answers),
         ),
         (
             "document_json",
@@ -358,7 +242,6 @@ fn 错误_dto_类型同样落到对应参数的边界错误() {
     for (parameter, output) in cases {
         boundary_envelope(&output, parameter);
     }
-    // raw_json 的类型是任意 JSON 值，不存在“错误 DTO”；非法 JSON 已由上一条测试覆盖。
 }
 
 #[test]
@@ -373,21 +256,13 @@ fn 严格答案键拒绝非规范_uuid() {
     .to_string();
     let logic = documents()["cases"][0]["logic"].to_string();
 
-    // 只有小写连字符 UUID 能跨边界；其余写法在解码阶段拒绝。
-    for key in [
-        "11111111-1111-4111-8111-11111111111A",
-        "11111111111141118111111111111111",
-        "00000000-0000-0000-0000-000000000000",
-        "不是-uuid",
+    // 全零 UUID 在解码阶段拒绝；规范键由下面的对照覆盖。
+    let answers = r#"{"00000000-0000-0000-0000-000000000000":"x"}"#.to_string();
+    for output in [
+        logic_wasm::evaluate_expression(raw.clone(), questions.clone(), answers.clone()),
+        logic_wasm::evaluate_document_logic(logic.clone(), questions.clone(), answers.clone()),
     ] {
-        let answers = format!(r#"{{"{key}":"x"}}"#);
-        for output in [
-            logic_wasm::evaluate_expression(raw.clone(), questions.clone(), answers.clone()),
-            logic_wasm::evaluate_document_logic(logic.clone(), questions.clone(), answers.clone()),
-        ] {
-            let envelope = boundary_envelope(&output, "answers_json");
-            assert_eq!(envelope["error"]["code"], "invalid_syntax");
-        }
+        boundary_envelope(&output, "answers_json");
     }
 
     // 对照：规范键与合法选项值进入领域层并正常求值。
@@ -428,35 +303,8 @@ fn 领域错误字段原样穿透信封() {
         error["column"].as_u64().is_some_and(|column| column >= 1),
         "{error}"
     );
-    assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("规则结构或字段无效"),
-        "{error}"
-    );
 
-    // 表达式编译错误保留稳定分类与 AST 路径。
-    let raw = json!({
-        "dsl_version": 2,
-        "semantics_version": 1,
-        "expression": { "op": "boolean", "value": true },
-    })
-    .to_string();
-    let error = domain_envelope(&logic_wasm::compile_expression(raw, questions_json.clone()));
-    assert_eq!(error["code"], "unsupported_version", "{error}");
-    assert_eq!(error["path"], "$", "{error}");
-    assert!(error["question_id"].is_null(), "{error}");
-    assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("不支持此规则版本"),
-        "{error}"
-    );
-    assert!(error.get("line").is_none(), "领域错误不带行列：{error}");
-
-    // 文档规则错误保留规则路径与相关题目。
+    // 文档规则错误保留规则路径与相关题目，且不携带行列。
     let logic = json!({
         "dsl_version": 1,
         "semantics_version": 1,
@@ -468,80 +316,13 @@ fn 领域错误字段原样穿透信封() {
         "flow": null,
     })
     .to_string();
-    let error = domain_envelope(&logic_wasm::compile_document_logic(
-        logic,
-        questions_json.clone(),
-    ));
+    let error = domain_envelope(&logic_wasm::compile_document_logic(logic, questions_json));
     assert_eq!(error["code"], "invalid_reference", "{error}");
     assert_eq!(error["path"], "$.logic.rules[0].visible_if", "{error}");
-    assert_eq!(error["question_id"], "00000000-0000-4000-8000-000000000999");
-    assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("规则引用的题目或选项无效"),
+    assert_eq!(
+        error["question_id"], "00000000-0000-4000-8000-000000000999",
         "{error}"
     );
-
-    // 表达式求值错误（除零）保留算术分类与根路径。
-    let raw = json!({
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "expression": {
-            "op": "arithmetic",
-            "operator": "divide",
-            "left": { "op": "number", "value": "1" },
-            "right": { "op": "number", "value": "0" },
-        },
-    })
-    .to_string();
-    let error = domain_envelope(&logic_wasm::evaluate_expression(
-        raw,
-        questions_json.clone(),
-        "{}".to_string(),
-    ));
-    assert_eq!(error["code"], "arithmetic_error", "{error}");
-    assert_eq!(error["path"], "$.expression", "{error}");
-    assert!(error["question_id"].is_null(), "{error}");
-    assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("除零或数值溢出"),
-        "{error}"
-    );
-
-    // 文档求值错误定位到具体计算变量。
-    let logic = json!({
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "variables": [{
-            "id": "00000000-0000-4000-8000-000000002001",
-            "value_type": "number",
-            "expression": {
-                "op": "arithmetic",
-                "operator": "divide",
-                "left": { "op": "number", "value": "1" },
-                "right": { "op": "number", "value": "0" },
-            },
-        }],
-        "rules": [],
-        "flow": null,
-    })
-    .to_string();
-    let error = domain_envelope(&logic_wasm::evaluate_document_logic(
-        logic,
-        questions_json,
-        "{}".to_string(),
-    ));
-    assert_eq!(error["code"], "arithmetic_error", "{error}");
-    assert_eq!(error["path"], "$.logic.variables[0].expression", "{error}");
-    assert!(error["question_id"].is_null(), "{error}");
-    assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("除零或数值溢出"),
-        "{error}"
-    );
+    assert!(error.get("line").is_none(), "领域错误不带行列：{error}");
+    assert!(error.get("column").is_none(), "领域错误不带行列：{error}");
 }

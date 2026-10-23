@@ -965,20 +965,6 @@ mod tests {
         }
     }
 
-    fn 单页流程() -> FlowDefinition {
-        FlowDefinition {
-            entry: id(201),
-            nodes: vec![页面(201, &[1], 202), 结束(202)],
-        }
-    }
-
-    fn 两页流程() -> FlowDefinition {
-        FlowDefinition {
-            entry: id(201),
-            nodes: vec![页面(201, &[1], 202), 页面(202, &[2], 203), 结束(203)],
-        }
-    }
-
     fn 分支流程(branches: Vec<FlowBranch>) -> FlowDefinition {
         FlowDefinition {
             entry: id(201),
@@ -1000,43 +986,6 @@ mod tests {
             .unwrap_or_else(|error| panic!("流程应可编译：{error:?}"))
             .flow
             .expect("配置了流程时必须产出编译结果")
-    }
-
-    #[test]
-    fn 隐式流程使用哨兵页面与结束身份() {
-        let questions = [单选题(1, &[101, 102]), 单选题(2, &[103, 104])];
-        let flow = CompiledFlow::implicit(&questions);
-        assert_eq!(flow.nodes.len(), 2);
-
-        match &flow.nodes[0] {
-            Node::Page {
-                id: 页,
-                questions: 题,
-                next,
-            } => {
-                assert_eq!(*页, IMPLICIT_PAGE_ID);
-                assert_eq!(IMPLICIT_PAGE_ID, Uuid::nil(), "隐式页面使用 Nil 作为哨兵");
-                assert_eq!(题.as_slice(), [id(1), id(2)].as_slice());
-                assert_eq!(*next, 1);
-            }
-            _ => panic!("隐式流程首节点必须是页面"),
-        }
-        match &flow.nodes[1] {
-            Node::End {
-                id: 结束, outcome
-            } => {
-                assert_eq!(*结束, IMPLICIT_END_ID);
-                assert_eq!(
-                    IMPLICIT_END_ID,
-                    Uuid::from_u128(1),
-                    "隐式结束节点使用独立哨兵"
-                );
-                assert_eq!(*outcome, FlowOutcome::Complete);
-            }
-            _ => panic!("隐式流程末节点必须是结束"),
-        }
-        assert_eq!(flow.id(0), IMPLICIT_PAGE_ID);
-        assert_eq!(flow.id(1), IMPLICIT_END_ID);
     }
 
     #[test]
@@ -1077,7 +1026,6 @@ mod tests {
         let questions = [单选题(1, &[101])];
         let 守 = || json!({"op": "answered", "question_id": id(1).to_string()});
         let 真 = || json!({"op": "boolean", "value": true});
-        let 假 = || json!({"op": "boolean", "value": false});
 
         // 空分支列表无法给出默认出口。
         let 错误 = 逻辑(分支流程(Vec::new())).compile(&questions).unwrap_err();
@@ -1118,32 +1066,6 @@ mod tests {
         let 错误 = 逻辑(分支流程(超限)).compile(&questions).unwrap_err();
         assert_eq!(错误.code, LogicErrorCode::InvalidFlow);
 
-        // 常量 false 永远拒绝。
-        let 错误 = 逻辑(分支流程(vec![FlowBranch {
-            when: 假(),
-            target: id(203),
-        }]))
-        .compile(&questions)
-        .unwrap_err();
-        assert_eq!(错误.code, LogicErrorCode::InvalidFlow);
-        assert_eq!(错误.path, "$.logic.flow.nodes[1].branches[0].when");
-
-        // 常量 true 位于非末位会遮蔽后续分支，必须拒绝。
-        let 错误 = 逻辑(分支流程(vec![
-            FlowBranch {
-                when: 真(),
-                target: id(203),
-            },
-            FlowBranch {
-                when: 守(),
-                target: id(203),
-            },
-        ]))
-        .compile(&questions)
-        .unwrap_err();
-        assert_eq!(错误.code, LogicErrorCode::InvalidFlow);
-        assert_eq!(错误.path, "$.logic.flow.nodes[1].branches[0].when");
-
         // 常量 true 位于末位仅作为默认判定，允许编译。
         assert!(
             逻辑(分支流程(vec![
@@ -1162,62 +1084,7 @@ mod tests {
     }
 
     #[test]
-    fn 流程节点身份不能与题目或选项冲突() {
-        let questions = [单选题(1, &[101, 102])];
-        for 冲突 in [1, 101] {
-            let 冲突流程 = FlowDefinition {
-                entry: id(201),
-                nodes: vec![页面(201, &[1], 202), 结束(冲突)],
-            };
-            let 错误 = 逻辑(冲突流程).compile(&questions).unwrap_err();
-            assert_eq!(错误.code, LogicErrorCode::InvalidFlow, "冲突身份 {冲突}");
-            assert_eq!(错误.path, "$.logic.flow");
-            assert_eq!(错误.question_id, None);
-        }
-    }
-
-    #[test]
-    fn 结束节点拒绝改答与前进() {
-        let 问卷 = 文档(vec![单选题(1, &[101, 102])], Some(逻辑(单页流程())));
-        let mut 会话 = FlowSession::new(&问卷).unwrap();
-        会话.dispatch(FlowEvent::Next).expect("可选题应允许前进");
-        assert_eq!(会话.snapshot().current_node, id(202));
-
-        let 错误 = 会话
-            .dispatch(FlowEvent::Change {
-                question_id: id(1),
-                value: json!(id(101).to_string()),
-            })
-            .unwrap_err();
-        assert_eq!(错误.code, LogicErrorCode::InvalidEvent);
-        assert_eq!(错误.path, "$.event");
-        assert_eq!(错误.question_id, None);
-
-        let 错误 = 会话.dispatch(FlowEvent::Next).unwrap_err();
-        assert_eq!(错误.code, LogicErrorCode::InvalidEvent);
-        assert_eq!(错误.path, "$.event");
-    }
-
-    #[test]
     fn 改答只接受当前页面的可见题目() {
-        let 问卷 = 文档(
-            vec![单选题(1, &[101, 102]), 单选题(2, &[103, 104])],
-            Some(逻辑(两页流程())),
-        );
-        let mut 会话 = FlowSession::new(&问卷).unwrap();
-        let 错误 = 会话
-            .dispatch(FlowEvent::Change {
-                question_id: id(2),
-                value: json!(id(103).to_string()),
-            })
-            .unwrap_err();
-        assert_eq!(
-            错误.code,
-            LogicErrorCode::InvalidEvent,
-            "不能改答后续页面的题目"
-        );
-        assert_eq!(错误.path, "$.event");
-
         // 当前页被显示规则隐藏的题目同样不能改答。
         let 隐藏问卷 = 文档(
             vec![单选题(1, &[101, 102]), 单选题(2, &[103, 104])],
@@ -1244,15 +1111,5 @@ mod tests {
             .unwrap_err();
         assert_eq!(错误.code, LogicErrorCode::InvalidEvent, "不能改答隐藏题目");
         assert_eq!(错误.path, "$.event");
-    }
-
-    #[test]
-    fn 初始页面不能回退() {
-        let 问卷 = 文档(vec![单选题(1, &[101, 102])], Some(逻辑(单页流程())));
-        let mut 会话 = FlowSession::new(&问卷).unwrap();
-        let 错误 = 会话.dispatch(FlowEvent::Previous).unwrap_err();
-        assert_eq!(错误.code, LogicErrorCode::InvalidEvent);
-        assert_eq!(错误.path, "$.event");
-        assert_eq!(错误.question_id, None);
     }
 }

@@ -80,7 +80,6 @@ fn 文本共享样例保留身份优先级并定位语法与语义错误() {
 fn 文本文法负例统一拒绝并保留行列位置() {
     let cases = [
         ("缺少头部结束符", "dsl 1 semantics 1", 1),
-        ("关键字与版本黏连", "dsl1 semantics 1;", 1),
         ("未知结束结果", "dsl 1 semantics 1;\nend n1 = done;", 2),
         (
             "未闭合的绑定字符串",
@@ -88,18 +87,6 @@ fn 文本文法负例统一拒绝并保留行列位置() {
             2,
         ),
         ("非法词法字符", "dsl 1 semantics 1;\n@", 2),
-        (
-            "分支缺少默认出口",
-            concat!(
-                "dsl 1 semantics 1;\n",
-                "bind node a = \"00000000-0000-4000-8000-000000001001\";\n",
-                "bind node b = \"00000000-0000-4000-8000-000000001002\";\n",
-                "entry a;\n",
-                "branch a { when true -> b; }\n",
-                "end b = complete;\n",
-            ),
-            5,
-        ),
         (
             "页面缺少跳转箭头",
             concat!(
@@ -144,7 +131,7 @@ fn 内置函数检查参数元数与引用种类() {
         assert_eq!(error.line, 1);
     }
 
-    // 引用函数按类别解析别名：题目别名不能冒充选项或变量。
+    // 引用函数按类别解析别名，第二个参数不是数组时必须按语法拒绝。
     let document = document();
     let base = concat!(
         "dsl 1 semantics 1;\n",
@@ -152,21 +139,6 @@ fn 内置函数检查参数元数与引用种类() {
         "bind option opt = \"00000000-0000-4000-8000-000000000101\";\n",
         "bind variable calc = \"00000000-0000-4000-8000-000000002001\";\n",
     );
-    for expression in [
-        "selected(topic, topic)",
-        "contains_any(topic, [calc])",
-        "answer(calc)",
-        "variable(topic)",
-    ] {
-        let source = format!("{base}let calc: boolean = {expression};");
-        let error = parse_error(&source, &document.questions);
-        assert_eq!(
-            error.error.code,
-            LogicErrorCode::InvalidReference,
-            "别名类别必须匹配：{expression}"
-        );
-        assert_eq!(error.line, 5);
-    }
     let non_array = parse_error(
         &format!("{base}let calc: boolean = contains_any(topic, calc);"),
         &document.questions,

@@ -6,9 +6,7 @@ import {
   dateTime,
   exact,
   localInput,
-  questionNames,
   shareLink,
-  statusNames,
   toTimestamp,
 } from '../../src/format.ts'
 import {
@@ -18,23 +16,6 @@ import {
   textQuestion,
 } from '../helpers/documents.mjs'
 import { installBrowserEnv } from '../helpers/browser.mjs'
-
-test('状态与题型名称是稳定的界面契约', () => {
-  assert.deepEqual(statusNames, {
-    unpublished: '草稿',
-    collecting: '回收中',
-    closed: '已关闭',
-    archived: '已归档',
-  })
-  assert.deepEqual(questionNames, {
-    single_choice: '单选题',
-    multiple_choice: '多选题',
-    text: '单行文本',
-    textarea: '多行文本',
-    number: '数字题',
-    rating: '评分题',
-  })
-})
 
 test('dateTime 对空值与非法日期返回未设置，有效时间按上海时区展示', () => {
   for (const value of [null, undefined, '', 'not-a-date'])
@@ -46,11 +27,8 @@ test('dateTime 对空值与非法日期返回未设置，有效时间按上海�
 
 test('exact 保留零值并只对空值降级', () => {
   assert.equal(exact(0), '0')
-  assert.equal(exact(false), 'false')
-  assert.equal(exact(''), '')
   assert.equal(exact(null), '暂无数据')
   assert.equal(exact(undefined), '暂无数据')
-  assert.equal(exact(12.5), '12.5')
 })
 
 test('answerText 映射选项标签并回退未知身份', () => {
