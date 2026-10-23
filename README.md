@@ -47,7 +47,30 @@ backend/            HTTP JSON API、鉴权、事务与持久化（questionnaire-
 
 ## 3. 快速启动（本地开发与联调）
 
-### 3.1 准备 PostgreSQL 数据库
+### 3.1 一键启动（推荐）
+
+在仓库根目录运行：
+
+```powershell
+.\start.ps1
+```
+
+脚本会自动完成以下工作：
+
+- 在 `.pgdata/` 下维护一个**测试专用、持久化**的 PostgreSQL 18 实例（`127.0.0.1:55432`，用户 `questionnaire`，数据库 `questionnaire_test`，本地 `trust` 认证），与系统默认 `5432` 实例互不干扰，重启脚本后数据仍然保留；
+- 若根目录没有 `.env`，自动生成与测试库匹配的配置（`DATABASE_URL=postgres://questionnaire@127.0.0.1:55432/questionnaire_test`、`PUBLIC_ORIGIN=http://localhost:5173`）；
+- 执行数据库迁移，并幂等创建默认管理员 **`admin` / `admin123456`**；
+- 并发启动前端 `pnpm --dir frontend run dev` 与后端 `cargo run --locked -p questionnaire-api`，按 `Ctrl+C` 退出时自动清理前端子进程。
+
+| 参数 | 作用 |
+| --- | --- |
+| `-ResetDb` | 停止并删除 `.pgdata/`，重新初始化干净的测试数据库 |
+| `-Stop` | 停止后台测试数据库后退出 |
+| `-DbOnly` | 仅确保测试数据库启动、完成迁移与默认管理员初始化后退出（不启动前后端） |
+
+> `initdb`/`pg_ctl`/`pg_isready`/`psql`/`createdb`、`cargo` 与 `pnpm` 需在 `PATH` 中（脚本会给出缺失提示）。`.pgdata/` 已加入 `.gitignore`，不会污染版本库；默认管理员口令仅供本地测试，请勿用于生产环境。
+
+### 3.2 准备 PostgreSQL 数据库
 
 你可以使用本机已安装的 PostgreSQL 18，或通过仓库根目录的 `compose.yaml` 启动容器数据库。
 
@@ -67,7 +90,7 @@ $env:POSTGRES_PASSWORD = 'change_me'
 docker compose up -d db
 ```
 
-### 3.2 配置环境变量（`.env`）
+### 3.3 配置环境变量（`.env`）
 
 在仓库根目录复制 `.env.example` 为 `.env`：
 
@@ -90,7 +113,7 @@ RUST_LOG=questionnaire_api=info
 
 > 进程环境变量优先级高于 `.env` 文件。密码中若包含 `@`、`:`、`/`、`#`、`%` 等特殊字符，需进行 URI 百分号编码。
 
-### 3.3 启动后端 API
+### 3.4 启动后端 API
 
 在仓库根目录运行：
 
@@ -104,7 +127,7 @@ cargo run --locked -p questionnaire-api
   - `GET http://localhost:3000/health` → `{"status":"ready"}`
   - `GET http://localhost:3000/api/openapi.json` → OpenAPI 3.1 JSON
 
-### 3.4 创建与登录管理员账号
+### 3.5 创建与登录管理员账号
 
 公开注册接口（`/register`）只能创建普通用户（`user`）。管理员账号通过后端 `create-admin` 子命令初始化：
 
@@ -115,10 +138,11 @@ cargo run --locked -p questionnaire-api -- create-admin
 Remove-Item Env:ADMIN_USERNAME, Env:ADMIN_PASSWORD
 ```
 
+- 使用 `.\start.ps1` 启动时，默认管理员（`admin` / `admin123456`）已自动幂等创建，无需重复执行本节；如需自定义账号或口令，再按上述命令操作。
 - **如何登录管理员**：管理员与普通用户使用**同一个前端登录页**（`http://localhost:5173/login`）或登录接口（`POST /api/auth/login`）。
 - 登录成功后，左侧导航栏会自动出现 **「平台管理」**（`/admin`）入口，可执行账号禁用/启用、问卷下架/恢复及查看治理审计记录。
 
-### 3.5 启动前端工作台
+### 3.6 启动前端工作台
 
 另开终端进入 `frontend/`：
 
