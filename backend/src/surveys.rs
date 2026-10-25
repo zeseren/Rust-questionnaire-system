@@ -14,6 +14,7 @@ use sea_orm::{
     sea_query::Expr,
 };
 use serde::{Deserialize, Deserializer, Serialize};
+use std::sync::Arc;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
@@ -25,7 +26,7 @@ use crate::{
     entities::{survey, version},
     error::{AppError, AppResult, ErrorResponse},
     http::{ApiJson, ApiPath, ApiQuery, Page, Pagination},
-    repository,
+    repository::{self, CachedVersion, SurveyMetaRow},
 };
 
 pub(crate) use crate::entities::{FillingMode, SurveyStatus};
@@ -547,8 +548,9 @@ async fn create_survey(
     let tx = state.db.begin().await?;
     repository::lock_session_user(&tx, headers, owner_id).await?;
     let now = Utc::now();
-    let record = insert_draft(&tx, owner_id, document, now).await?;
-    let result = survey_detail(record, now)?;
+    let meta = insert_draft(&tx, owner_id, &document, now).await?;
+    // 直接使用请求中的已校验文档，无需把刚写入的 JSONB 再读回并反序列化。
+    let result = survey_detail_from_meta(meta, document, now);
     tx.commit().await?;
     Ok(result)
 }
@@ -556,11 +558,12 @@ async fn create_survey(
 async fn insert_draft(
     tx: &DatabaseTransaction,
     owner_id: Uuid,
-    document: Document,
+    document: &Document,
     now: DateTime<Utc>,
-) -> AppResult<survey::Model> {
-    Ok(survey::ActiveModel {
-        id: Set(Uuid::new_v4()),
+) -> AppResult<SurveyMetaRow> {
+    let id = Uuid::new_v4();
+    survey::Entity::insert(survey::ActiveModel {
+        id: Set(id),
         owner_id: Set(owner_id),
         status: Set(SurveyStatus::Unpublished),
         mode: Set(None),
@@ -571,9 +574,22 @@ async fn insert_draft(
         current_version_id: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
-    }
-    .insert(tx)
-    .await?)
+    })
+    // 不取回整行，避免把刚写入的草稿 JSONB 再解码一次。
+    .exec_without_returning(tx)
+    .await?;
+    Ok(SurveyMetaRow {
+        id,
+        owner_id,
+        status: SurveyStatus::Unpublished,
+        mode: None,
+        deadline: None,
+        taken_down: false,
+        revision: 1,
+        current_version_id: None,
+        created_at: now,
+        updated_at: now,
+    })
 }
 
 async fn list_surveys(
@@ -664,20 +680,32 @@ async fn save_survey_draft(
 ) -> AppResult<SurveyDetail> {
     input.document.validate_draft()?;
     let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
+    // 只锁元数据行；旧草稿内容与本请求无关，不读取也不解码。
+    let meta = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
     let now = Utc::now();
-    let record = repository::expire_survey(&tx, record, now).await?;
-    ensure_editable(&record)?;
-    ensure_revision(&record, input.revision)?;
-    let next_revision = record
+    let meta = repository::expire_survey_meta(&tx, meta, now).await?;
+    ensure_editable_status(meta.status)?;
+    ensure_revision_value(meta.revision, input.revision)?;
+    let next_revision = meta
         .revision
         .checked_add(1)
         .ok_or_else(|| AppError::internal("草稿修订号溢出"))?;
-    let mut active = record.into_active_model();
-    active.draft = Set(serde_json::to_value(input.document)?);
-    active.revision = Set(next_revision);
-    active.updated_at = Set(now);
-    let result = survey_detail(active.update(&tx).await?, now)?;
+    survey::ActiveModel {
+        id: Set(id),
+        draft: Set(serde_json::to_value(&input.document)?),
+        revision: Set(next_revision),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    // 不取回整行：响应直接复用本次请求中的文档与新元数据。
+    .update_without_returning(&tx)
+    .await?;
+    let meta = SurveyMetaRow {
+        revision: next_revision,
+        updated_at: now,
+        ..meta
+    };
+    let result = survey_detail_from_meta(meta, input.document, now);
     tx.commit().await?;
     Ok(result)
 }
@@ -706,8 +734,8 @@ async fn copy_survey(
     document.renew_ids();
     document.validate_draft()?;
     let now = Utc::now();
-    let record = insert_draft(&tx, owner_id, document, now).await?;
-    let result = survey_detail(record, now)?;
+    let meta = insert_draft(&tx, owner_id, &document, now).await?;
+    let result = survey_detail_from_meta(meta, document, now);
     tx.commit().await?;
     Ok(result)
 }
@@ -719,8 +747,9 @@ async fn delete_survey(
     id: Uuid,
 ) -> AppResult<()> {
     let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
-    if record.status != SurveyStatus::Unpublished {
+    // 删除响应是 204，只需元数据判断是否从未发布，不读取草稿。
+    let meta = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
+    if meta.status != SurveyStatus::Unpublished {
         return Err(AppError::conflict(
             "survey_published",
             "发布过的问卷不能删除，请使用归档",
@@ -746,8 +775,7 @@ async fn publish_survey(
     ensure_revision(&record, revision)?;
 
     // 先按当前规则校验这版内容，再判断是否为幂等重放。
-    let document = Document::deserialize(&record.draft)?;
-    document.validate_publish()?;
+    let prepared = Arc::new(Document::deserialize(&record.draft)?.prepare_publish()?);
     if record.mode.is_none() {
         return Err(AppError::conflict("mode_required", "请先设置填写模式"));
     }
@@ -761,7 +789,11 @@ async fn publish_survey(
             .ok_or_else(|| AppError::internal("current version is missing"))?;
         if current.document == record.draft {
             let result = PublishedSurvey {
-                survey: survey_detail(record, now)?,
+                survey: survey_detail_from_meta(
+                    SurveyMetaRow::from(&record),
+                    prepared.document().clone(),
+                    now,
+                ),
                 version: VersionSummary {
                     id: current.id,
                     number: current.number,
@@ -791,6 +823,19 @@ async fn publish_survey(
         .checked_add(1)
         .ok_or_else(|| AppError::internal("发布版本号溢出"))?;
     let version_id = Uuid::new_v4();
+    // 只首次发布进入回收中。后续发布沿用刚刚物化的 closed/collecting 状态。
+    let status = if first_publish {
+        SurveyStatus::Collecting
+    } else {
+        record.status
+    };
+    // 先复制需要的元数据，再移走 1 MiB 草稿写入版本表。
+    let meta = SurveyMetaRow {
+        status,
+        current_version_id: Some(version_id),
+        updated_at: now,
+        ..SurveyMetaRow::from(&record)
+    };
     version::Entity::insert(version::ActiveModel {
         id: Set(version_id),
         survey_id: Set(id),
@@ -798,24 +843,19 @@ async fn publish_survey(
         document: Set(record.draft),
         published_at: Set(now),
     })
-    .exec(&tx)
+    .exec_without_returning(&tx)
     .await?;
-    // 只首次发布进入回收中。后续发布沿用刚刚物化的 closed/collecting 状态。
-    let updated = survey::ActiveModel {
+    survey::ActiveModel {
         id: Set(id),
-        status: Set(if first_publish {
-            SurveyStatus::Collecting
-        } else {
-            record.status
-        }),
+        status: Set(status),
         current_version_id: Set(Some(version_id)),
         updated_at: Set(now),
         ..Default::default()
     }
-    .update(&tx)
+    .update_without_returning(&tx)
     .await?;
     let result = PublishedSurvey {
-        survey: survey_detail(updated, now)?,
+        survey: survey_detail_from_meta(meta, prepared.document().clone(), now),
         version: VersionSummary {
             id: version_id,
             number,
@@ -824,6 +864,13 @@ async fn publish_survey(
         },
     };
     tx.commit().await?;
+    state.versions.insert(CachedVersion {
+        id: version_id,
+        survey_id: id,
+        number,
+        published_at: now,
+        prepared,
+    });
     Ok((StatusCode::CREATED, result))
 }
 
@@ -985,8 +1032,8 @@ pub(crate) fn validate_mode_change(
     Ok(())
 }
 
-pub(crate) fn ensure_editable(record: &survey::Model) -> AppResult<()> {
-    if record.status == SurveyStatus::Archived {
+fn ensure_editable_status(status: SurveyStatus) -> AppResult<()> {
+    if status == SurveyStatus::Archived {
         return Err(AppError::conflict(
             "survey_archived",
             "已归档问卷不能编辑或发布，可以复制为新问卷",
@@ -995,14 +1042,22 @@ pub(crate) fn ensure_editable(record: &survey::Model) -> AppResult<()> {
     Ok(())
 }
 
-pub(crate) fn ensure_revision(record: &survey::Model, revision: i64) -> AppResult<()> {
-    if record.revision != revision {
+pub(crate) fn ensure_editable(record: &survey::Model) -> AppResult<()> {
+    ensure_editable_status(record.status)
+}
+
+fn ensure_revision_value(current: i64, revision: i64) -> AppResult<()> {
+    if current != revision {
         return Err(AppError::conflict(
             "revision_conflict",
             "草稿已在其他窗口修改，请重新读取后核对内容",
         ));
     }
     Ok(())
+}
+
+pub(crate) fn ensure_revision(record: &survey::Model, revision: i64) -> AppResult<()> {
+    ensure_revision_value(record.revision, revision)
 }
 
 pub(crate) fn ensure_future_deadline(
@@ -1018,20 +1073,34 @@ pub(crate) fn ensure_future_deadline(
     Ok(())
 }
 
-pub(crate) fn survey_detail(record: survey::Model, now: DateTime<Utc>) -> AppResult<SurveyDetail> {
-    Ok(SurveyDetail {
-        id: record.id,
-        status: record.status.effective(record.deadline, now),
-        mode: record.mode,
-        deadline: record.deadline,
-        taken_down: record.taken_down,
-        revision: record.revision,
-        current_version_id: record.current_version_id,
-        draft: serde_json::from_value(record.draft)?,
-        created_at: record.created_at,
-        updated_at: record.updated_at,
-        share_url: record
+/// 管理详情直接由元数据与已解析文档构造，避免把刚使用的文档再序列化后解析一次。
+pub(crate) fn survey_detail_from_meta(
+    meta: SurveyMetaRow,
+    draft: Document,
+    now: DateTime<Utc>,
+) -> SurveyDetail {
+    SurveyDetail {
+        id: meta.id,
+        status: meta.status.effective(meta.deadline, now),
+        mode: meta.mode,
+        deadline: meta.deadline,
+        taken_down: meta.taken_down,
+        revision: meta.revision,
+        current_version_id: meta.current_version_id,
+        draft,
+        created_at: meta.created_at,
+        updated_at: meta.updated_at,
+        share_url: meta
             .current_version_id
-            .map(|_| format!("/api/public/surveys/{}", record.id)),
-    })
+            .map(|_| format!("/api/public/surveys/{}", meta.id)),
+    }
+}
+
+pub(crate) fn survey_detail(record: survey::Model, now: DateTime<Utc>) -> AppResult<SurveyDetail> {
+    let meta = SurveyMetaRow::from(&record);
+    Ok(survey_detail_from_meta(
+        meta,
+        serde_json::from_value(record.draft)?,
+        now,
+    ))
 }

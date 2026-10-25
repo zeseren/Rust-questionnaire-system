@@ -24,8 +24,8 @@
 后端严格分层：HTTP 边界 → 业务用例 → 领域核心 / 数据访问 → PostgreSQL 18。
 
 - **组合根**：`main.rs` 仅调用 `questionnaire_api::run()`（`backend/src/lib.rs`）。`run()` 依次执行：加载 `.env` → 初始化 `tracing`（默认 `questionnaire_api=info`）→ `Config::from_env()` → 建立 SeaORM 连接池（最多 10 条连接）→ **每次启动自动执行 `migration::Migrator::up`** → 分发子命令（默认 `serve`，另有 `migrate`、`create-admin`）→ 绑定 `TcpListener` 并启动带 `ctrl_c` 优雅停机的 Axum 服务。
-- **共享状态与路由登记**：全局唯一的 `AppState { db: DatabaseConnection, config: Arc<Config>, limits: Arc<Limits> }`。各业务模块暴露 `pub(crate) fn router() -> OpenApiRouter<AppState>`，使用 `utoipa_axum::routes!` 从 handler 的 `#[utoipa::path]` 同步登记路由与 OpenAPI 文档。`lib.rs::router()` 合并五个业务模块与 `/health`，通过 `split_for_parts()` 生成 `/api/openapi.json`，并挂载 404/405、`DefaultBodyLimit::max(domain::MAX_SUBMISSION_BYTES)` 与 `security::guard`。
-- **薄 Handler**：抽取顺序固定为 `State` → `AuthUser` → `HeaderMap` → `ApiPath`/`ApiQuery`/`ApiJson`，随后调用同文件内的业务函数；跨模块的归属查询与行锁集中于 `repository.rs`。
+- **共享状态与路由登记**：全局唯一的 `AppState { db: DatabaseConnection, config: Arc<Config>, limits: Arc<Limits>, versions: Arc<VersionCache> }`；`VersionCache` 是已发布版本的不可变编译结果缓存（最多 256 条，锁不跨 `.await`）。各业务模块暴露 `pub(crate) fn router() -> OpenApiRouter<AppState>`，使用 `utoipa_axum::routes!` 从 handler 的 `#[utoipa::path]` 同步登记路由与 OpenAPI 文档。`lib.rs::router()` 合并五个业务模块与 `/health`，通过 `split_for_parts()` 生成并预序列化 `/api/openapi.json`（每次请求只克隆字节），并挂载 404/405、`DefaultBodyLimit::max(domain::MAX_SUBMISSION_BYTES)` 与 `security::guard`。
+- **薄 Handler**：鉴权接口抽取顺序统一为 `State` → `AuthUser` → `HeaderMap` → `ApiPath`/`ApiQuery`/`ApiJson`（公开/认证接口按需省略 `AuthUser` 或 `HeaderMap`），随后调用同文件内的业务函数；跨模块的归属查询与行锁集中于 `repository.rs`。
 - **单一领域核心**：`logic-core/src/domain.rs` 聚合导出 `Document`、`Question`、`QuestionKind`、`Answer`、`validate_draft`、`validate_publish`、`validate_answers`、`renew_ids` 以及 DSL/流程接口；`backend/src/lib.rs` 通过 `pub use questionnaire_logic::domain;` 再导出。领域校验错误 `ValidationError { question_id: Option<Uuid>, message }` 映射为 HTTP 422。
 - **持久化与锁序**：6 个 SeaORM 实体位于 `entities.rs`（`users`、`sessions`、`surveys`、`versions`、`responses`、`audits`），唯一建表 DDL 位于 `backend/src/schema.sql`（由 `migration.rs` 嵌入执行）。所有问卷写路径在事务中遵循固定锁序：**先锁发布者 `users`（`Share` / `NoKeyUpdate`），再锁 `surveys`（`Update`）**，并在持锁后经 `lock_session_user` 重验 Session。只读列表、公开读题面、统计与导出统一使用 `RepeatableRead` + `ReadOnly` 快照，绝不争抢写锁。
 - **统一错误与安全**：`AppError { status, code, message, question_id, error_id }` 序列化为 `{"error":{"code":"...","message":"...","question_id":null}}`；内部 500 错误生成 16 位十六进制 `error_id`（写入日志与 `X-Error-Id` 响应头），绝不向外泄露 ORM/SQL 文本。Session 采用 32 字节随机十六进制 token（库内仅存 SHA-256 `id_hash`）；密码哈希使用 `spawn_blocking` + Argon2id；`security::guard` 强制校验非读请求的 `Origin == PUBLIC_ORIGIN` 与 `X-CSRF-Protection: 1`，并执行固定窗口限流。
@@ -50,6 +50,7 @@
 从仓库根目录运行（PowerShell）：
 
 ```powershell
+./start.ps1                                                   # 一键启动本地 PG18（.pgdata:55432）、自动迁移、建默认管理员并拉起前后端
 Copy-Item .env.example .env                                   # 首次配置，前端联调需设 PUBLIC_ORIGIN=http://localhost:5173
 cargo run --locked -p questionnaire-api                       # 启动后端（自动执行迁移，默认监听 127.0.0.1:3000）
 cargo run --locked -p questionnaire-api -- migrate            # 仅执行数据库迁移后退出
@@ -75,7 +76,7 @@ pnpm run wasm:build                                           # 仅在改动 log
 
 ## 前端约定（Editorial Craft 视觉基线）
 
-- **视觉体系**：采用 **Editorial Craft（纸本与松烟墨）** 风格（对应 `frontend/editorial-prototype.html` 与 `frontend/src/styles.css`）：
+- **视觉体系**：采用 **Editorial Craft（纸本与松烟墨）** 风格（全局设计 Token 与基础样式位于 `frontend/src/styles.css`，业务与工作台布局拆分于 `application.css`、`editor.css`）：
   - 宣纸浅色（`#f5f2eb`）与玄墨深色（`#121210`）基底，配 `32px` 极淡稿纸经纬网格背景；`index.html` 首绘脚本与 `stores.ts` 的 `CANVAS_COLORS` 保持严格一致。
   - 三套字体阶梯：`--font-serif`（中文衬线标题、品牌名、问卷题干、指标大字）、`--font-mono`（等宽 `tabular-nums` 数据指标、修订号、回执编号、眉题与 DSL 代码）、`--font-sans`（正文与表单控件）。
   - 语义色盘：朱砂印泥（`#c84b31` / `#e4684e`）作点睛主操作与选中高亮，松石绿（`#1d634d` / `#46b593`）表征采集中与校验通过，靛青（`#294c7a` / `#76a1de`）表征计算变量与分支逻辑，琥珀（`#945d14` / `#e2a54f`）表征草稿与诊断提示，DSL 文本工作台采用松烟墨深色控制台（`#191816` / `#0d0d0c`）。
@@ -102,7 +103,7 @@ pnpm run wasm:build                                           # 仅在改动 log
 | `frontend` 契约 | `frontend/tests/contract/` | 与 Rust 共读 `fixtures/survey-logic/`（`documents`、`expressions`、`flows`、`input-contracts`、`submissions`、`texts`），断言两端语义一致 |
 | `frontend` 单元 | `frontend/tests/unit/` | 17 个模块：`value-contract`、`numbers`、`json`、`format`、`logic-errors`、`answers`、`documents`、`condition-builder`、`flow-tools`、`editor-logic`、`survey-templates`、`logic-text-tools`、`api`、`resource`、`stores`、`router`、`wasm-envelope` |
 | `frontend` 集成 | `frontend/tests/integration/` | `editor-workflow`、`flow-inputs`：编辑器工具与 `FlowSession` 输入适配的跨模块流程 |
-| 共享测试基建 | `frontend/tests/helpers/` | `fixtures.mjs` 夹具缓存、`documents.mjs` 固定身份构造器、`browser.mjs` 按需安装且 `t.after` 自动清理的浏览器环境桩 |
+| 共享测试基建 | `backend/src/tests/support.rs`、`frontend/tests/helpers/` | 后端无连接 DB/原始 HTTP 测试桩 `support.rs`（由 `mod.rs` 聚合）；前端 `fixtures.mjs` 夹具缓存、`documents.mjs` 固定身份构造器、`browser.mjs` 按需安装且 `t.after` 自动清理的浏览器环境桩 |
 
 - 修改 Rust 代码必跑：受影响的 `cargo test`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 与 `rustfmt`。
 - 修改前端代码必跑：`pnpm run test:regression`（递归执行 `frontend/tests/` 下的分层测试）、`pnpm run typecheck`（或 `pnpm run build`）与 `prettier`。

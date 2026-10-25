@@ -27,6 +27,7 @@ use crate::{
     domain::Document,
     entities::{SurveyStatus, UserRole, survey, user},
     error::AppError,
+    repository::VersionCache,
     security::Limits,
 };
 
@@ -50,6 +51,7 @@ pub(crate) fn test_state() -> AppState {
         db: DatabaseConnection::default(),
         config: Arc::new(test_config()),
         limits: Arc::new(Limits::new()),
+        versions: Arc::new(VersionCache::new()),
     }
 }
 

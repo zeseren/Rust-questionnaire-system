@@ -9,11 +9,12 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, FromQueryResult, QueryFilter,
-    QuerySelect, Set, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, QuerySelect, Set,
+    TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::{Uuid, Variant, Version};
@@ -21,7 +22,7 @@ use uuid::{Uuid, Variant, Version};
 use crate::{
     AppState, auth,
     domain::{Answer, Document},
-    entities::{FillingMode, SurveyStatus, response, survey, user, version},
+    entities::{FillingMode, response, survey, user},
     error::{AppError, AppResult, ErrorResponse},
     http::{ApiJson, ApiPath},
     repository,
@@ -77,7 +78,7 @@ pub(crate) enum SubmissionStatus {
 // 把锁及其读取结果一起交给业务函数，避免取得锁后误用连接池执行查询。
 struct LockedSurvey {
     tx: DatabaseTransaction,
-    survey: survey::Model,
+    survey: repository::SurveyMetaRow,
     respondent_id: Option<Uuid>,
     owner_disabled: bool,
 }
@@ -158,17 +159,6 @@ async fn submit(
     Ok((status, Json(receipt)))
 }
 
-// 题面读取只需要回收资格与当前版本，不加载 1 MiB 的草稿 JSONB。
-#[derive(FromQueryResult)]
-struct PublicSurveyRow {
-    owner_id: Uuid,
-    mode: Option<FillingMode>,
-    status: SurveyStatus,
-    deadline: Option<DateTime<Utc>>,
-    taken_down: bool,
-    current_version_id: Option<Uuid>,
-}
-
 /// 题面读取不需要写锁：只读快照保证题面、发布者状态、发布版本与是否已提交
 /// 来自同一时刻，也不与回收写入争抢 users / surveys 行锁。
 async fn read_public_survey(
@@ -177,17 +167,11 @@ async fn read_public_survey(
     id: Uuid,
 ) -> AppResult<PublicSurvey> {
     let tx = repository::read_snapshot(&state.db).await?;
+    // 元数据投影不包含 1 MiB 草稿；题面来自不可变的发布版本。
     let survey = survey::Entity::find_by_id(id)
         .select_only()
-        .columns([
-            survey::Column::OwnerId,
-            survey::Column::Mode,
-            survey::Column::Status,
-            survey::Column::Deadline,
-            survey::Column::TakenDown,
-            survey::Column::CurrentVersionId,
-        ])
-        .into_model::<PublicSurveyRow>()
+        .columns(repository::survey_meta_columns())
+        .into_model::<repository::SurveyMetaRow>()
         .one(&tx)
         .await?
         .ok_or_else(AppError::not_found)?;
@@ -224,21 +208,27 @@ async fn read_public_survey(
     let version_id = survey
         .current_version_id
         .ok_or_else(|| AppError::internal("collecting survey has no version"))?;
-    // 复合外键保证发布版本属于本问卷，不再重复按 survey_id 过滤。
-    let published = version::Entity::find_by_id(version_id)
-        .one(&tx)
-        .await?
-        .ok_or_else(|| AppError::internal("current version is missing"))?;
+    // 命中缓存时完全不查询版本表；未命中时只投影所需列。
+    let cached = match state.versions.get(id, version_id) {
+        Some(version) => Ok(version),
+        None => Err(repository::load_version_row(&tx, id, version_id)
+            .await?
+            .ok_or_else(|| AppError::internal("current version is missing"))?),
+    };
     let privacy = privacy_notice(mode);
-    let document = serde_json::from_value(published.document)?;
+    // 先结束只读事务并释放连接，再反序列化 1 MiB JSONB 并编译规则。
     tx.commit().await?;
+    let version = match cached {
+        Ok(version) => version,
+        Err(row) => state.versions.insert_row(row, id)?,
+    };
     Ok(PublicSurvey {
         survey_id: id,
         version_id,
-        version_number: published.number,
+        version_number: version.number,
         mode,
         deadline: survey.deadline,
-        document,
+        document: version.prepared.document().clone(),
         privacy,
     })
 }
@@ -281,11 +271,10 @@ async fn submit_response(
             ensure_not_submitted(&locked.tx, id, respondent_id).await?;
         }
     }
-    let published = version::Entity::find_by_id(request.version_id)
-        .filter(version::Column::SurveyId.eq(id))
-        .one(&locked.tx)
-        .await?
-        .ok_or_else(|| AppError::validation("version_id 不属于本问卷的已发布版本"))?;
+    let published =
+        repository::load_cached_version(&locked.tx, &state.versions, id, request.version_id)
+            .await?
+            .ok_or_else(|| AppError::validation("version_id 不属于本问卷的已发布版本"))?;
     if previous.is_none() && locked.survey.current_version_id != Some(request.version_id) {
         return Err(AppError::conflict(
             "version_changed",
@@ -295,8 +284,8 @@ async fn submit_response(
 
     // 历史版本不可变：旧版本重试仍按旧规则规范化；有逻辑时从入口重建路径，
     // 只有已校验且适用的答案进入下游条件，客户端不能指定可信历史或可见题目。
-    let document: Document = serde_json::from_value(published.document)?;
-    let answers = document.validate_answers(request.answers)?;
+    // 缓存复用已编译规则与流程，命中时不再读取 versions 表或重新编译。
+    let answers = published.prepared.validate_answers(request.answers)?;
     let payload_hash = submission_payload_hash(request.version_id, &answers)?;
     if let Some((receipt_id, _, original_hash)) = previous {
         if original_hash != payload_hash {
@@ -368,7 +357,8 @@ async fn lock_public_survey(
     // 全部写路径都使用 owner share → survey update 的锁序，与关闭、下架及禁用串行。
     // 这里只锁发布者记录；禁用状态不能阻止已经成功的合法重试。
     let owner = repository::lock_user_record(&tx, owner_id).await?;
-    let survey = repository::lock_survey(&tx, id).await?;
+    // 只锁问卷元数据行：答卷提交路径不再读取、解码或回写 1 MiB 草稿。
+    let survey = repository::lock_survey_meta(&tx, id).await?;
     if survey.owner_id != owner_id || survey.mode != initial_mode {
         return Err(AppError::conflict(
             "collection_changed",
@@ -437,9 +427,29 @@ pub(crate) fn validate_idempotency_key(key: Uuid) -> AppResult<()> {
     Ok(())
 }
 
+/// 把 `std::io::Write` 直接接到 SHA-256：`digest` 0.11 不再提供该实现，
+/// 这里用零分配的适配器保持与 `serde_json::to_writer` 的流式写入。
+struct HashWriter(Sha256);
+
+impl std::io::Write for HashWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.write_all(buffer)?;
+        Ok(buffer.len())
+    }
+
+    fn write_all(&mut self, buffer: &[u8]) -> std::io::Result<()> {
+        self.0.update(buffer);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// 规范化载荷的稳定摘要：同一版本与同一规范化答案必然得到同一哈希。
 ///
-/// 生成方式与存储一致，成功后重试才能与首次提交比对出 idempotency_conflict。
+/// 直接流式写入 SHA-256，避免先把整份载荷序列化成中间字节缓冲。
 pub(crate) fn submission_payload_hash(
     version_id: Uuid,
     answers: &BTreeMap<Uuid, Value>,
@@ -448,7 +458,9 @@ pub(crate) fn submission_payload_hash(
         version_id,
         answers,
     };
-    Ok(auth::hash_secret_bytes(&serde_json::to_vec(&payload)?))
+    let mut hasher = HashWriter(Sha256::new());
+    serde_json::to_writer(&mut hasher, &payload)?;
+    Ok(hex::encode(hasher.0.finalize()))
 }
 
 /// 填写前的知情提示：只有登录限次模式保留账号关联用于限次，不能宣称为完全匿名。

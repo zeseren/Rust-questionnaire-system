@@ -6,6 +6,7 @@ CREATE TABLE users (
     disabled boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL
 );
+CREATE INDEX users_created ON users(created_at DESC, id DESC);
 CREATE TABLE sessions (
     id_hash text PRIMARY KEY,
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -30,6 +31,8 @@ CREATE TABLE surveys (
         OR (status <> 'unpublished' AND current_version_id IS NOT NULL AND mode IS NOT NULL))
 );
 CREATE INDEX surveys_owner_created ON surveys(owner_id, created_at DESC, id DESC);
+CREATE INDEX surveys_owner_updated ON surveys(owner_id, updated_at DESC, id DESC);
+CREATE INDEX surveys_created ON surveys(created_at DESC, id DESC);
 CREATE TABLE versions (
     id uuid PRIMARY KEY,
     survey_id uuid NOT NULL REFERENCES surveys(id),

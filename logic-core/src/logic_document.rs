@@ -63,7 +63,7 @@ pub struct QuestionRule {
     pub validate: Option<Value>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct RuleExpressions {
     pub(crate) question_id: Uuid,
     pub(crate) path: String,
@@ -93,14 +93,14 @@ pub struct DocumentLogicValues {
 }
 
 /// 计算变量的编译结果与来源路径绑在一起存储，避免两张平行表。
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct CompiledVariable {
     expression: CompiledExpression,
     path: String,
 }
 
 /// 完成拓扑排序、类型检查和前置依赖检查的文档规则。
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CompiledDocumentLogic {
     variables: BTreeMap<Uuid, CompiledVariable>,
     order: Vec<Uuid>,
@@ -183,6 +183,13 @@ impl CompiledDocumentLogic {
     /// 同时可执行的变量按 UUID 排序，声明重排不改变计算顺序。
     pub fn variable_order(&self) -> &[Uuid] {
         &self.order
+    }
+
+    /// 文档实际生效的流程：配置了流程时共享编译产物，否则构建隐式单页流程。
+    pub(crate) fn effective_flow(&self, questions: &[Question]) -> crate::flow::CompiledFlow {
+        self.flow
+            .clone()
+            .unwrap_or_else(|| crate::flow::CompiledFlow::implicit(questions))
     }
 
     /// 对已规范化且已排除不适用答案的上下文计算规则；不代替流程或答案校验。
@@ -320,26 +327,46 @@ impl DocumentLogic {
             }
             variables.insert(variable.id, CompiledVariable { expression, path });
         }
+        // 计算变量按拓扑序展开：入度只统计尚未就绪的直接变量依赖，
+        // 就绪集合每次取最小 UUID，保持与逐轮全表扫描完全一致的确定性顺序。
+        let mut indegree: BTreeMap<Uuid, usize> = variables
+            .iter()
+            .map(|(id, variable)| (*id, variable.expression.variable_dependencies().count()))
+            .collect();
+        let mut dependents: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
+        for (id, variable) in &variables {
+            for dependency in variable.expression.variable_dependencies() {
+                dependents.entry(dependency).or_default().push(*id);
+            }
+        }
+        let mut ready: BTreeSet<Uuid> = indegree
+            .iter()
+            .filter(|(_, count)| **count == 0)
+            .map(|(id, _)| *id)
+            .collect();
         let mut order = Vec::with_capacity(variables.len());
         let mut question_dependencies: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
-        while order.len() < variables.len() {
-            let next = variables.iter().find(|(id, variable)| {
-                !question_dependencies.contains_key(id)
-                    && variable
-                        .expression
-                        .variable_dependencies()
-                        .all(|dependency| question_dependencies.contains_key(&dependency))
-            });
-            let Some((id, variable)) = next else {
-                return Err(error(
-                    LogicErrorCode::DependencyCycle,
-                    "$.logic.variables",
-                    None,
-                ));
-            };
+        while let Some(id) = ready.pop_first() {
+            let variable = &variables[&id];
             let dependencies = expand_dependencies(&variable.expression, &question_dependencies);
-            question_dependencies.insert(*id, dependencies);
-            order.push(*id);
+            question_dependencies.insert(id, dependencies);
+            order.push(id);
+            if let Some(children) = dependents.get(&id) {
+                for child in children {
+                    let remaining = indegree.get_mut(child).expect("依赖边只指向已声明的变量");
+                    *remaining -= 1;
+                    if *remaining == 0 {
+                        ready.insert(*child);
+                    }
+                }
+            }
+        }
+        if order.len() != variables.len() {
+            return Err(error(
+                LogicErrorCode::DependencyCycle,
+                "$.logic.variables",
+                None,
+            ));
         }
         let mut seen = BTreeSet::new();
         let mut rules = Vec::with_capacity(self.rules.len());

@@ -271,19 +271,28 @@ async fn change_survey(
 ) -> AppResult<StatusCode> {
     require_admin(&actor)?;
     reason(&input.reason)?;
-    let target = survey::Entity::find_by_id(id)
+    // 预读只取归属列；治理操作随后只锁元数据行，三次操作都不再搬运 1 MiB 草稿。
+    let owner_id = survey::Entity::find_by_id(id)
+        .select_only()
+        .column(survey::Column::OwnerId)
+        .into_tuple::<Uuid>()
         .one(&state.db)
         .await?
         .ok_or_else(AppError::not_found)?;
     let tx = state.db.begin().await?;
-    repository::lock_user_record(&tx, target.owner_id).await?;
-    let target = repository::lock_survey(&tx, id).await?;
+    repository::lock_user_record(&tx, owner_id).await?;
+    repository::lock_survey_meta(&tx, id).await?;
     // 同上：只重验 Session，管理员身份已在入口校验且角色不可变。
     let actor = crate::auth::authenticate(&headers, &tx).await?;
-    let mut update = target.into_active_model();
-    update.taken_down = Set(input.taken_down);
-    update.updated_at = Set(Utc::now());
-    update.update(&tx).await?;
+    let now = Utc::now();
+    survey::ActiveModel {
+        id: Set(id),
+        taken_down: Set(input.taken_down),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .update_without_returning(&tx)
+    .await?;
     audit::ActiveModel {
         id: Set(Uuid::new_v4()),
         actor_id: Set(actor.id),
@@ -294,7 +303,7 @@ async fn change_survey(
         }),
         target_id: Set(id),
         reason: Set(input.reason),
-        created_at: Set(Utc::now()),
+        created_at: Set(now),
     }
     .insert(&tx)
     .await?;

@@ -11,9 +11,10 @@ use serde_json::{Number, Value};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::flow::CompiledFlow;
 pub use crate::flow::{
     AnswerState, EvaluatedResponse, FlowBranch, FlowDefinition, FlowEvaluator, FlowEvent, FlowNode,
-    FlowOutcome, FlowSession, FlowSnapshot,
+    FlowOutcome, FlowSession, FlowSnapshot, FlowSnapshotRef,
 };
 pub use crate::logic::{
     CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType, compile_expression,
@@ -229,8 +230,18 @@ impl Document {
             ));
         }
 
+        // 选项总数可一次性算出，避免校验期间为集合反复扩容。
+        let option_capacity = self
+            .questions
+            .iter()
+            .map(|question| match &question.kind {
+                QuestionKind::SingleChoice { options }
+                | QuestionKind::MultipleChoice { options, .. } => options.len(),
+                _ => 0,
+            })
+            .sum();
         let mut question_ids = HashSet::with_capacity(self.questions.len());
-        let mut option_ids = HashSet::new();
+        let mut option_ids = HashSet::with_capacity(option_capacity);
         for question in &self.questions {
             let id = Some(question.id);
             if question.id.is_nil() || !question_ids.insert(question.id) {
@@ -465,8 +476,107 @@ impl Document {
             None => CompiledDocumentLogic::empty(),
         };
         FlowEvaluator::from_compiled(self, logic)
-            .evaluate_answers(answers)
-            .map(|result| result.answers)
+            .validate_answers_only(answers)
+            .map_err(|error| ValidationError::new(error.question_id, error.to_string()))
+    }
+
+    /// 校验并编译草稿，得到可复用的发布态文档。
+    ///
+    /// # Errors
+    /// 草稿字段、规则或流程不合法时返回可定位的校验错误。
+    pub fn prepare(self) -> Result<PreparedDocument, ValidationError> {
+        PreparedDocument::new(self)
+    }
+
+    /// 执行完整发布校验并一次性编译规则、流程与题目索引。
+    ///
+    /// # Errors
+    /// 草稿不合法、内容未补全、范围矛盾或题型没有合法答案时返回错误。
+    pub fn prepare_publish(self) -> Result<PreparedDocument, ValidationError> {
+        PreparedDocument::publish(self)
+    }
+}
+
+/// 已完成草稿字段校验、规则编译、流程构建与题目索引的不可变发布态文档。
+///
+/// 编译产物只构建一次：交互求值、报告重建与提交校验都借用同一份规则与流程，
+/// 不再为每次请求重新编译 DSL。
+#[derive(Debug, Clone)]
+pub struct PreparedDocument {
+    document: Document,
+    questions: BTreeMap<Uuid, usize>,
+    logic: CompiledDocumentLogic,
+    flow: CompiledFlow,
+}
+
+impl PreparedDocument {
+    /// 校验草稿字段并一次性编译规则、流程与题目索引。
+    ///
+    /// # Errors
+    /// 草稿字段、规则或流程不合法时返回可定位的校验错误。
+    pub fn new(document: Document) -> Result<Self, ValidationError> {
+        let logic = document.validate_draft_compiled()?;
+        Ok(Self::from_compiled(document, logic))
+    }
+
+    /// 执行完整发布校验并一次性编译规则、流程与题目索引。
+    ///
+    /// # Errors
+    /// 草稿不合法、内容未补全、范围矛盾或题型没有合法答案时返回错误。
+    pub fn publish(document: Document) -> Result<Self, ValidationError> {
+        let logic = document.validate_publish_compiled()?;
+        Ok(Self::from_compiled(document, logic))
+    }
+
+    fn from_compiled(document: Document, logic: Option<CompiledDocumentLogic>) -> Self {
+        let logic = logic.unwrap_or_else(CompiledDocumentLogic::empty);
+        let flow = logic.effective_flow(&document.questions);
+        let questions = crate::flow::index_questions(&document.questions);
+        Self {
+            document,
+            questions,
+            logic,
+            flow,
+        }
+    }
+
+    /// 借用底层文档。
+    #[must_use]
+    #[inline]
+    pub fn document(&self) -> &Document {
+        &self.document
+    }
+
+    /// 消费并返回底层文档。
+    #[must_use]
+    #[inline]
+    pub fn into_document(self) -> Document {
+        self.document
+    }
+
+    /// 零拷贝构造借用当前已编译规则与流程的求值器（O(1)，不重新编译）。
+    #[must_use]
+    pub fn evaluator(&self) -> FlowEvaluator<'_> {
+        FlowEvaluator::from_prepared(&self.document, &self.questions, &self.logic, &self.flow)
+    }
+
+    /// 若文档配置了规则（`logic.is_some()`），零拷贝返回求值器；否则返回 `None`。
+    #[must_use]
+    pub fn report_evaluator(&self) -> Option<FlowEvaluator<'_>> {
+        self.document.logic.is_some().then(|| self.evaluator())
+    }
+
+    /// 复用已编译规则与流程校验提交答案（不分配 `question_states` 与 `path`）。
+    ///
+    /// # Errors
+    /// 答案存在未知/重复题目、不适用答案、类型或范围错误、缺失必填项时，
+    /// 返回包含相关题目 ID 的校验错误。
+    pub fn validate_answers(
+        &self,
+        answers: Vec<Answer>,
+    ) -> Result<BTreeMap<Uuid, Value>, ValidationError> {
+        self.evaluator()
+            .validate_answers_only(answers)
             .map_err(|error| ValidationError::new(error.question_id, error.to_string()))
     }
 }
@@ -523,18 +633,45 @@ impl Question {
                 let Value::String(text) = value else {
                     return Err(ValidationError::new(id, "文本答案必须是字符串"));
                 };
-                check_length(text, *max_length, id, "文本答案")?;
-                if matches!(&self.kind, QuestionKind::Text { .. })
-                    && text.contains([
-                        '\n', '\r', '\u{000b}', '\u{000c}', '\u{0085}', '\u{2028}', '\u{2029}',
-                    ])
-                {
+                // 单遍同时完成长度、空字符、单行换行与全空白判断；
+                // 错误优先级保持与原实现一致：长度 → 空字符 → 换行 → 空白视为缺失。
+                let single_line = matches!(&self.kind, QuestionKind::Text { .. });
+                let mut has_newline = false;
+                let mut has_content = false;
+                for (index, character) in text.chars().enumerate() {
+                    if index == *max_length {
+                        return Err(ValidationError::new(
+                            id,
+                            format!("文本答案最多允许 {max_length} 个 Unicode 字符"),
+                        ));
+                    }
+                    if character == '\0' {
+                        return Err(ValidationError::new(id, "文本答案不能包含 U+0000 空字符"));
+                    }
+                    if single_line
+                        && matches!(
+                            character,
+                            '\n' | '\r'
+                                | '\u{000b}'
+                                | '\u{000c}'
+                                | '\u{0085}'
+                                | '\u{2028}'
+                                | '\u{2029}'
+                        )
+                    {
+                        has_newline = true;
+                    }
+                    if !has_content && !character.is_whitespace() {
+                        has_content = true;
+                    }
+                }
+                if has_newline {
                     return Err(ValidationError::new(id, "单行文本不能包含换行字符"));
                 }
-                if text.trim().is_empty() {
-                    Ok(None)
-                } else {
+                if has_content {
                     Ok(Some(Value::String(text.clone())))
+                } else {
+                    Ok(None)
                 }
             }
             QuestionKind::Number { integer, min, max } => {

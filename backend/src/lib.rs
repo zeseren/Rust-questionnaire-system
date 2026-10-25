@@ -19,13 +19,15 @@ mod tests;
 use crate::{
     config::Config,
     error::{AppError, AppResult},
+    repository::VersionCache,
     security::Limits,
 };
 use anyhow::{Context, bail};
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{DefaultBodyLimit, State},
-    http::StatusCode,
+    http::{StatusCode, header},
     middleware,
     routing::get,
 };
@@ -43,6 +45,8 @@ pub(crate) struct AppState {
     pub db: DatabaseConnection,
     pub config: Arc<Config>,
     pub limits: Arc<Limits>,
+    /// 已发布版本的编译结果；提交、报表与公开题面共享，避免重复解析与编译。
+    pub versions: Arc<VersionCache>,
 }
 
 /// 从环境变量启动服务，或执行 migrate / create-admin 子命令。
@@ -100,6 +104,7 @@ pub async fn run() -> anyhow::Result<()> {
         db,
         config: Arc::new(config),
         limits: Arc::new(Limits::new()),
+        versions: Arc::new(VersionCache::new()),
     };
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -129,14 +134,14 @@ fn router(state: AppState) -> Router {
             "cookieAuth",
             SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new("session"))),
         );
-    // 路由与文档共用 handler 注解，文档仅在组装时生成一次，之后每次请求只克隆 Arc。
-    let doc = Arc::new(doc);
+    // 路由与文档共用 handler 注解；文档只在组装路由时序列化一次，之后每次请求只克隆字节。
+    let openapi = Bytes::from(serde_json::to_vec(&doc).expect("OpenAPI 文档必须可以序列化为 JSON"));
     router
         .route(
             "/api/openapi.json",
             get(move || {
-                let doc = Arc::clone(&doc);
-                std::future::ready(Json(doc))
+                let openapi = openapi.clone();
+                std::future::ready(([(header::CONTENT_TYPE, "application/json")], openapi))
             }),
         )
         .fallback(|| async { AppError::not_found() })

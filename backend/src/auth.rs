@@ -184,6 +184,12 @@ async fn login(
     let current = lock_unchanged_credentials(&tx, candidate.id, &candidate.password_hash)
         .await?
         .ok_or_else(invalid_credentials)?;
+    // 已持有账号锁，再清理过期会话以保持 users → sessions 的固定锁序；
+    // 让 sessions_expiry 索引真正生效，避免过期记录无限堆积。
+    session::Entity::delete_many()
+        .filter(session::Column::ExpiresAt.lte(Utc::now()))
+        .exec(&tx)
+        .await?;
     let expires_at = Utc::now()
         .checked_add_signed(Duration::seconds(state.config.session_ttl_seconds))
         .ok_or_else(|| AppError::internal("session expiry overflow"))?;
@@ -260,10 +266,14 @@ async fn change_password(
         .one(&state.db)
         .await?
         .ok_or_else(AppError::unauthorized)?;
-    if !verify_password(request.old_password, candidate.password_hash.clone()).await? {
+    // 旧密码校验与新密码哈希都使用 Argon2id 阻塞任务，并行执行可将改密耗时减半。
+    let (verified, new_hash) = tokio::try_join!(
+        verify_password(request.old_password, candidate.password_hash.clone()),
+        hash_password(request.new_password),
+    )?;
+    if !verified {
         return Err(invalid_credentials());
     }
-    let new_hash = hash_password(request.new_password).await?;
     let cookie = session_cookie("", 0, state.config.cookie_secure)?;
 
     let tx = state.db.begin().await?;

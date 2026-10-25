@@ -5,6 +5,8 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap},
+    fmt::Write as _,
+    sync::Arc,
 };
 
 use axum::{
@@ -15,7 +17,7 @@ use axum::{
 };
 use chrono::{DateTime, FixedOffset, NaiveDate, SecondsFormat, Utc};
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, FromQueryResult,
+    ConnectionTrait, FromQueryResult,
     entity::{ColumnTrait, EntityTrait},
     query::{PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Select},
 };
@@ -28,7 +30,9 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::AuthUser,
-    domain::{AnswerState, Choice, Document, FlowEvaluator, Question, QuestionKind},
+    domain::{
+        AnswerState, Choice, Document, FlowEvaluator, PreparedDocument, Question, QuestionKind,
+    },
     entities::{response, version},
     error::{AppError, AppResult, ErrorResponse},
     http::{ApiPath, ApiQuery, Page, Pagination},
@@ -298,31 +302,38 @@ async fn response_detail(
         .one(&tx)
         .await?
         .ok_or_else(AppError::not_found)?;
-    let version = version::Entity::find_by_id(row.version_id)
-        .filter(version::Column::SurveyId.eq(id))
-        .one(&tx)
-        .await?
-        .ok_or_else(AppError::not_found)?;
+    // 命中缓存时零 SQL 查询、零 JSONB 解码、零规则重编译。
+    let cached = match state.versions.get(id, row.version_id) {
+        Some(version) => Ok(version),
+        None => Err(repository::load_version_row(&tx, id, row.version_id)
+            .await?
+            .ok_or_else(AppError::not_found)?),
+    };
     tx.commit().await?;
-    let document: Document = serde_json::from_value(version.document)?;
-    let evaluator = report_evaluator(&document)?;
+    let version = match cached {
+        Ok(version) => version,
+        Err(row) => state.versions.insert_row(row, id)?,
+    };
+    let document = version.prepared.document();
+    let evaluator = version.prepared.report_evaluator();
     let row = snapshot_row(
         evaluator.as_ref(),
         row.id,
         row.submitted_at,
         serde_json::from_value(row.answers)?,
     )?;
+    let answers = row.answers;
     let question_states = row
         .question_states
-        .unwrap_or_else(|| plain_question_states(&document, &row.answers));
+        .unwrap_or_else(|| plain_question_states(document, &answers));
     Ok(Json(ResponseDetail {
         receipt_id: row.receipt_id,
         version_id: version.id,
         version_number: version.number,
         submitted_at: row.submitted_at.with_timezone(&SHANGHAI_OFFSET),
         timezone: TIMEZONE,
-        document,
-        answers: row.answers,
+        document: document.clone(),
+        answers,
         question_states,
     }))
 }
@@ -354,35 +365,23 @@ async fn statistics(
     ApiQuery(filter): ApiQuery<ReportFilter>,
 ) -> AppResult<Json<StatisticsResponse>> {
     let range = TimeRange::parse(&filter)?;
-    let LoadedReport {
-        version_id,
-        version_number,
-        document,
-        rows,
-    } = load_report(&state.db, user.id, id, filter.version_id, &range).await?;
-    let mut dates = BTreeMap::new();
-    for row in &rows {
-        *dates
-            .entry(
-                row.submitted_at
-                    .with_timezone(&SHANGHAI_OFFSET)
-                    .date_naive(),
-            )
-            .or_insert(0) += 1;
-    }
-    let questions = document
-        .questions
-        .into_iter()
-        .map(|question| summarize_question(question, &rows))
-        .collect::<AppResult<Vec<_>>>()?;
+    let loaded = load_report(&state, user.id, id, filter.version_id, &range).await?;
+    let version_id = loaded.version_id;
+    let version_number = loaded.version_number;
+    // 空样本直接在调用线程产出零值统计；大样本的汇总与均值计算卸载到阻塞线程。
+    let summary = if loaded.rows.is_empty() {
+        summarize_report(&loaded.prepared, &loaded.rows)?
+    } else {
+        let LoadedReport { prepared, rows, .. } = loaded;
+        tokio::task::spawn_blocking(move || summarize_report(&prepared, &rows))
+            .await
+            .map_err(|error| AppError::internal(error))??
+    };
     Ok(Json(StatisticsResponse {
         selection: range.selection(version_id, version_number),
-        total_count: rows.len() as u64,
-        trend: dates
-            .into_iter()
-            .map(|(date, count)| DailyCount { date, count })
-            .collect(),
-        questions,
+        total_count: summary.total_count,
+        trend: summary.trend,
+        questions: summary.questions,
     }))
 }
 
@@ -416,13 +415,25 @@ async fn export_csv(
     ApiQuery(filter): ApiQuery<ReportFilter>,
 ) -> AppResult<Response> {
     let range = TimeRange::parse(&filter)?;
-    let LoadedReport {
-        version_id,
-        version_number,
-        document,
-        rows,
-    } = load_report(&state.db, user.id, id, filter.version_id, &range).await?;
-    let bytes = encode_csv(&document, version_id, version_number, &rows)?;
+    let loaded = load_report(&state, user.id, id, filter.version_id, &range).await?;
+    let version_id = loaded.version_id;
+    let version_number = loaded.version_number;
+    // 空样本只需表头；非空导出在阻塞线程中编码，避免大文件占用异步 worker。
+    let bytes = if loaded.rows.is_empty() {
+        encode_csv(
+            loaded.prepared.document(),
+            version_id,
+            version_number,
+            &loaded.rows,
+        )?
+    } else {
+        let LoadedReport { prepared, rows, .. } = loaded;
+        tokio::task::spawn_blocking(move || {
+            encode_csv(prepared.document(), version_id, version_number, &rows)
+        })
+        .await
+        .map_err(|error| AppError::internal(error))??
+    };
     let mut response = bytes.into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -495,21 +506,6 @@ pub(crate) fn resolve_version_id(
         .ok_or_else(|| AppError::conflict("not_published", "问卷尚未发布，没有可查看的答卷版本"))
 }
 
-async fn selected_version(
-    db: &impl ConnectionTrait,
-    owner_id: Uuid,
-    survey_id: Uuid,
-    version_id: Option<Uuid>,
-) -> AppResult<version::Model> {
-    let survey = repository::owned_survey_meta(db, owner_id, survey_id).await?;
-    let version_id = resolve_version_id(survey.current_version_id, version_id)?;
-    version::Entity::find_by_id(version_id)
-        .filter(version::Column::SurveyId.eq(survey_id))
-        .one(db)
-        .await?
-        .ok_or_else(AppError::not_found)
-}
-
 /// 答卷列表只需要版本 ID 与编号，不加载版本题面 JSONB。
 async fn selected_version_meta(
     db: &impl ConnectionTrait,
@@ -529,31 +525,69 @@ async fn selected_version_meta(
         .ok_or_else(AppError::not_found)
 }
 
-/// 统计与导出共用的单次读取结果：版本标识、题面和固定快照的答卷。
+/// 统计与导出共用的单次读取结果：版本标识、已编译题面和固定快照的答卷。
 struct LoadedReport {
     version_id: Uuid,
     version_number: i32,
-    document: Document,
+    prepared: Arc<PreparedDocument>,
     rows: Vec<SnapshotRow>,
 }
 
 async fn load_report(
-    db: &DatabaseConnection,
+    state: &AppState,
     owner_id: Uuid,
     survey_id: Uuid,
     version_id: Option<Uuid>,
     range: &TimeRange,
 ) -> AppResult<LoadedReport> {
-    let tx = repository::read_snapshot(db).await?;
-    let version = selected_version(&tx, owner_id, survey_id, version_id).await?;
-    let (version_id, version_number) = (version.id, version.number);
-    let document: Document = serde_json::from_value(version.document)?;
-    let rows = response_snapshot(&tx, survey_id, version_id, range, &document).await?;
+    let tx = repository::read_snapshot(&state.db).await?;
+    let survey = repository::owned_survey_meta(&tx, owner_id, survey_id).await?;
+    let version_id = resolve_version_id(survey.current_version_id, version_id)?;
+    // 同一只读快照内校验版本归属：命中缓存零查询，未命中则投影版本行并在提交后编译。
+    let cached = match state.versions.get(survey_id, version_id) {
+        Some(version) => Ok(version),
+        None => Err(repository::load_version_row(&tx, survey_id, version_id)
+            .await?
+            .ok_or_else(AppError::not_found)?),
+    };
+    let stored = filtered_responses(survey_id, version_id, range)
+        .select_only()
+        .columns([
+            response::Column::Id,
+            response::Column::SubmittedAt,
+            response::Column::Answers,
+        ])
+        .order_by_asc(response::Column::SubmittedAt)
+        .order_by_asc(response::Column::Id)
+        .into_model::<StoredResponseRow>()
+        .all(&tx)
+        .await?;
+    // 报表可能扫描大量 JSONB：先结束只读事务并释放连接，再反序列化与求值。
     tx.commit().await?;
+    let version = match cached {
+        Ok(version) => version,
+        Err(row) => state.versions.insert_row(row, survey_id)?,
+    };
+    let version_number = version.number;
+    let prepared = version.prepared;
+    // 空样本无需逐行解码、流程求值或占用阻塞线程，直接返回空行集。
+    if stored.is_empty() {
+        return Ok(LoadedReport {
+            version_id,
+            version_number,
+            prepared,
+            rows: Vec::new(),
+        });
+    }
+    // JSONB 解码与规则重建可能很重，卸载到阻塞线程，避免占住异步 worker。
+    let document = Arc::clone(&prepared);
+    let rows = tokio::task::spawn_blocking(move || snapshot_rows(&document, stored))
+        .await
+        .map_err(|error| AppError::internal(error))??;
     Ok(LoadedReport {
         version_id,
         version_number,
-        document,
+        prepared,
         rows,
     })
 }
@@ -604,6 +638,8 @@ pub(crate) struct SnapshotRow {
     pub(crate) question_states: Option<BTreeMap<Uuid, AnswerState>>,
 }
 
+/// 仅测试使用的题面求值器构造；生产路径复用 `PreparedDocument::report_evaluator`。
+#[cfg(test)]
 pub(crate) fn report_evaluator(document: &Document) -> AppResult<Option<FlowEvaluator<'_>>> {
     document
         .logic
@@ -620,10 +656,11 @@ pub(crate) fn snapshot_row(
     answers: BTreeMap<Uuid, Value>,
 ) -> AppResult<SnapshotRow> {
     let (answers, question_states) = if let Some(evaluator) = evaluator {
-        let result = evaluator
-            .evaluate_stored(&answers)
+        // 只重建答案与三态，不为报表分配用不到的路径 UUID 列表。
+        let (answers, question_states) = evaluator
+            .evaluate_stored_states(&answers)
             .map_err(|error| AppError::internal(error))?;
-        (result.answers, Some(result.question_states))
+        (answers, Some(question_states))
     } else {
         (answers, None)
     };
@@ -655,26 +692,15 @@ pub(crate) fn plain_question_states(
         .collect()
 }
 
-async fn response_snapshot(
-    db: &impl ConnectionTrait,
-    survey_id: Uuid,
-    version_id: Uuid,
-    range: &TimeRange,
-    document: &Document,
+/// 供阻塞线程把存储行解码并重建规则状态；空行集不构造求值器。
+fn snapshot_rows(
+    prepared: &PreparedDocument,
+    stored: Vec<StoredResponseRow>,
 ) -> AppResult<Vec<SnapshotRow>> {
-    let stored = filtered_responses(survey_id, version_id, range)
-        .select_only()
-        .columns([
-            response::Column::Id,
-            response::Column::SubmittedAt,
-            response::Column::Answers,
-        ])
-        .order_by_asc(response::Column::SubmittedAt)
-        .order_by_asc(response::Column::Id)
-        .into_model::<StoredResponseRow>()
-        .all(db)
-        .await?;
-    let evaluator = report_evaluator(document)?;
+    if stored.is_empty() {
+        return Ok(Vec::new());
+    }
+    let evaluator = prepared.report_evaluator();
     stored
         .into_iter()
         .map(|row| {
@@ -686,6 +712,44 @@ async fn response_snapshot(
             )
         })
         .collect()
+}
+
+/// 统计响应的固定部分：总数、按上海自然日的趋势与逐题统计。
+struct ReportStatistics {
+    total_count: u64,
+    trend: Vec<DailyCount>,
+    questions: Vec<QuestionStatistics>,
+}
+
+fn summarize_report(
+    prepared: &PreparedDocument,
+    rows: &[SnapshotRow],
+) -> AppResult<ReportStatistics> {
+    let mut dates = BTreeMap::new();
+    for row in rows {
+        *dates
+            .entry(
+                row.submitted_at
+                    .with_timezone(&SHANGHAI_OFFSET)
+                    .date_naive(),
+            )
+            .or_insert(0) += 1;
+    }
+    let questions = prepared
+        .document()
+        .questions
+        .iter()
+        .cloned()
+        .map(|question| summarize_question(question, rows))
+        .collect::<AppResult<Vec<_>>>()?;
+    Ok(ReportStatistics {
+        total_count: rows.len() as u64,
+        trend: dates
+            .into_iter()
+            .map(|(date, count)| DailyCount { date, count })
+            .collect(),
+        questions,
+    })
 }
 
 pub(crate) fn summarize_question(
@@ -715,7 +779,7 @@ pub(crate) fn summarize_question(
             }
         }
         QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => {
-            let mut answers = Vec::new();
+            let mut answers = Vec::with_capacity(rows.len());
             for row in rows {
                 if let Some(value) =
                     observe_row(row, question.id, &mut answered_count, &mut skipped_count)
@@ -896,19 +960,25 @@ pub(crate) fn encode_csv(
     ] {
         write_cell(&mut writer, header)?;
     }
+    let mut id_buf = Uuid::encode_buffer();
+    // 单个缓冲区复用整次导出，避免每个单元格与表头都分配新字符串。
+    let mut header_buf: String = String::with_capacity(128);
+    let mut json_buf: Vec<u8> = Vec::with_capacity(128);
     for question in &document.questions {
-        write_cell(
-            &mut writer,
-            &format!("{} [{}]", question.title, question.id),
-        )?;
+        header_buf.clear();
+        write!(&mut header_buf, "{} [{}]", question.title, question.id)
+            .map_err(|error| AppError::internal(error))?;
+        write_cell(&mut writer, &header_buf)?;
         if with_states {
-            write_cell(&mut writer, &format!("状态 [{}]", question.id))?;
+            header_buf.clear();
+            write!(&mut header_buf, "状态 [{}]", question.id)
+                .map_err(|error| AppError::internal(error))?;
+            write_cell(&mut writer, &header_buf)?;
         }
     }
     writer
         .write_record(std::iter::empty::<&[u8]>())
         .map_err(|error| AppError::internal(error))?;
-    let mut id_buf = Uuid::encode_buffer();
     for SnapshotRow {
         receipt_id,
         submitted_at,
@@ -931,7 +1001,13 @@ pub(crate) fn encode_csv(
                 None => write_cell(&mut writer, "")?,
                 Some(Value::String(value)) => write_cell(&mut writer, value)?,
                 // 多选保持 JSON 数组，不用逗号连接，以免丢失集合与 CSV 字段边界。
-                Some(value) => write_cell(&mut writer, &serde_json::to_string(value)?)?,
+                Some(value) => {
+                    json_buf.clear();
+                    serde_json::to_writer(&mut json_buf, value)?;
+                    let json = std::str::from_utf8(&json_buf)
+                        .map_err(|error| AppError::internal(error))?;
+                    write_cell(&mut writer, json)?;
+                }
             }
             if let Some(states) = &question_states {
                 let state = match states[&question.id] {

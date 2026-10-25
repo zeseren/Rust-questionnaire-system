@@ -19,8 +19,9 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use questionnaire_logic::domain::{Answer, FlowEvent, FlowSession as CoreFlowSession};
 use questionnaire_logic::domain::{
-    Document, DocumentLogic, Question, compile_expression as core_compile_expression,
-    format_logic_text as core_format_logic_text, parse_logic_text as core_parse_logic_text,
+    Document, DocumentLogic, LogicValueType, Question,
+    compile_expression as core_compile_expression, format_logic_text as core_format_logic_text,
+    parse_logic_text as core_parse_logic_text,
 };
 use questionnaire_logic::identity::Uuid;
 
@@ -75,6 +76,19 @@ pub fn format_logic_text(logic_json: String, questions_json: String) -> String {
     envelope_generic(result)
 }
 
+/// `compile_document_logic` 的成功响应：计算变量的拓扑顺序。
+#[derive(serde::Serialize)]
+struct CompiledDocumentLogicResponse {
+    variable_order: Vec<Uuid>,
+}
+
+/// `compile_expression` 的成功响应：静态类型与直接题目依赖。
+#[derive(serde::Serialize)]
+struct CompiledExpressionResponse {
+    value_type: LogicValueType,
+    dependencies: Vec<Uuid>,
+}
+
 /// 保存前的诊断预检：编译整份规则，只关心错误里的 `path` / `question_id`。
 ///
 /// 成功信封同时返回 `variable_order`：计算变量的拓扑顺序，供前端在编译期展示
@@ -85,7 +99,9 @@ pub fn compile_document_logic(logic_json: String, questions_json: String) -> Str
         let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
         let logic: DocumentLogic = decode(&logic_json, "logic_json")?;
         let compiled = logic.compile(&questions).map_err(domain_error)?;
-        Ok(json!({ "variable_order": compiled.variable_order() }))
+        Ok(CompiledDocumentLogicResponse {
+            variable_order: compiled.variable_order().to_vec(),
+        })
     })();
     envelope_generic(result)
 }
@@ -97,11 +113,10 @@ pub fn compile_expression(raw_json: String, questions_json: String) -> String {
         let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
         let raw: Value = decode(&raw_json, "raw_json")?;
         let compiled = core_compile_expression(&raw, &questions).map_err(domain_error)?;
-        let dependencies: Vec<_> = compiled.dependencies().collect();
-        Ok(json!({
-            "value_type": compiled.value_type(),
-            "dependencies": dependencies,
-        }))
+        Ok(CompiledExpressionResponse {
+            value_type: compiled.value_type(),
+            dependencies: compiled.dependencies().collect(),
+        })
     })();
     envelope_generic(result)
 }
@@ -217,9 +232,9 @@ impl FlowSession {
         envelope_generic(result.map(|()| Value::Null))
     }
 
-    /// 只读快照，序列化为 `{"ok":snapshot}`。
+    /// 只读快照，序列化为 `{"ok":snapshot}`；借用会话集合，避免每次改答深拷贝。
     pub fn snapshot(&self) -> String {
-        envelope_generic(Ok(self.session.snapshot()))
+        envelope_generic(Ok(self.session.snapshot_ref()))
     }
 
     /// 从最终答案重建整份答卷：不读取也不修改会话当前的历史与输入。

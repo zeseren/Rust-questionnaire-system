@@ -2,20 +2,27 @@
 //!
 //! 只读路径共用 `read_snapshot`，列表查询共用 `title_column` 与 `owned_survey_meta`，
 //! 避免各模块重复配置隔离级别或把整份 JsonBinary 草稿搬进内存。
+//! 已发布版本不可变，`VersionCache` 让提交、报表与公开题面共享同一份编译结果。
+
+use std::{
+    collections::HashMap,
+    sync::{Arc, PoisonError, RwLock},
+};
 
 use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
 use sea_orm::{
     AccessMode, ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    DatabaseTransaction, EntityTrait, FromQueryResult, IntoActiveModel, IsolationLevel,
-    QueryFilter, QuerySelect, Set, TransactionTrait,
+    DatabaseTransaction, EntityTrait, FromQueryResult, IsolationLevel, QueryFilter, QuerySelect,
+    Set, TransactionTrait,
     sea_query::{Expr, LockType, SimpleExpr, extension::postgres::PgExpr},
 };
 use uuid::Uuid;
 
 use crate::{
     auth,
-    entities::{SurveyStatus, survey, user},
+    domain::PreparedDocument,
+    entities::{FillingMode, SurveyStatus, survey, user, version},
     error::{AppError, AppResult},
 };
 
@@ -32,6 +39,222 @@ pub(crate) async fn read_snapshot(db: &DatabaseConnection) -> AppResult<Database
 /// 只从草稿 JSONB 中取出标题列，供各列表投影复用。
 pub(crate) fn title_column() -> SimpleExpr {
     Expr::col(survey::Column::Draft).cast_json_field("title")
+}
+
+/// 问卷元数据投影：包含行锁与过期物化所需的全部列，但不含 1 MiB 的 `draft`。
+#[derive(FromQueryResult)]
+pub(crate) struct SurveyMetaRow {
+    pub id: Uuid,
+    pub owner_id: Uuid,
+    pub status: SurveyStatus,
+    pub mode: Option<FillingMode>,
+    pub deadline: Option<DateTime<Utc>>,
+    pub taken_down: bool,
+    pub revision: i64,
+    pub current_version_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<&survey::Model> for SurveyMetaRow {
+    fn from(record: &survey::Model) -> Self {
+        Self {
+            id: record.id,
+            owner_id: record.owner_id,
+            status: record.status,
+            mode: record.mode,
+            deadline: record.deadline,
+            taken_down: record.taken_down,
+            revision: record.revision,
+            current_version_id: record.current_version_id,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+        }
+    }
+}
+
+/// 元数据投影的列清单，供只读题面与行锁共用，避免两处字段顺序漂移。
+pub(crate) fn survey_meta_columns() -> [survey::Column; 10] {
+    [
+        survey::Column::Id,
+        survey::Column::OwnerId,
+        survey::Column::Status,
+        survey::Column::Mode,
+        survey::Column::Deadline,
+        survey::Column::TakenDown,
+        survey::Column::Revision,
+        survey::Column::CurrentVersionId,
+        survey::Column::CreatedAt,
+        survey::Column::UpdatedAt,
+    ]
+}
+
+/// 已发布版本的编译结果；版本不可变，克隆只复制共享指针。
+#[derive(Clone)]
+pub(crate) struct CachedVersion {
+    pub id: Uuid,
+    pub survey_id: Uuid,
+    pub number: i32,
+    pub published_at: DateTime<Utc>,
+    pub prepared: Arc<PreparedDocument>,
+}
+
+/// 只投影缓存所需列的版本行；解码与编译时机由调用方决定。
+#[derive(FromQueryResult)]
+pub(crate) struct VersionRow {
+    id: Uuid,
+    number: i32,
+    published_at: DateTime<Utc>,
+    document: serde_json::Value,
+}
+
+impl VersionRow {
+    /// 解析并编译发布版本；调用方已通过数据库归属过滤确认版本属于该问卷。
+    fn prepare(self, survey_id: Uuid) -> AppResult<CachedVersion> {
+        Ok(CachedVersion {
+            id: self.id,
+            survey_id,
+            number: self.number,
+            published_at: self.published_at,
+            prepared: Arc::new(PreparedDocument::new(serde_json::from_value(
+                self.document,
+            )?)?),
+        })
+    }
+}
+
+/// 已发布版本的有界只读缓存；锁只在同步方法内持有，绝不跨 `.await`。
+pub(crate) struct VersionCache {
+    entries: RwLock<HashMap<Uuid, CachedVersion>>,
+}
+
+const VERSION_CACHE_CAPACITY: usize = 256;
+
+impl VersionCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// 命中且问卷归属一致时返回共享句柄，避免把其他问卷的版本交给调用方。
+    pub(crate) fn get(&self, survey_id: Uuid, version_id: Uuid) -> Option<CachedVersion> {
+        let entries = self.entries.read().unwrap_or_else(PoisonError::into_inner);
+        entries
+            .get(&version_id)
+            .filter(|version| version.survey_id == survey_id)
+            .cloned()
+    }
+
+    /// 写入版本；满容量时淘汰发布时间最早的条目（版本不可变，淘汰任意项都安全）。
+    pub(crate) fn insert(&self, version: CachedVersion) {
+        let mut entries = self.entries.write().unwrap_or_else(PoisonError::into_inner);
+        if entries.len() >= VERSION_CACHE_CAPACITY
+            && !entries.contains_key(&version.id)
+            && let Some(oldest) = entries
+                .values()
+                .min_by_key(|cached| cached.published_at)
+                .map(|cached| cached.id)
+        {
+            entries.remove(&oldest);
+        }
+        entries.insert(version.id, version);
+    }
+
+    /// 解析、编译并写入一条版本行，返回可共享的句柄。
+    pub(crate) fn insert_row(&self, row: VersionRow, survey_id: Uuid) -> AppResult<CachedVersion> {
+        let version = row.prepare(survey_id)?;
+        self.insert(version.clone());
+        Ok(version)
+    }
+}
+
+/// 按问卷归属投影缓存所需的版本列；事务提交与 JSONB 解码由调用方决定。
+pub(crate) async fn load_version_row(
+    db: &impl ConnectionTrait,
+    survey_id: Uuid,
+    version_id: Uuid,
+) -> AppResult<Option<VersionRow>> {
+    Ok(version::Entity::find_by_id(version_id)
+        .filter(version::Column::SurveyId.eq(survey_id))
+        .select_only()
+        .columns([
+            version::Column::Id,
+            version::Column::Number,
+            version::Column::PublishedAt,
+            version::Column::Document,
+        ])
+        .into_model::<VersionRow>()
+        .one(db)
+        .await?)
+}
+
+/// 统一加载入口：缓存命中零查询；未命中时投影版本行、编译并写入缓存。
+pub(crate) async fn load_cached_version(
+    db: &impl ConnectionTrait,
+    versions: &VersionCache,
+    survey_id: Uuid,
+    version_id: Uuid,
+) -> AppResult<Option<CachedVersion>> {
+    if let Some(version) = versions.get(survey_id, version_id) {
+        return Ok(Some(version));
+    }
+    let Some(row) = load_version_row(db, survey_id, version_id).await? else {
+        return Ok(None);
+    };
+    Ok(Some(versions.insert_row(row, survey_id)?))
+}
+
+/// 锁问卷元数据行，不读取草稿；锁序仍与所有写路径一致。
+pub(crate) async fn lock_survey_meta(
+    tx: &DatabaseTransaction,
+    id: Uuid,
+) -> AppResult<SurveyMetaRow> {
+    survey::Entity::find_by_id(id)
+        .select_only()
+        .columns(survey_meta_columns())
+        .lock(LockType::Update)
+        .into_model::<SurveyMetaRow>()
+        .one(tx)
+        .await?
+        .ok_or_else(AppError::not_found)
+}
+
+/// 所有者写入的元数据入口：先锁并重验当前账号，再锁元数据并核对归属。
+pub(crate) async fn lock_owned_survey_meta(
+    tx: &DatabaseTransaction,
+    headers: &HeaderMap,
+    owner_id: Uuid,
+    id: Uuid,
+) -> AppResult<SurveyMetaRow> {
+    lock_session_user(tx, headers, owner_id).await?;
+    let survey = lock_survey_meta(tx, id).await?;
+    if survey.owner_id != owner_id {
+        return Err(AppError::not_found());
+    }
+    Ok(survey)
+}
+
+/// 把“回收中但已过截止时间”物化为已关闭；只写状态与更新时间，不重写草稿列。
+pub(crate) async fn expire_survey_meta(
+    tx: &DatabaseTransaction,
+    mut survey: SurveyMetaRow,
+    now: DateTime<Utc>,
+) -> AppResult<SurveyMetaRow> {
+    if survey.status.effective(survey.deadline, now) == survey.status {
+        return Ok(survey);
+    }
+    survey::ActiveModel {
+        id: Set(survey.id),
+        status: Set(SurveyStatus::Closed),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .update_without_returning(tx)
+    .await?;
+    survey.status = SurveyStatus::Closed;
+    survey.updated_at = now;
+    Ok(survey)
 }
 
 /// 归属校验只需要 ID 与当前版本，不加载 1 MiB 的草稿。
@@ -123,19 +346,26 @@ pub(crate) async fn lock_owned_survey(
     Ok(survey)
 }
 
-/// 把“回收中但已过截止时间”物化为已关闭；状态未变化时不产生写入。
+/// 把“回收中但已过截止时间”物化为已关闭；只写状态与更新时间，不重写草稿列。
 pub(crate) async fn expire_survey(
     tx: &DatabaseTransaction,
-    survey: survey::Model,
+    mut survey: survey::Model,
     now: DateTime<Utc>,
 ) -> AppResult<survey::Model> {
     if survey.status.effective(survey.deadline, now) == survey.status {
         return Ok(survey);
     }
-    let mut update = survey.into_active_model();
-    update.status = Set(SurveyStatus::Closed);
-    update.updated_at = Set(now);
-    Ok(update.update(tx).await?)
+    survey::ActiveModel {
+        id: Set(survey.id),
+        status: Set(SurveyStatus::Closed),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .update_without_returning(tx)
+    .await?;
+    survey.status = SurveyStatus::Closed;
+    survey.updated_at = now;
+    Ok(survey)
 }
 
 /// 新提交的资格检查；成功重试不调用本函数。

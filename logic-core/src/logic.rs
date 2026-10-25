@@ -257,21 +257,22 @@ enum Arithmetic {
     Divide,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Binding {
     value_type: LogicValueType,
-    options: BTreeSet<Uuid>,
+    /// 按 UUID 升序去重的选项身份；紧凑切片避免每个选项一个 B 树节点。
+    options: Box<[Uuid]>,
     variable: bool,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Node {
     kind: NodeKind,
     value_type: LogicValueType,
     path: String,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum NodeKind {
     Literal(LogicValue),
     Answer(Uuid),
@@ -286,7 +287,7 @@ enum NodeKind {
 }
 
 /// 只有编译入口能构造的规则；绑定与常量不会在执行期间被外部修改。
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CompiledExpression {
     root: Node,
     bindings: Arc<BTreeMap<Uuid, Binding>>,
@@ -439,11 +440,13 @@ impl CompilationContext {
                     (LogicValueType::Number, &[][..])
                 }
             };
-            let ids: BTreeSet<_> = options.iter().map(|option| option.id).collect();
+            // 选项身份排序后存入紧凑切片：重复检查、空身份检查与后续包含判断都走二分。
+            let mut ids: Vec<Uuid> = options.iter().map(|option| option.id).collect();
+            ids.sort_unstable();
             if question.id.is_nil()
                 || bindings.contains_key(&question.id)
-                || ids.len() != options.len()
-                || ids.contains(&Uuid::nil())
+                || ids.windows(2).any(|pair| pair[0] == pair[1])
+                || ids.binary_search(&Uuid::nil()).is_ok()
             {
                 return Err(error(
                     LogicErrorCode::InvalidReference,
@@ -462,7 +465,7 @@ impl CompilationContext {
                 question.id,
                 Binding {
                     value_type,
-                    options: ids,
+                    options: ids.into_boxed_slice(),
                     variable: false,
                 },
             );
@@ -475,7 +478,7 @@ impl CompilationContext {
                 *id,
                 Binding {
                     value_type: *value_type,
-                    options: BTreeSet::new(),
+                    options: Box::default(),
                     variable: true,
                 },
             );
@@ -516,15 +519,21 @@ impl CompilationContext {
     }
 }
 
+/// 表达式的深度与节点预算共用同一事实源：文本解析器维护子树摘要时也调用这里。
+pub(crate) fn check_budget(depth: usize, nodes: usize) -> Result<(), LogicError> {
+    if depth > MAX_DEPTH || nodes > MAX_NODES {
+        return Err(error(LogicErrorCode::LimitExceeded, "$.expression", None));
+    }
+    Ok(())
+}
+
 pub(crate) fn check_raw_budget(
     raw: Option<&Value>,
     depth: usize,
     count: &mut usize,
 ) -> Result<(), LogicError> {
     *count += 1;
-    if depth > MAX_DEPTH || *count > MAX_NODES {
-        return Err(error(LogicErrorCode::LimitExceeded, "$.expression", None));
-    }
+    check_budget(depth, *count)?;
     if let Some(Value::Object(fields)) = raw {
         for key in ["expression", "left", "right", "fallback", "value"] {
             if let Some(child @ Value::Object(_)) = fields.get(key) {
@@ -735,7 +744,7 @@ fn selection(
     let mut ids = BTreeSet::new();
     for raw in options {
         let option = reference(&raw, path).map_err(|_| invalid())?;
-        if !binding.options.contains(&option) || !ids.insert(option) {
+        if binding.options.binary_search(&option).is_err() || !ids.insert(option) {
             return Err(invalid());
         }
     }
@@ -768,7 +777,7 @@ fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<Logic
             let option = raw
                 .as_str()
                 .and_then(crate::identity::parse)
-                .filter(|option| binding.options.contains(option))
+                .filter(|option| binding.options.binary_search(option).is_ok())
                 .ok_or_else(invalid)?;
             Ok(LogicValue::Choice(option))
         }
@@ -782,7 +791,7 @@ fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<Logic
                 let option = value
                     .as_str()
                     .and_then(crate::identity::parse)
-                    .filter(|option| binding.options.contains(option))
+                    .filter(|option| binding.options.binary_search(option).is_ok())
                     .ok_or_else(invalid)?;
                 if !options.insert(option) {
                     return Err(invalid());
@@ -1032,7 +1041,7 @@ mod tests {
             id(1),
             Binding {
                 value_type: LogicValueType::Choice,
-                options: [id(101), id(102)].into_iter().collect(),
+                options: Box::from([id(101), id(102)]),
                 variable: false,
             },
         );
@@ -1040,7 +1049,7 @@ mod tests {
             id(2),
             Binding {
                 value_type: LogicValueType::Choices,
-                options: [id(201)].into_iter().collect(),
+                options: Box::from([id(201)]),
                 variable: false,
             },
         );
@@ -1048,7 +1057,7 @@ mod tests {
             id(3),
             Binding {
                 value_type: LogicValueType::Text,
-                options: BTreeSet::new(),
+                options: Box::default(),
                 variable: false,
             },
         );
@@ -1056,7 +1065,7 @@ mod tests {
             id(4),
             Binding {
                 value_type: LogicValueType::Number,
-                options: BTreeSet::new(),
+                options: Box::default(),
                 variable: true,
             },
         );
@@ -1150,7 +1159,7 @@ mod tests {
     fn 答案读取拒绝越界与超量选项() {
         let 单选 = Binding {
             value_type: LogicValueType::Choice,
-            options: [id(101)].into_iter().collect(),
+            options: Box::from([id(101)]),
             variable: false,
         };
         for 值 in [json!(id(999).to_string()), json!("not-a-uuid"), json!(101)] {
@@ -1161,7 +1170,7 @@ mod tests {
 
         let 多选 = Binding {
             value_type: LogicValueType::Choices,
-            options: [id(101), id(102), id(103)].into_iter().collect(),
+            options: Box::from([id(101), id(102), id(103)]),
             variable: false,
         };
         let 超量 = read_answer(
