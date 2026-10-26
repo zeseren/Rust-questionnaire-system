@@ -41,6 +41,12 @@ pub(crate) fn title_column() -> SimpleExpr {
     Expr::col(survey::Column::Draft).cast_json_field("title")
 }
 
+/// 与 PostgreSQL `timestamptz` 一致的微秒时间：写响应与后续读回值不再有亚微秒差异。
+pub(crate) fn now_micros() -> DateTime<Utc> {
+    DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+        .expect("当前系统时间在合法微秒范围内")
+}
+
 /// 问卷元数据投影：包含行锁与过期物化所需的全部列，但不含 1 MiB 的 `draft`。
 #[derive(FromQueryResult)]
 pub(crate) struct SurveyMetaRow {
@@ -189,6 +195,41 @@ pub(crate) async fn load_version_row(
         .await?)
 }
 
+/// 版本查询结果：缓存命中直接复用编译产物，未命中保留待提交解码的版本行。
+pub(crate) enum VersionLookup {
+    Hit(CachedVersion),
+    Miss(VersionRow),
+}
+
+impl VersionLookup {
+    /// 统一解析入口：未命中时编译并写入缓存；调用方决定是否已提交只读事务。
+    pub(crate) fn resolve(
+        self,
+        versions: &VersionCache,
+        survey_id: Uuid,
+    ) -> AppResult<CachedVersion> {
+        match self {
+            Self::Hit(version) => Ok(version),
+            Self::Miss(row) => versions.insert_row(row, survey_id),
+        }
+    }
+}
+
+/// 缓存优先的版本查询：命中零查询；未命中只返回缓存所需列，解码时机交给调用方。
+pub(crate) async fn lookup_version(
+    db: &impl ConnectionTrait,
+    versions: &VersionCache,
+    survey_id: Uuid,
+    version_id: Uuid,
+) -> AppResult<Option<VersionLookup>> {
+    if let Some(version) = versions.get(survey_id, version_id) {
+        return Ok(Some(VersionLookup::Hit(version)));
+    }
+    Ok(load_version_row(db, survey_id, version_id)
+        .await?
+        .map(VersionLookup::Miss))
+}
+
 /// 统一加载入口：缓存命中零查询；未命中时投影版本行、编译并写入缓存。
 pub(crate) async fn load_cached_version(
     db: &impl ConnectionTrait,
@@ -196,13 +237,24 @@ pub(crate) async fn load_cached_version(
     survey_id: Uuid,
     version_id: Uuid,
 ) -> AppResult<Option<CachedVersion>> {
-    if let Some(version) = versions.get(survey_id, version_id) {
-        return Ok(Some(version));
-    }
-    let Some(row) = load_version_row(db, survey_id, version_id).await? else {
-        return Ok(None);
-    };
-    Ok(Some(versions.insert_row(row, survey_id)?))
+    lookup_version(db, versions, survey_id, version_id)
+        .await?
+        .map(|lookup| lookup.resolve(versions, survey_id))
+        .transpose()
+}
+
+/// 只读取已保存草稿的单列投影；响应构造不再搬回整行元数据。
+pub(crate) async fn load_survey_draft(
+    db: &impl ConnectionTrait,
+    id: Uuid,
+) -> AppResult<serde_json::Value> {
+    survey::Entity::find_by_id(id)
+        .select_only()
+        .column(survey::Column::Draft)
+        .into_tuple::<serde_json::Value>()
+        .one(db)
+        .await?
+        .ok_or_else(AppError::not_found)
 }
 
 /// 锁问卷元数据行，不读取草稿；锁序仍与所有写路径一致。
@@ -236,7 +288,7 @@ pub(crate) async fn lock_owned_survey_meta(
 }
 
 /// 把“回收中但已过截止时间”物化为已关闭；只写状态与更新时间，不重写草稿列。
-pub(crate) async fn expire_survey_meta(
+pub(crate) async fn expire_survey(
     tx: &DatabaseTransaction,
     mut survey: SurveyMetaRow,
     now: DateTime<Utc>,
@@ -311,14 +363,6 @@ pub(crate) async fn lock_session_user(
     Ok(user)
 }
 
-pub(crate) async fn lock_survey(tx: &DatabaseTransaction, id: Uuid) -> AppResult<survey::Model> {
-    survey::Entity::find_by_id(id)
-        .lock(LockType::Update)
-        .one(tx)
-        .await?
-        .ok_or_else(AppError::not_found)
-}
-
 pub(crate) async fn owned_survey(
     db: &impl ConnectionTrait,
     owner_id: Uuid,
@@ -329,43 +373,6 @@ pub(crate) async fn owned_survey(
         .one(db)
         .await?
         .ok_or_else(AppError::not_found)
-}
-
-/// 所有者写入的统一入口：先锁并重验当前账号，再锁问卷并核对归属。
-pub(crate) async fn lock_owned_survey(
-    tx: &DatabaseTransaction,
-    headers: &HeaderMap,
-    owner_id: Uuid,
-    id: Uuid,
-) -> AppResult<survey::Model> {
-    lock_session_user(tx, headers, owner_id).await?;
-    let survey = lock_survey(tx, id).await?;
-    if survey.owner_id != owner_id {
-        return Err(AppError::not_found());
-    }
-    Ok(survey)
-}
-
-/// 把“回收中但已过截止时间”物化为已关闭；只写状态与更新时间，不重写草稿列。
-pub(crate) async fn expire_survey(
-    tx: &DatabaseTransaction,
-    mut survey: survey::Model,
-    now: DateTime<Utc>,
-) -> AppResult<survey::Model> {
-    if survey.status.effective(survey.deadline, now) == survey.status {
-        return Ok(survey);
-    }
-    survey::ActiveModel {
-        id: Set(survey.id),
-        status: Set(SurveyStatus::Closed),
-        updated_at: Set(now),
-        ..Default::default()
-    }
-    .update_without_returning(tx)
-    .await?;
-    survey.status = SurveyStatus::Closed;
-    survey.updated_at = now;
-    Ok(survey)
 }
 
 /// 新提交的资格检查；成功重试不调用本函数。

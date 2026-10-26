@@ -1,8 +1,6 @@
 //! 流程只能向前转换；改答按前置有效答案重算路径，回退不恢复已清除的答案。
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -195,10 +193,10 @@ enum Node {
     },
 }
 
-/// 编译后的流程；节点列表由 `Arc` 共享，克隆与求值器复用都只增加引用计数。
-#[derive(Clone, Debug)]
+/// 编译后的流程；节点数组按拓扑顺序紧凑存储。
+#[derive(Debug)]
 pub(crate) struct CompiledFlow {
-    nodes: Arc<[Node]>,
+    nodes: Box<[Node]>,
 }
 
 impl CompiledFlow {
@@ -432,37 +430,12 @@ struct Projection {
     route_error: Option<LogicErrorCode>,
 }
 
-/// 对外只读快照；当前页与预测路径分开，结束不代表已提交。
-#[derive(Debug, Serialize)]
-pub struct FlowSnapshot {
-    /// 当前页面或结束节点。
-    pub current_node: Uuid,
-    /// 只有真正前进到结束节点后才有结果。
-    pub outcome: Option<FlowOutcome>,
-    /// 实际访问且仍有效的历史。
-    pub history: Vec<Uuid>,
-    /// 根据当前答案推导出的页面及结束节点路径。
-    pub path: Vec<Uuid>,
-    /// 当前路径上的可见题目。
-    pub visible: Vec<Uuid>,
-    /// 当前可见且必填的题目，包含动态必填。
-    pub required: Vec<Uuid>,
-    /// 已校验的有效答案。
-    pub answers: BTreeMap<Uuid, Value>,
-    /// 可见题目的错误；隐藏题目不留错误。
-    pub errors: BTreeMap<Uuid, LogicErrorCode>,
-    /// 路径末端的未决分支或计算错误。
-    pub route_error: Option<LogicErrorCode>,
-    /// 最近一次改答清除的题目身份。
-    pub cleared: Vec<Uuid>,
-}
-
-/// 借用会话状态的只读快照；序列化字段与 [`FlowSnapshot`] 完全一致。
+/// 借用会话状态的只读快照。
 ///
 /// 大字段直接借用会话内部集合，避免每次按键或翻页复制全部答案与错误；
 /// 只有历史与路径需要按下标映射为节点身份。
 #[derive(Debug, Serialize)]
-pub struct FlowSnapshotRef<'a> {
+pub struct FlowSnapshot<'a> {
     /// 当前页面或结束节点。
     pub current_node: Uuid,
     /// 只有真正前进到结束节点后才有结果。
@@ -511,16 +484,21 @@ pub struct EvaluatedResponse {
 /// 已存储答案的重建结果：规范化答案与题目适用性（跳过路径分配）。
 pub type StoredStates = (BTreeMap<Uuid, Value>, BTreeMap<Uuid, AnswerState>);
 
-/// 只持有编译结果与不可变题面；交互会话和服务端重建共用一次顺序求值。
+/// 一次性编译后的文档计划：题目下标、规则与流程都在此定型。
 ///
-/// 编译产物通过 `Cow` 同时支持拥有（独立求值器）与借用（[`crate::domain::PreparedDocument`]
-/// 一次性编译后复用），构造求值器不再复制规则、流程或题目表。
+/// 计划不持有文档本身；求值时由调用方传入不可变文档，避免复制或自引用。
+#[derive(Debug)]
+pub(crate) struct CompiledPlan {
+    questions: BTreeMap<Uuid, usize>,
+    logic: CompiledDocumentLogic,
+    flow: CompiledFlow,
+}
+
+/// 只持有不可变题面与编译计划；交互会话和服务端重建共用同一段顺序求值。
 #[derive(Debug)]
 pub struct FlowEvaluator<'a> {
     document: &'a Document,
-    questions: Cow<'a, BTreeMap<Uuid, usize>>,
-    logic: Cow<'a, CompiledDocumentLogic>,
-    flow: Cow<'a, CompiledFlow>,
+    plan: CompiledPlan,
 }
 
 impl<'a> FlowEvaluator<'a> {
@@ -532,37 +510,11 @@ impl<'a> FlowEvaluator<'a> {
         document
             .validate_draft_fields()
             .map_err(|failure| error(LogicErrorCode::InvalidFlow, "$", failure.question_id))?;
-        let logic = match &document.logic {
-            Some(logic) => logic.compile(&document.questions)?,
-            None => CompiledDocumentLogic::empty(),
-        };
-        Ok(Self::from_compiled(document, logic))
-    }
-
-    /// 调用方保证文档已通过草稿字段校验（发布版本在发布边界已完成校验），并传入该文档的编译结果。
-    pub(crate) fn from_compiled(document: &'a Document, logic: CompiledDocumentLogic) -> Self {
-        let flow = logic.effective_flow(&document.questions);
-        Self {
+        let logic = document.compile_logic()?;
+        Ok(Self {
             document,
-            questions: Cow::Owned(index_questions(&document.questions)),
-            logic: Cow::Owned(logic),
-            flow: Cow::Owned(flow),
-        }
-    }
-
-    /// 零拷贝借用已编译的文档产物；仅由 [`crate::domain::PreparedDocument`] 使用。
-    pub(crate) fn from_prepared(
-        document: &'a Document,
-        questions: &'a BTreeMap<Uuid, usize>,
-        logic: &'a CompiledDocumentLogic,
-        flow: &'a CompiledFlow,
-    ) -> Self {
-        Self {
-            document,
-            questions: Cow::Borrowed(questions),
-            logic: Cow::Borrowed(logic),
-            flow: Cow::Borrowed(flow),
-        }
+            plan: CompiledPlan::from_compiled(document, logic),
+        })
     }
 
     /// 从入口重建最终答卷，不接受客户端历史或预先计算的可见题目。
@@ -570,16 +522,7 @@ impl<'a> FlowEvaluator<'a> {
     /// # 错误
     /// 重复/未知题目、不适用答案、校验失败、未决条件或筛选结束均拒绝。
     pub fn evaluate_answers(&self, answers: Vec<Answer>) -> Result<EvaluatedResponse, LogicError> {
-        let inputs = self.collect_inputs(answers)?;
-        self.finish(&inputs)
-    }
-
-    /// 从数据库中的已规范化答案重算规则、范围和路径。
-    pub fn evaluate_stored(
-        &self,
-        answers: &BTreeMap<Uuid, Value>,
-    ) -> Result<EvaluatedResponse, LogicError> {
-        self.finish(answers)
+        self.plan.evaluate_answers(self.document, answers)
     }
 
     /// 校验答案并返回规范化结果，跳过 `question_states` 与 `path` 的构建分配。
@@ -590,23 +533,66 @@ impl<'a> FlowEvaluator<'a> {
         &self,
         answers: Vec<Answer>,
     ) -> Result<BTreeMap<Uuid, Value>, LogicError> {
-        let inputs = self.collect_inputs(answers)?;
-        let projection = self.project(&inputs);
-        self.check_projection(&projection, &inputs)?;
-        Ok(projection.answers)
+        self.plan.validate_answers_only(self.document, answers)
     }
 
     /// 从已存储答案重算规则并返回规范化答案与题目适用性，跳过路径构建。
     ///
     /// # 错误
-    /// 与 [`Self::evaluate_stored`] 相同。
+    /// 与 [`Self::evaluate_answers`] 相同。
     pub fn evaluate_stored_states(
         &self,
         answers: &BTreeMap<Uuid, Value>,
     ) -> Result<StoredStates, LogicError> {
-        let projection = self.project(answers);
-        let visible = self.check_projection(&projection, answers)?;
-        let states = Self::question_states(&self.document.questions, &projection, &visible);
+        self.plan.evaluate_stored_states(self.document, answers)
+    }
+}
+
+impl CompiledPlan {
+    /// 调用方保证文档已通过草稿字段校验（发布版本在发布边界已完成校验），
+    /// 并传入该文档的编译结果；未配置规则时为 `None`。
+    pub(crate) fn from_compiled(document: &Document, logic: Option<CompiledDocumentLogic>) -> Self {
+        let (logic, flow) = logic
+            .unwrap_or_else(CompiledDocumentLogic::empty)
+            .into_flow(&document.questions);
+        Self {
+            questions: index_questions(&document.questions),
+            logic,
+            flow,
+        }
+    }
+
+    /// 从入口重建最终答卷，不接受客户端历史或预先计算的可见题目。
+    pub(crate) fn evaluate_answers(
+        &self,
+        document: &Document,
+        answers: Vec<Answer>,
+    ) -> Result<EvaluatedResponse, LogicError> {
+        let inputs = self.collect_inputs(answers)?;
+        self.finish(document, &inputs)
+    }
+
+    /// 校验答案并返回规范化结果，跳过 `question_states` 与 `path` 的构建分配。
+    pub(crate) fn validate_answers_only(
+        &self,
+        document: &Document,
+        answers: Vec<Answer>,
+    ) -> Result<BTreeMap<Uuid, Value>, LogicError> {
+        let inputs = self.collect_inputs(answers)?;
+        let projection = self.project(document, &inputs);
+        self.check_projection(document, &projection, &inputs)?;
+        Ok(projection.answers)
+    }
+
+    /// 从已存储答案重算规则并返回规范化答案与题目适用性，跳过路径构建。
+    pub(crate) fn evaluate_stored_states(
+        &self,
+        document: &Document,
+        answers: &BTreeMap<Uuid, Value>,
+    ) -> Result<StoredStates, LogicError> {
+        let projection = self.project(document, answers);
+        let visible = self.check_projection(document, &projection, answers)?;
+        let states = Self::question_states(&document.questions, &projection, &visible);
         Ok((projection.answers, states))
     }
 
@@ -631,11 +617,14 @@ impl<'a> FlowEvaluator<'a> {
         Ok(inputs)
     }
 
-    fn finish(&self, inputs: &BTreeMap<Uuid, Value>) -> Result<EvaluatedResponse, LogicError> {
-        let projection = self.project(inputs);
-        let visible = self.check_projection(&projection, inputs)?;
-        let question_states =
-            Self::question_states(&self.document.questions, &projection, &visible);
+    fn finish(
+        &self,
+        document: &Document,
+        inputs: &BTreeMap<Uuid, Value>,
+    ) -> Result<EvaluatedResponse, LogicError> {
+        let projection = self.project(document, inputs);
+        let visible = self.check_projection(document, &projection, inputs)?;
+        let question_states = Self::question_states(&document.questions, &projection, &visible);
         Ok(EvaluatedResponse {
             answers: projection.answers,
             question_states,
@@ -650,10 +639,11 @@ impl<'a> FlowEvaluator<'a> {
     /// 校验投影，错误顺序与提交路径完全一致；返回可见题目集合。
     fn check_projection(
         &self,
+        document: &Document,
         projection: &Projection,
         inputs: &BTreeMap<Uuid, Value>,
     ) -> Result<BTreeSet<Uuid>, LogicError> {
-        for question in &self.document.questions {
+        for question in &document.questions {
             if let Some(code) = projection.errors.get(&question.id) {
                 return Err(error(*code, "$.answers", Some(question.id)));
             }
@@ -705,12 +695,12 @@ impl<'a> FlowEvaluator<'a> {
             .collect()
     }
 
-    fn project(&self, inputs: &BTreeMap<Uuid, Value>) -> Projection {
+    fn project(&self, document: &Document, inputs: &BTreeMap<Uuid, Value>) -> Projection {
         // 路径最多覆盖全部流程节点，可见与必填题目最多覆盖全部题目；一次预分配避免扩容。
         let mut result = Projection {
             path: Vec::with_capacity(self.flow.nodes.len()),
-            visible: Vec::with_capacity(self.document.questions.len()),
-            required: Vec::with_capacity(self.document.questions.len()),
+            visible: Vec::with_capacity(document.questions.len()),
+            required: Vec::with_capacity(document.questions.len()),
             ..Projection::default()
         };
         // 前置依赖规则保证：被当前表达式引用的变量所依赖的题目均已在前面求值定型，
@@ -725,7 +715,7 @@ impl<'a> FlowEvaluator<'a> {
                     result.path.push(current);
                     for id in questions {
                         // 流程编译保证页面题目都来自本文档，索引不会缺失。
-                        let question = &self.document.questions[self.questions[id]];
+                        let question = &document.questions[self.questions[id]];
                         let rule = self.logic.rule(*id);
                         match rule
                             .and_then(|rule| rule.visible_if.as_ref())
@@ -860,7 +850,7 @@ impl<'a> FlowSession<'a> {
     /// 草稿、规则或流程不合法时拒绝启动。
     pub fn new(document: &'a Document) -> Result<Self, LogicError> {
         let evaluator = FlowEvaluator::new(document)?;
-        let projection = evaluator.project(&BTreeMap::new());
+        let projection = evaluator.plan.project(evaluator.document, &BTreeMap::new());
         Ok(Self {
             evaluator,
             inputs: BTreeMap::new(),
@@ -880,24 +870,24 @@ impl<'a> FlowSession<'a> {
 
     /// 返回借用会话状态的只读快照，避免复制全部答案与可见题目。
     #[must_use]
-    pub fn snapshot_ref(&self) -> FlowSnapshotRef<'_> {
+    pub fn snapshot(&self) -> FlowSnapshot<'_> {
         let current = self.current();
-        FlowSnapshotRef {
-            current_node: self.evaluator.flow.id(current),
-            outcome: match &self.evaluator.flow.nodes[current] {
+        FlowSnapshot {
+            current_node: self.evaluator.plan.flow.id(current),
+            outcome: match &self.evaluator.plan.flow.nodes[current] {
                 Node::End { outcome, .. } => Some(*outcome),
                 _ => None,
             },
             history: self
                 .history
                 .iter()
-                .map(|index| self.evaluator.flow.id(*index))
+                .map(|index| self.evaluator.plan.flow.id(*index))
                 .collect(),
             path: self
                 .projection
                 .path
                 .iter()
-                .map(|index| self.evaluator.flow.id(*index))
+                .map(|index| self.evaluator.plan.flow.id(*index))
                 .collect(),
             visible: &self.projection.visible,
             required: &self.projection.required,
@@ -905,24 +895,6 @@ impl<'a> FlowSession<'a> {
             errors: &self.projection.errors,
             route_error: self.projection.route_error,
             cleared: &self.cleared,
-        }
-    }
-
-    /// 返回独立的只读快照，外部修改不会改变会话。
-    #[must_use]
-    pub fn snapshot(&self) -> FlowSnapshot {
-        let snapshot = self.snapshot_ref();
-        FlowSnapshot {
-            current_node: snapshot.current_node,
-            outcome: snapshot.outcome,
-            history: snapshot.history,
-            path: snapshot.path,
-            visible: snapshot.visible.to_vec(),
-            required: snapshot.required.to_vec(),
-            answers: snapshot.answers.clone(),
-            errors: snapshot.errors.clone(),
-            route_error: snapshot.route_error,
-            cleared: snapshot.cleared.to_vec(),
         }
     }
 
@@ -938,7 +910,7 @@ impl<'a> FlowSession<'a> {
         let invalid = || error(LogicErrorCode::InvalidEvent, "$.event", None);
         match event {
             FlowEvent::Change { question_id, value } => {
-                let Node::Page { questions, .. } = &self.evaluator.flow.nodes[self.current()]
+                let Node::Page { questions, .. } = &self.evaluator.plan.flow.nodes[self.current()]
                 else {
                     return Err(invalid());
                 };
@@ -949,22 +921,22 @@ impl<'a> FlowSession<'a> {
                 }
                 // 拒绝检查已结束；投影没有可恢复失败，不需要复制输入表来回滚。
                 self.inputs.insert(question_id, value);
-                let projection = self.evaluator.project(&self.inputs);
-                // 可见集合与路径集合各扫一次，替代对每个输入和历史的线性查找；
-                // 单遍裁剪输入时同步收集被清除的题目。
-                let visible: BTreeSet<Uuid> = projection.visible.iter().copied().collect();
-                let path: BTreeSet<usize> = projection.path.iter().copied().collect();
+                let projection = self
+                    .evaluator
+                    .plan
+                    .project(self.evaluator.document, &self.inputs);
+                // 单遍裁剪输入并同步收集被清除的题目；路径仍保持投影顺序。
                 let cleared = &mut self.cleared;
                 cleared.clear();
                 self.inputs.retain(|id, _| {
-                    if visible.contains(id) {
+                    if projection.visible.contains(id) {
                         true
                     } else {
                         cleared.push(*id);
                         false
                     }
                 });
-                self.history.retain(|index| path.contains(index));
+                self.history.retain(|index| projection.path.contains(index));
                 self.projection = projection;
             }
             FlowEvent::Previous => {
@@ -976,7 +948,7 @@ impl<'a> FlowSession<'a> {
             }
             FlowEvent::Next => {
                 let current = self.current();
-                let Node::Page { questions, .. } = &self.evaluator.flow.nodes[current] else {
+                let Node::Page { questions, .. } = &self.evaluator.plan.flow.nodes[current] else {
                     return Err(invalid());
                 };
                 for id in questions {
@@ -997,7 +969,7 @@ impl<'a> FlowSession<'a> {
                     .path
                     .iter()
                     .skip(position + 1)
-                    .find(|index| match &self.evaluator.flow.nodes[**index] {
+                    .find(|index| match &self.evaluator.plan.flow.nodes[**index] {
                         Node::Page { questions, .. } => questions
                             .iter()
                             .any(|id| self.projection.visible.contains(id)),
@@ -1239,7 +1211,7 @@ mod tests {
             )),
         );
         let mut 会话 = FlowSession::new(&隐藏问卷).unwrap();
-        assert_eq!(会话.snapshot().visible, vec![id(1)]);
+        assert_eq!(会话.snapshot().visible, [id(1)].as_slice());
         let 错误 = 会话
             .dispatch(FlowEvent::Change {
                 question_id: id(2),

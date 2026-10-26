@@ -30,9 +30,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::AuthUser,
-    domain::{
-        AnswerState, Choice, Document, FlowEvaluator, PreparedDocument, Question, QuestionKind,
-    },
+    domain::{AnswerState, Choice, Document, PreparedDocument, Question, QuestionKind},
     entities::{response, version},
     error::{AppError, AppResult, ErrorResponse},
     http::{ApiPath, ApiQuery, Page, Pagination},
@@ -98,7 +96,8 @@ struct ResponseDetail {
     version_number: i32,
     submitted_at: DateTime<FixedOffset>,
     timezone: &'static str,
-    document: Document,
+    #[schema(value_type = Document)]
+    document: Arc<Document>,
     /// 题目 UUID 到规范化答案；未回答的可选题没有对应键。
     answers: BTreeMap<Uuid, Value>,
     /// 每题区分已答、适用未答和规则跳过；按此答卷的历史版本重算。
@@ -303,21 +302,13 @@ async fn response_detail(
         .await?
         .ok_or_else(AppError::not_found)?;
     // 命中缓存时零 SQL 查询、零 JSONB 解码、零规则重编译。
-    let cached = match state.versions.get(id, row.version_id) {
-        Some(version) => Ok(version),
-        None => Err(repository::load_version_row(&tx, id, row.version_id)
-            .await?
-            .ok_or_else(AppError::not_found)?),
-    };
+    let lookup = repository::lookup_version(&tx, &state.versions, id, row.version_id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
     tx.commit().await?;
-    let version = match cached {
-        Ok(version) => version,
-        Err(row) => state.versions.insert_row(row, id)?,
-    };
-    let document = version.prepared.document();
-    let evaluator = version.prepared.report_evaluator();
+    let version = lookup.resolve(&state.versions, id)?;
     let row = snapshot_row(
-        evaluator.as_ref(),
+        &version.prepared,
         row.id,
         row.submitted_at,
         serde_json::from_value(row.answers)?,
@@ -325,14 +316,14 @@ async fn response_detail(
     let answers = row.answers;
     let question_states = row
         .question_states
-        .unwrap_or_else(|| plain_question_states(document, &answers));
+        .unwrap_or_else(|| plain_question_states(version.prepared.document(), &answers));
     Ok(Json(ResponseDetail {
         receipt_id: row.receipt_id,
         version_id: version.id,
         version_number: version.number,
         submitted_at: row.submitted_at.with_timezone(&SHANGHAI_OFFSET),
         timezone: TIMEZONE,
-        document: document.clone(),
+        document: version.prepared.document_arc(),
         answers,
         question_states,
     }))
@@ -544,12 +535,9 @@ async fn load_report(
     let survey = repository::owned_survey_meta(&tx, owner_id, survey_id).await?;
     let version_id = resolve_version_id(survey.current_version_id, version_id)?;
     // 同一只读快照内校验版本归属：命中缓存零查询，未命中则投影版本行并在提交后编译。
-    let cached = match state.versions.get(survey_id, version_id) {
-        Some(version) => Ok(version),
-        None => Err(repository::load_version_row(&tx, survey_id, version_id)
-            .await?
-            .ok_or_else(AppError::not_found)?),
-    };
+    let lookup = repository::lookup_version(&tx, &state.versions, survey_id, version_id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
     let stored = filtered_responses(survey_id, version_id, range)
         .select_only()
         .columns([
@@ -564,10 +552,7 @@ async fn load_report(
         .await?;
     // 报表可能扫描大量 JSONB：先结束只读事务并释放连接，再反序列化与求值。
     tx.commit().await?;
-    let version = match cached {
-        Ok(version) => version,
-        Err(row) => state.versions.insert_row(row, survey_id)?,
-    };
+    let version = lookup.resolve(&state.versions, survey_id)?;
     let version_number = version.number;
     let prepared = version.prepared;
     // 空样本无需逐行解码、流程求值或占用阻塞线程，直接返回空行集。
@@ -638,26 +623,15 @@ pub(crate) struct SnapshotRow {
     pub(crate) question_states: Option<BTreeMap<Uuid, AnswerState>>,
 }
 
-/// 仅测试使用的题面求值器构造；生产路径复用 `PreparedDocument::report_evaluator`。
-#[cfg(test)]
-pub(crate) fn report_evaluator(document: &Document) -> AppResult<Option<FlowEvaluator<'_>>> {
-    document
-        .logic
-        .as_ref()
-        .map(|_| FlowEvaluator::new(document))
-        .transpose()
-        .map_err(|error| AppError::internal(error))
-}
-
 pub(crate) fn snapshot_row(
-    evaluator: Option<&FlowEvaluator<'_>>,
+    prepared: &PreparedDocument,
     receipt_id: Uuid,
     submitted_at: DateTime<Utc>,
     answers: BTreeMap<Uuid, Value>,
 ) -> AppResult<SnapshotRow> {
-    let (answers, question_states) = if let Some(evaluator) = evaluator {
+    let (answers, question_states) = if prepared.document().logic.is_some() {
         // 只重建答案与三态，不为报表分配用不到的路径 UUID 列表。
-        let (answers, question_states) = evaluator
+        let (answers, question_states) = prepared
             .evaluate_stored_states(&answers)
             .map_err(|error| AppError::internal(error))?;
         (answers, Some(question_states))
@@ -692,20 +666,16 @@ pub(crate) fn plain_question_states(
         .collect()
 }
 
-/// 供阻塞线程把存储行解码并重建规则状态；空行集不构造求值器。
+/// 供阻塞线程把存储行解码并重建规则状态；求值器来自同一份已编译文档。
 fn snapshot_rows(
     prepared: &PreparedDocument,
     stored: Vec<StoredResponseRow>,
 ) -> AppResult<Vec<SnapshotRow>> {
-    if stored.is_empty() {
-        return Ok(Vec::new());
-    }
-    let evaluator = prepared.report_evaluator();
     stored
         .into_iter()
         .map(|row| {
             snapshot_row(
-                evaluator.as_ref(),
+                prepared,
                 row.id,
                 row.submitted_at,
                 serde_json::from_value(row.answers)?,
@@ -739,7 +709,6 @@ fn summarize_report(
         .document()
         .questions
         .iter()
-        .cloned()
         .map(|question| summarize_question(question, rows))
         .collect::<AppResult<Vec<_>>>()?;
     Ok(ReportStatistics {
@@ -753,14 +722,14 @@ fn summarize_report(
 }
 
 pub(crate) fn summarize_question(
-    question: Question,
+    question: &Question,
     rows: &[SnapshotRow],
 ) -> AppResult<QuestionStatistics> {
     let mut answered_count = 0u64;
     let mut skipped_count = 0u64;
     let is_multiple = matches!(&question.kind, QuestionKind::MultipleChoice { .. });
     let is_textarea = matches!(&question.kind, QuestionKind::Textarea { .. });
-    let statistics = match question.kind {
+    let statistics = match &question.kind {
         QuestionKind::SingleChoice { options } | QuestionKind::MultipleChoice { options, .. } => {
             let options = summarize_choices(
                 options,
@@ -779,7 +748,7 @@ pub(crate) fn summarize_question(
             }
         }
         QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => {
-            let mut answers = Vec::with_capacity(rows.len());
+            let mut answers = Vec::new();
             for row in rows {
                 if let Some(value) =
                     observe_row(row, question.id, &mut answered_count, &mut skipped_count)
@@ -831,8 +800,8 @@ pub(crate) fn summarize_question(
                 }
             }
             QuestionStatisticsData::Rating {
-                min,
-                max,
+                min: *min,
+                max: *max,
                 distribution: distribution
                     .into_iter()
                     .map(|(value, count)| RatingFrequency { value, count })
@@ -844,7 +813,7 @@ pub(crate) fn summarize_question(
     let applicable_count = rows.len() as u64 - skipped_count;
     Ok(QuestionStatistics {
         question_id: question.id,
-        title: question.title,
+        title: question.title.clone(),
         answered_count,
         applicable_count,
         unanswered_count: applicable_count - answered_count,
@@ -874,7 +843,7 @@ fn observe_row<'a>(
 }
 
 fn summarize_choices(
-    options: Vec<Choice>,
+    options: &[Choice],
     question_id: Uuid,
     rows: &[SnapshotRow],
     answered_count: &mut u64,
@@ -900,13 +869,13 @@ fn summarize_choices(
     let total_answered = *answered_count;
     let mut id_buf = Uuid::encode_buffer();
     Ok(options
-        .into_iter()
+        .iter()
         .map(|option| {
             let id_str: &str = option.id.hyphenated().encode_lower(&mut id_buf);
             let count = counts.get(id_str).copied().unwrap_or(0);
             OptionFrequency {
                 option_id: option.id,
-                label: option.label,
+                label: option.label.clone(),
                 count,
                 proportion: (total_answered > 0).then(|| count as f64 / total_answered as f64),
             }

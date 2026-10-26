@@ -313,7 +313,7 @@ fn 已存答案违反流程契约时返回对应错误路径() {
     for (name, document_name, stored, path) in cases {
         let document = document(document_name);
         let evaluator = FlowEvaluator::new(&document).unwrap();
-        let error = evaluator.evaluate_stored(&stored).unwrap_err();
+        let error = evaluator.evaluate_stored_states(&stored).unwrap_err();
         assert_eq!(error.path, path, "{name}");
     }
 }

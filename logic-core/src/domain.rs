@@ -5,16 +5,17 @@
 //! 所有题面和文本答案都拒绝 U+0000 空字符，避免文本无法持久化。
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::flow::CompiledFlow;
+use crate::flow::CompiledPlan;
 pub use crate::flow::{
     AnswerState, EvaluatedResponse, FlowBranch, FlowDefinition, FlowEvaluator, FlowEvent, FlowNode,
-    FlowOutcome, FlowSession, FlowSnapshot, FlowSnapshotRef,
+    FlowOutcome, FlowSession, FlowSnapshot, StoredStates,
 };
 pub use crate::logic::{
     CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType, compile_expression,
@@ -469,23 +470,12 @@ impl Document {
         answers: Vec<Answer>,
     ) -> Result<BTreeMap<Uuid, Value>, ValidationError> {
         // 提交只复用规则的编译结果与同一段流程求值；发布态文案校验只发生在发布时。
-        let logic = match &self.logic {
-            Some(logic) => logic
-                .compile(&self.questions)
-                .map_err(|error| ValidationError::new(error.question_id, error.to_string()))?,
-            None => CompiledDocumentLogic::empty(),
-        };
-        FlowEvaluator::from_compiled(self, logic)
-            .validate_answers_only(answers)
+        let logic = self
+            .compile_logic()
+            .map_err(|error| ValidationError::new(error.question_id, error.to_string()))?;
+        CompiledPlan::from_compiled(self, logic)
+            .validate_answers_only(self, answers)
             .map_err(|error| ValidationError::new(error.question_id, error.to_string()))
-    }
-
-    /// 校验并编译草稿，得到可复用的发布态文档。
-    ///
-    /// # Errors
-    /// 草稿字段、规则或流程不合法时返回可定位的校验错误。
-    pub fn prepare(self) -> Result<PreparedDocument, ValidationError> {
-        PreparedDocument::new(self)
     }
 
     /// 执行完整发布校验并一次性编译规则、流程与题目索引。
@@ -499,14 +489,12 @@ impl Document {
 
 /// 已完成草稿字段校验、规则编译、流程构建与题目索引的不可变发布态文档。
 ///
-/// 编译产物只构建一次：交互求值、报告重建与提交校验都借用同一份规则与流程，
+/// 编译计划只构建一次：提交校验与报告重建都复用同一份规则与流程，
 /// 不再为每次请求重新编译 DSL。
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PreparedDocument {
-    document: Document,
-    questions: BTreeMap<Uuid, usize>,
-    logic: CompiledDocumentLogic,
-    flow: CompiledFlow,
+    document: Arc<Document>,
+    plan: CompiledPlan,
 }
 
 impl PreparedDocument {
@@ -529,14 +517,10 @@ impl PreparedDocument {
     }
 
     fn from_compiled(document: Document, logic: Option<CompiledDocumentLogic>) -> Self {
-        let logic = logic.unwrap_or_else(CompiledDocumentLogic::empty);
-        let flow = logic.effective_flow(&document.questions);
-        let questions = crate::flow::index_questions(&document.questions);
+        let plan = CompiledPlan::from_compiled(&document, logic);
         Self {
-            document,
-            questions,
-            logic,
-            flow,
+            document: Arc::new(document),
+            plan,
         }
     }
 
@@ -547,26 +531,21 @@ impl PreparedDocument {
         &self.document
     }
 
-    /// 消费并返回底层文档。
+    /// 克隆底层文档的共享句柄，不复制题面内容。
+    #[must_use]
+    #[inline]
+    pub fn document_arc(&self) -> Arc<Document> {
+        Arc::clone(&self.document)
+    }
+
+    /// 消费并返回底层文档；共享句柄已被其他调用方持有时才复制一次。
     #[must_use]
     #[inline]
     pub fn into_document(self) -> Document {
-        self.document
+        Arc::unwrap_or_clone(self.document)
     }
 
-    /// 零拷贝构造借用当前已编译规则与流程的求值器（O(1)，不重新编译）。
-    #[must_use]
-    pub fn evaluator(&self) -> FlowEvaluator<'_> {
-        FlowEvaluator::from_prepared(&self.document, &self.questions, &self.logic, &self.flow)
-    }
-
-    /// 若文档配置了规则（`logic.is_some()`），零拷贝返回求值器；否则返回 `None`。
-    #[must_use]
-    pub fn report_evaluator(&self) -> Option<FlowEvaluator<'_>> {
-        self.document.logic.is_some().then(|| self.evaluator())
-    }
-
-    /// 复用已编译规则与流程校验提交答案（不分配 `question_states` 与 `path`）。
+    /// 复用已编译计划校验提交答案（不分配 `question_states` 与 `path`）。
     ///
     /// # Errors
     /// 答案存在未知/重复题目、不适用答案、类型或范围错误、缺失必填项时，
@@ -575,9 +554,21 @@ impl PreparedDocument {
         &self,
         answers: Vec<Answer>,
     ) -> Result<BTreeMap<Uuid, Value>, ValidationError> {
-        self.evaluator()
-            .validate_answers_only(answers)
+        self.plan
+            .validate_answers_only(&self.document, answers)
             .map_err(|error| ValidationError::new(error.question_id, error.to_string()))
+    }
+
+    /// 从已存储答案重算规范化答案与题目适用性，跳过路径分配。
+    ///
+    /// # Errors
+    /// 已存答案存在未知/重复题目、不适用答案、类型或范围错误、缺失必填项，
+    /// 或路径未到达 complete 时返回领域错误。
+    pub fn evaluate_stored_states(
+        &self,
+        answers: &BTreeMap<Uuid, Value>,
+    ) -> Result<StoredStates, LogicError> {
+        self.plan.evaluate_stored_states(&self.document, answers)
     }
 }
 

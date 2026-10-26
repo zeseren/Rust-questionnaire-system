@@ -63,7 +63,7 @@ pub struct QuestionRule {
     pub validate: Option<Value>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct RuleExpressions {
     pub(crate) question_id: Uuid,
     pub(crate) path: String,
@@ -93,14 +93,14 @@ pub struct DocumentLogicValues {
 }
 
 /// 计算变量的编译结果与来源路径绑在一起存储，避免两张平行表。
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct CompiledVariable {
     expression: CompiledExpression,
     path: String,
 }
 
 /// 完成拓扑排序、类型检查和前置依赖检查的文档规则。
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CompiledDocumentLogic {
     variables: BTreeMap<Uuid, CompiledVariable>,
     order: Vec<Uuid>,
@@ -185,11 +185,13 @@ impl CompiledDocumentLogic {
         &self.order
     }
 
-    /// 文档实际生效的流程：配置了流程时共享编译产物，否则构建隐式单页流程。
-    pub(crate) fn effective_flow(&self, questions: &[Question]) -> crate::flow::CompiledFlow {
-        self.flow
-            .clone()
-            .unwrap_or_else(|| crate::flow::CompiledFlow::implicit(questions))
+    /// 取出文档实际生效的流程：配置了流程时移出编译产物，否则构建隐式单页流程。
+    pub(crate) fn into_flow(mut self, questions: &[Question]) -> (Self, crate::flow::CompiledFlow) {
+        let flow = self
+            .flow
+            .take()
+            .unwrap_or_else(|| crate::flow::CompiledFlow::implicit(questions));
+        (self, flow)
     }
 
     /// 对已规范化且已排除不适用答案的上下文计算规则；不代替流程或答案校验。

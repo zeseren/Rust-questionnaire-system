@@ -10,8 +10,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseTransaction, EntityTrait, FromQueryResult,
-    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
-    sea_query::Expr,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait, sea_query::Expr,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::Arc;
@@ -248,7 +247,13 @@ async fn detail(
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<Json<SurveyDetail>> {
     let record = repository::owned_survey(&state.db, user.id, id).await?;
-    Ok(Json(survey_detail(record, Utc::now())?))
+    let meta = SurveyMetaRow::from(&record);
+    let document = serde_json::from_value(record.draft)?;
+    Ok(Json(survey_detail(
+        meta,
+        document,
+        repository::now_micros(),
+    )))
 }
 
 /// 按修订号保存整个草稿
@@ -547,10 +552,10 @@ async fn create_survey(
     document.validate_draft()?;
     let tx = state.db.begin().await?;
     repository::lock_session_user(&tx, headers, owner_id).await?;
-    let now = Utc::now();
+    let now = repository::now_micros();
     let meta = insert_draft(&tx, owner_id, &document, now).await?;
     // 直接使用请求中的已校验文档，无需把刚写入的 JSONB 再读回并反序列化。
-    let result = survey_detail_from_meta(meta, document, now);
+    let result = survey_detail(meta, document, now);
     tx.commit().await?;
     Ok(result)
 }
@@ -682,10 +687,10 @@ async fn save_survey_draft(
     let tx = state.db.begin().await?;
     // 只锁元数据行；旧草稿内容与本请求无关，不读取也不解码。
     let meta = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
-    let now = Utc::now();
-    let meta = repository::expire_survey_meta(&tx, meta, now).await?;
-    ensure_editable_status(meta.status)?;
-    ensure_revision_value(meta.revision, input.revision)?;
+    let now = repository::now_micros();
+    let meta = repository::expire_survey(&tx, meta, now).await?;
+    ensure_editable(&meta)?;
+    ensure_revision(&meta, input.revision)?;
     let next_revision = meta
         .revision
         .checked_add(1)
@@ -705,7 +710,7 @@ async fn save_survey_draft(
         updated_at: now,
         ..meta
     };
-    let result = survey_detail_from_meta(meta, input.document, now);
+    let result = survey_detail(meta, input.document, now);
     tx.commit().await?;
     Ok(result)
 }
@@ -717,25 +722,32 @@ async fn copy_survey(
     id: Uuid,
 ) -> AppResult<SurveyDetail> {
     let tx = state.db.begin().await?;
-    let source = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
-    let source_document = if source.status == SurveyStatus::Archived {
+    let source = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
+    let mut document: Document = if source.status == SurveyStatus::Archived {
         let version_id = source
             .current_version_id
             .ok_or_else(|| AppError::internal("归档问卷缺少发布版本"))?;
-        version::Entity::find_by_id(version_id)
-            .one(&tx)
-            .await?
-            .ok_or_else(|| AppError::internal("归档问卷缺少发布版本"))?
-            .document
+        match state.versions.get(id, version_id) {
+            Some(version) => version.prepared.document().clone(),
+            None => serde_json::from_value(
+                version::Entity::find_by_id(version_id)
+                    .filter(version::Column::SurveyId.eq(id))
+                    .select_only()
+                    .column(version::Column::Document)
+                    .into_tuple::<serde_json::Value>()
+                    .one(&tx)
+                    .await?
+                    .ok_or_else(|| AppError::internal("归档问卷缺少发布版本"))?,
+            )?,
+        }
     } else {
-        source.draft
+        serde_json::from_value(repository::load_survey_draft(&tx, id).await?)?
     };
-    let mut document: Document = serde_json::from_value(source_document)?;
     document.renew_ids();
     document.validate_draft()?;
-    let now = Utc::now();
+    let now = repository::now_micros();
     let meta = insert_draft(&tx, owner_id, &document, now).await?;
-    let result = survey_detail_from_meta(meta, document, now);
+    let result = survey_detail(meta, document, now);
     tx.commit().await?;
     Ok(result)
 }
@@ -768,14 +780,15 @@ async fn publish_survey(
     revision: i64,
 ) -> AppResult<(StatusCode, PublishedSurvey)> {
     let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
-    let now = Utc::now();
+    let record = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
+    let now = repository::now_micros();
     let record = repository::expire_survey(&tx, record, now).await?;
     ensure_editable(&record)?;
     ensure_revision(&record, revision)?;
 
-    // 先按当前规则校验这版内容，再判断是否为幂等重放。
-    let prepared = Arc::new(Document::deserialize(&record.draft)?.prepare_publish()?);
+    // 只读取草稿列并先按当前规则校验这版内容，再判断是否为幂等重放。
+    let draft = repository::load_survey_draft(&tx, id).await?;
+    let prepared = Document::deserialize(&draft)?.prepare_publish()?;
     if record.mode.is_none() {
         return Err(AppError::conflict("mode_required", "请先设置填写模式"));
     }
@@ -787,13 +800,10 @@ async fn publish_survey(
             .one(&tx)
             .await?
             .ok_or_else(|| AppError::internal("current version is missing"))?;
-        if current.document == record.draft {
+        if current.document == draft {
             let result = PublishedSurvey {
-                survey: survey_detail_from_meta(
-                    SurveyMetaRow::from(&record),
-                    prepared.document().clone(),
-                    now,
-                ),
+                // 重放直接消费已编译文档，不再深拷贝题面。
+                survey: survey_detail(record, prepared.into_document(), now),
                 version: VersionSummary {
                     id: current.id,
                     number: current.number,
@@ -834,13 +844,13 @@ async fn publish_survey(
         status,
         current_version_id: Some(version_id),
         updated_at: now,
-        ..SurveyMetaRow::from(&record)
+        ..record
     };
     version::Entity::insert(version::ActiveModel {
         id: Set(version_id),
         survey_id: Set(id),
         number: Set(number),
-        document: Set(record.draft),
+        document: Set(draft),
         published_at: Set(now),
     })
     .exec_without_returning(&tx)
@@ -854,8 +864,9 @@ async fn publish_survey(
     }
     .update_without_returning(&tx)
     .await?;
+    let prepared = Arc::new(prepared);
     let result = PublishedSurvey {
-        survey: survey_detail_from_meta(meta, prepared.document().clone(), now),
+        survey: survey_detail(meta, prepared.document().clone(), now),
         version: VersionSummary {
             id: version_id,
             number,
@@ -882,29 +893,37 @@ async fn update_collection(
     input: CollectionSettings,
 ) -> AppResult<SurveyDetail> {
     let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
-    let now = Utc::now();
+    let mut meta = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
+    let now = repository::now_micros();
     // 必须在覆盖 deadline 之前执行，否则延期会抹掉“已经到期”的事实。
-    let record = repository::expire_survey(&tx, record, now).await?;
-    ensure_editable(&record)?;
-    validate_mode_change(record.current_version_id, record.mode, input.mode)?;
+    meta = repository::expire_survey(&tx, meta, now).await?;
+    ensure_editable(&meta)?;
+    validate_mode_change(meta.current_version_id, meta.mode, input.mode)?;
     let deadline_changed = input.deadline.is_some();
-    let mut active = record.into_active_model();
+    let mut active = survey::ActiveModel {
+        id: Set(id),
+        updated_at: Set(now),
+        ..Default::default()
+    };
     if let Some(mode) = input.mode {
+        meta.mode = Some(mode);
         active.mode = Set(Some(mode));
     }
     if let Some(deadline) = input.deadline {
+        meta.deadline = deadline;
         active.deadline = Set(deadline);
     }
-    active.updated_at = Set(now);
-    let updated = active.update(&tx).await?;
+    // 不取回整行：避免把未改动的 1 MiB 草稿经 RETURNING 搬回内存。
+    active.update_without_returning(&tx).await?;
+    meta.updated_at = now;
     // 只有写入新截止时间时才可能产生新到期；它永远不会把 closed 改成 collecting。
-    let updated = if deadline_changed {
-        repository::expire_survey(&tx, updated, now).await?
+    let meta = if deadline_changed {
+        repository::expire_survey(&tx, meta, now).await?
     } else {
-        updated
+        meta
     };
-    let result = survey_detail(updated, now)?;
+    let document = serde_json::from_value(repository::load_survey_draft(&tx, id).await?)?;
+    let result = survey_detail(meta, document, now);
     tx.commit().await?;
     Ok(result)
 }
@@ -924,20 +943,25 @@ async fn change_status(
     action: CollectionAction,
 ) -> AppResult<SurveyDetail> {
     let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey(&tx, headers, owner_id, id).await?;
-    let now = Utc::now();
-    let record = repository::expire_survey(&tx, record, now).await?;
-    let current = record.status;
-    let target = next_collection_status(action, current, record.deadline, now)?;
-    let updated = if target != current {
-        let mut active = record.into_active_model();
-        active.status = Set(target);
-        active.updated_at = Set(now);
-        active.update(&tx).await?
-    } else {
-        record
-    };
-    let result = survey_detail(updated, now)?;
+    let mut meta = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
+    let now = repository::now_micros();
+    meta = repository::expire_survey(&tx, meta, now).await?;
+    let current = meta.status;
+    let target = next_collection_status(action, current, meta.deadline, now)?;
+    if target != current {
+        survey::ActiveModel {
+            id: Set(id),
+            status: Set(target),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .update_without_returning(&tx)
+        .await?;
+        meta.status = target;
+        meta.updated_at = now;
+    }
+    let document = serde_json::from_value(repository::load_survey_draft(&tx, id).await?)?;
+    let result = survey_detail(meta, document, now);
     tx.commit().await?;
     Ok(result)
 }
@@ -1032,8 +1056,8 @@ pub(crate) fn validate_mode_change(
     Ok(())
 }
 
-fn ensure_editable_status(status: SurveyStatus) -> AppResult<()> {
-    if status == SurveyStatus::Archived {
+pub(crate) fn ensure_editable(meta: &SurveyMetaRow) -> AppResult<()> {
+    if meta.status == SurveyStatus::Archived {
         return Err(AppError::conflict(
             "survey_archived",
             "已归档问卷不能编辑或发布，可以复制为新问卷",
@@ -1042,22 +1066,14 @@ fn ensure_editable_status(status: SurveyStatus) -> AppResult<()> {
     Ok(())
 }
 
-pub(crate) fn ensure_editable(record: &survey::Model) -> AppResult<()> {
-    ensure_editable_status(record.status)
-}
-
-fn ensure_revision_value(current: i64, revision: i64) -> AppResult<()> {
-    if current != revision {
+pub(crate) fn ensure_revision(meta: &SurveyMetaRow, revision: i64) -> AppResult<()> {
+    if meta.revision != revision {
         return Err(AppError::conflict(
             "revision_conflict",
             "草稿已在其他窗口修改，请重新读取后核对内容",
         ));
     }
     Ok(())
-}
-
-pub(crate) fn ensure_revision(record: &survey::Model, revision: i64) -> AppResult<()> {
-    ensure_revision_value(record.revision, revision)
 }
 
 pub(crate) fn ensure_future_deadline(
@@ -1074,7 +1090,7 @@ pub(crate) fn ensure_future_deadline(
 }
 
 /// 管理详情直接由元数据与已解析文档构造，避免把刚使用的文档再序列化后解析一次。
-pub(crate) fn survey_detail_from_meta(
+pub(crate) fn survey_detail(
     meta: SurveyMetaRow,
     draft: Document,
     now: DateTime<Utc>,
@@ -1094,13 +1110,4 @@ pub(crate) fn survey_detail_from_meta(
             .current_version_id
             .map(|_| format!("/api/public/surveys/{}", meta.id)),
     }
-}
-
-pub(crate) fn survey_detail(record: survey::Model, now: DateTime<Utc>) -> AppResult<SurveyDetail> {
-    let meta = SurveyMetaRow::from(&record);
-    Ok(survey_detail_from_meta(
-        meta,
-        serde_json::from_value(record.draft)?,
-        now,
-    ))
 }

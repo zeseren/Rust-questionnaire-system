@@ -234,7 +234,7 @@ impl FlowSession {
 
     /// 只读快照，序列化为 `{"ok":snapshot}`；借用会话集合，避免每次改答深拷贝。
     pub fn snapshot(&self) -> String {
-        envelope_generic(Ok(self.session.snapshot_ref()))
+        envelope_generic(Ok(self.session.snapshot()))
     }
 
     /// 从最终答案重建整份答卷：不读取也不修改会话当前的历史与输入。

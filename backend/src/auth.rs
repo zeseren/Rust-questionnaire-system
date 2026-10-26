@@ -184,9 +184,10 @@ async fn login(
     let current = lock_unchanged_credentials(&tx, candidate.id, &candidate.password_hash)
         .await?
         .ok_or_else(invalid_credentials)?;
-    // 已持有账号锁，再清理过期会话以保持 users → sessions 的固定锁序；
-    // 让 sessions_expiry 索引真正生效，避免过期记录无限堆积。
+    // 已持有账号锁，再清理当前账号的过期会话以保持 users → sessions 的固定锁序；
+    // 只动持锁账号的行，避免与其它账号的改密/禁用删除交叉形成死锁。
     session::Entity::delete_many()
+        .filter(session::Column::UserId.eq(candidate.id))
         .filter(session::Column::ExpiresAt.lte(Utc::now()))
         .exec(&tx)
         .await?;

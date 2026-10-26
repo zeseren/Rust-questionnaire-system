@@ -1,6 +1,7 @@
 //! 公开填写入口：题面只读与新答卷共用回收资格检查，成功重试不重新占用填写次数。
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use axum::{
     Json,
@@ -38,7 +39,8 @@ pub(crate) struct PublicSurvey {
     pub mode: FillingMode,
     pub deadline: Option<DateTime<Utc>>,
     /// purpose 是发布者说明的收集目的；文本只能作为普通文本展示。
-    pub document: Document,
+    #[schema(value_type = Document)]
+    pub document: Arc<Document>,
     pub privacy: PrivacyNotice,
 }
 
@@ -209,26 +211,20 @@ async fn read_public_survey(
         .current_version_id
         .ok_or_else(|| AppError::internal("collecting survey has no version"))?;
     // 命中缓存时完全不查询版本表；未命中时只投影所需列。
-    let cached = match state.versions.get(id, version_id) {
-        Some(version) => Ok(version),
-        None => Err(repository::load_version_row(&tx, id, version_id)
-            .await?
-            .ok_or_else(|| AppError::internal("current version is missing"))?),
-    };
+    let lookup = repository::lookup_version(&tx, &state.versions, id, version_id)
+        .await?
+        .ok_or_else(|| AppError::internal("current version is missing"))?;
     let privacy = privacy_notice(mode);
     // 先结束只读事务并释放连接，再反序列化 1 MiB JSONB 并编译规则。
     tx.commit().await?;
-    let version = match cached {
-        Ok(version) => version,
-        Err(row) => state.versions.insert_row(row, id)?,
-    };
+    let version = lookup.resolve(&state.versions, id)?;
     Ok(PublicSurvey {
         survey_id: id,
         version_id,
         version_number: version.number,
         mode,
         deadline: survey.deadline,
-        document: version.prepared.document().clone(),
+        document: version.prepared.document_arc(),
         privacy,
     })
 }

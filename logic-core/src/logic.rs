@@ -257,7 +257,7 @@ enum Arithmetic {
     Divide,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Binding {
     value_type: LogicValueType,
     /// 按 UUID 升序去重的选项身份；紧凑切片避免每个选项一个 B 树节点。
@@ -265,14 +265,14 @@ struct Binding {
     variable: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Node {
     kind: NodeKind,
     value_type: LogicValueType,
     path: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum NodeKind {
     Literal(LogicValue),
     Answer(Uuid),
@@ -287,7 +287,7 @@ enum NodeKind {
 }
 
 /// 只有编译入口能构造的规则；绑定与常量不会在执行期间被外部修改。
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CompiledExpression {
     root: Node,
     bindings: Arc<BTreeMap<Uuid, Binding>>,

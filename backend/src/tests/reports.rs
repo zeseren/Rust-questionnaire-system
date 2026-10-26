@@ -8,11 +8,13 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    domain::{AnswerState, Choice, Document, DocumentLogic, Question, QuestionKind, QuestionRule},
+    domain::{
+        AnswerState, Choice, Document, DocumentLogic, PreparedDocument, Question, QuestionKind,
+        QuestionRule,
+    },
     reports::{
         QuestionStatisticsData, ReportFilter, SnapshotRow, TimeRange, encode_csv, formula_safe,
-        plain_question_states, report_evaluator, resolve_version_id, snapshot_row,
-        summarize_question, update_mean,
+        plain_question_states, resolve_version_id, snapshot_row, summarize_question, update_mean,
     },
     tests::support::error_json,
 };
@@ -243,14 +245,12 @@ fn 逻辑夹具() -> 逻辑夹具 {
 #[test]
 fn 有逻辑文档按历史版本重建三态并过滤不适用答案() {
     let 夹具 = 逻辑夹具();
-    let evaluator = report_evaluator(&夹具.文档)
-        .expect("规则可编译")
-        .expect("必须求值");
+    let prepared = PreparedDocument::new(夹具.文档).expect("规则可编译");
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let 收据 = Uuid::new_v4();
 
     let 快照 = snapshot_row(
-        Some(&evaluator),
+        &prepared,
         收据,
         时间,
         答案(&[
@@ -323,7 +323,7 @@ fn 单选统计按选项计数并以外答数为分母() {
             Some(状态(&[(题.id, AnswerState::Unanswered)])),
         ),
     ];
-    let 统计 = summarize_question(题.clone(), &rows).expect("统计成功");
+    let 统计 = summarize_question(&题, &rows).expect("统计成功");
     assert_eq!(统计.question_id, 题.id);
     assert_eq!(统计.title, "单选题");
     assert_eq!(统计.answered_count, 2);
@@ -379,7 +379,7 @@ fn 多选占比合计可以超过百分之百() {
             Some(状态(&[(题.id, AnswerState::Answered)])),
         ),
     ];
-    let 统计 = summarize_question(题, &rows).expect("统计成功");
+    let 统计 = summarize_question(&题, &rows).expect("统计成功");
     assert_eq!(统计.answered_count, 2);
     match 统计.statistics {
         QuestionStatisticsData::MultipleChoice {
@@ -422,7 +422,7 @@ fn 文本答案按样本顺序返回并换算展示时区() {
             Some(状态(&[(题.id, AnswerState::Answered)])),
         ),
     ];
-    let 统计 = summarize_question(题, &rows).expect("统计成功");
+    let 统计 = summarize_question(&题, &rows).expect("统计成功");
     match 统计.statistics {
         QuestionStatisticsData::Text { answers } => {
             assert_eq!(answers.len(), 2);
@@ -452,7 +452,7 @@ fn 文本答案按样本顺序返回并换算展示时区() {
         答案(&[(多行题.id, json!("第一行\n第二行"))]),
         Some(状态(&[(多行题.id, AnswerState::Answered)])),
     )];
-    match summarize_question(多行题, &多行记录)
+    match summarize_question(&多行题, &多行记录)
         .expect("统计成功")
         .statistics
     {
@@ -501,7 +501,7 @@ fn 数字统计排除缺失但把零当作有效值() {
             Some(状态(&[(题.id, AnswerState::Skipped)])),
         ),
     ];
-    let 统计 = summarize_question(题, &rows).expect("统计成功");
+    let 统计 = summarize_question(&题, &rows).expect("统计成功");
     assert_eq!(统计.answered_count, 2, "缺失值不计入回答数");
     assert_eq!(统计.applicable_count, 3);
     assert_eq!(统计.unanswered_count, 1);
@@ -549,7 +549,7 @@ fn 评分统计按分值升序给出分布与均值() {
             Some(状态(&[(题.id, AnswerState::Unanswered)])),
         ),
     ];
-    let 统计 = summarize_question(题, &rows).expect("统计成功");
+    let 统计 = summarize_question(&题, &rows).expect("统计成功");
     assert_eq!(统计.answered_count, 2);
     assert_eq!(统计.applicable_count, 3);
     assert_eq!(统计.unanswered_count, 1);
@@ -622,7 +622,7 @@ fn 空样本集返回零计数与空统计() {
     );
     let 空样本: Vec<SnapshotRow> = Vec::new();
     for 题 in [单选, 多选, 数字, 评分, 文本] {
-        let 统计 = summarize_question(题, &空样本).expect("空样本统计成功");
+        let 统计 = summarize_question(&题, &空样本).expect("空样本统计成功");
         assert_eq!(统计.applicable_count, 0);
         assert_eq!(统计.answered_count, 0);
         assert_eq!(统计.unanswered_count, 0);
@@ -680,7 +680,7 @@ fn 三态计数满足适用加跳过等于样本总数() {
             Some(状态(&[(题.id, AnswerState::Skipped)])),
         ),
     ];
-    let 统计 = summarize_question(题, &rows).expect("统计成功");
+    let 统计 = summarize_question(&题, &rows).expect("统计成功");
     assert_eq!(统计.answered_count, 1);
     assert_eq!(统计.skipped_count, 2);
     assert_eq!(统计.applicable_count, 2);
@@ -725,7 +725,7 @@ async fn 损坏的已存答案返回内部错误且不回显内容() {
             答案(&[(题.id, 值.clone())]),
             Some(状态(&[(题.id, AnswerState::Answered)])),
         )];
-        let error = summarize_question(题, &rows)
+        let error = summarize_question(&题, &rows)
             .err()
             .expect("题型与已存答案不符必须报错");
         let (状态, _, body) = error_json(error).await;

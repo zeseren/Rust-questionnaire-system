@@ -10,9 +10,10 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
+    domain::Document,
     entities::{AuditAction, FillingMode, SurveyStatus, UserRole},
     error::AppError,
-    repository::ensure_collecting,
+    repository::{SurveyMetaRow, ensure_collecting},
     submissions::{
         idempotency_conflict, privacy_notice, submission_payload_hash, validate_idempotency_key,
     },
@@ -253,15 +254,15 @@ fn 回收设置的截止时间区分省略清空与设定() {
 #[tokio::test]
 async fn 归档问卷不能编辑或发布() {
     let mut record = survey_model();
-    ensure_editable(&record).expect("未发布草稿可编辑");
+    ensure_editable(&SurveyMetaRow::from(&record)).expect("未发布草稿可编辑");
     record.status = SurveyStatus::Collecting;
-    ensure_editable(&record).expect("回收中可编辑");
+    ensure_editable(&SurveyMetaRow::from(&record)).expect("回收中可编辑");
     record.status = SurveyStatus::Closed;
-    ensure_editable(&record).expect("已关闭仍可归档或复制");
+    ensure_editable(&SurveyMetaRow::from(&record)).expect("已关闭仍可归档或复制");
 
     record.status = SurveyStatus::Archived;
     断言冲突(
-        ensure_editable(&record).expect_err("归档必须拒绝"),
+        ensure_editable(&SurveyMetaRow::from(&record)).expect_err("归档必须拒绝"),
         "survey_archived",
         "已归档问卷不能编辑或发布，可以复制为新问卷",
     )
@@ -271,10 +272,11 @@ async fn 归档问卷不能编辑或发布() {
 #[tokio::test]
 async fn 修订号必须与读取时一致() {
     let record = survey_model();
-    ensure_revision(&record, 1).expect("修订号一致");
+    let meta = SurveyMetaRow::from(&record);
+    ensure_revision(&meta, 1).expect("修订号一致");
     for 冲突 in [0, 2, -1] {
         断言冲突(
-            ensure_revision(&record, 冲突).expect_err("必须拒绝"),
+            ensure_revision(&meta, 冲突).expect_err("必须拒绝"),
             "revision_conflict",
             "草稿已在其他窗口修改，请重新读取后核对内容",
         )
@@ -302,8 +304,9 @@ fn 管理详情只在发布后提供分享链接() {
     let now = Utc::now();
     let record = survey_model();
     let 编号 = record.id;
+    let 文档: Document = serde_json::from_value(record.draft.clone()).expect("草稿必须是合法文档");
 
-    let 草案 = survey_detail(record.clone(), now).expect("草稿必须是合法文档");
+    let 草案 = survey_detail(SurveyMetaRow::from(&record), 文档.clone(), now);
     assert_eq!(草案.id, 编号);
     assert_eq!(草案.status, SurveyStatus::Unpublished);
     assert_eq!(草案.revision, 1);
@@ -315,7 +318,7 @@ fn 管理详情只在发布后提供分享链接() {
     已发布.status = SurveyStatus::Collecting;
     已发布.current_version_id = Some(Uuid::new_v4());
     已发布.mode = Some(FillingMode::Anonymous);
-    let 详情 = survey_detail(已发布.clone(), now).expect("发布态必须是合法文档");
+    let 详情 = survey_detail(SurveyMetaRow::from(&已发布), 文档.clone(), now);
     assert_eq!(
         详情.share_url,
         Some(format!("/api/public/surveys/{编号}")),
@@ -326,9 +329,7 @@ fn 管理详情只在发布后提供分享链接() {
     let mut 已到期 = 已发布;
     已到期.deadline = Some(now - Duration::seconds(1));
     assert_eq!(
-        survey_detail(已到期, now)
-            .expect("到期问卷仍是合法文档")
-            .status,
+        survey_detail(SurveyMetaRow::from(&已到期), 文档, now).status,
         SurveyStatus::Closed,
         "详情必须按读取时刻物化状态"
     );

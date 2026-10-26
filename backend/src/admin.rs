@@ -284,7 +284,7 @@ async fn change_survey(
     repository::lock_survey_meta(&tx, id).await?;
     // 同上：只重验 Session，管理员身份已在入口校验且角色不可变。
     let actor = crate::auth::authenticate(&headers, &tx).await?;
-    let now = Utc::now();
+    let now = repository::now_micros();
     survey::ActiveModel {
         id: Set(id),
         taken_down: Set(input.taken_down),
