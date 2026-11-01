@@ -14,12 +14,12 @@ const messages = {
   arithmetic_error: '规则计算发生除零或数值溢出',
   dependency_cycle: '计算变量存在循环依赖',
   forward_reference: '题目规则不能依赖自身或后续题目',
-  invalid_flow: '流程结构或题目归属无效',
-  unavailable_dependency: '规则必须显式处理分支答案缺失',
-  invalid_event: '当前状态不允许此事件',
-  required_answer: '请回答当前必填题目',
-  constraint_failed: '答案不满足自定义约束',
-  unknown_condition: '条件尚不能确定',
+  invalid_flow: '流程结构无效、不可达或包含回跳',
+  unavailable_dependency: '此依赖可能被分支绕过，请明确处理缺失值',
+  invalid_event: '当前填写状态不接受此操作',
+  required_answer: '此题为必填项',
+  constraint_failed: '答案不符合自定义约束',
+  unknown_condition: '条件尚不能确定，请补全相关答案',
   inapplicable_answer: '提交包含隐藏或未进入分支的题目，请核对当前路径',
   screened_out: '筛选结束不产生正式答卷',
 }
@@ -39,6 +39,14 @@ test('每种错误码映射唯一中文文案并保留定位', () => {
   const forwarded = new LogicError('required_answer', '$.answers', 'question-1')
   assert.equal(forwarded.question_id, 'question-1')
   assert.equal(forwarded.message, messages.required_answer)
+})
+
+test('LogicError 保留后端传入的自定义文案', () => {
+  const error = new LogicError('invalid_flow', '$.logic.flow', null, '自定义后端文案')
+  assert.equal(error.message, '自定义后端文案')
+  assert.equal(error.code, 'invalid_flow')
+  assert.equal(error.path, '$.logic.flow')
+  assert.equal(error.question_id, null)
 })
 
 test('LogicTextError 追加从 1 开始的行列后缀', () => {

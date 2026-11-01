@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use questionnaire_logic::domain::{
     Answer, Choice, Document, MAX_CHOICES, MAX_QUESTIONS, MAX_TEXT_ANSWER_LENGTH, MAX_TEXT_LENGTH,
-    MAX_TEXTAREA_ANSWER_LENGTH, Question, QuestionKind,
+    MAX_TEXTAREA_ANSWER_LENGTH, PreparedDocument, Question, QuestionKind,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -237,6 +237,9 @@ fn 规则编译失败映射为可定位的校验错误() {
         .expect("规则包结构必须合法"),
     );
 
+    // 规则未写完时草稿仍可保存，编译错误只在发布、提交或构建发布态时暴露。
+    doc.validate_draft().expect("规则未编译不应阻止草稿保存");
+
     let failure = doc.compile_logic().unwrap_err();
     assert_eq!(failure.question_id, Some(id(999)));
     assert!(
@@ -246,7 +249,8 @@ fn 规则编译失败映射为可定位的校验错误() {
     );
 
     for mapped in [
-        doc.validate_draft().unwrap_err(),
+        doc.validate_publish().unwrap_err(),
+        PreparedDocument::new(doc.clone()).unwrap_err(),
         doc.validate_answers(vec![answer(1, json!("文本"))])
             .unwrap_err(),
     ] {

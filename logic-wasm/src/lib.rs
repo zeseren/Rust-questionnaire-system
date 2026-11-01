@@ -176,32 +176,21 @@ pub fn evaluate_document_logic(
 
 /// 有状态的填写会话：文档与状态留在 wasm 线性内存，避免每次改答重编译。
 ///
-/// 核心的 `FlowSession<'a>` 借用 `&'a Document`，而 wasm-bindgen 导出类只能持
-/// owned 字段，两者不能直接组合。这里的取舍：文档放进 `Box<Document>`（地址
-/// 稳定、随会话 Drop 一并释放，不使用 `Box::leak`——那会让每次创建会话都
-/// 永久泄漏一份文档），再把该引用的生命周期安全地延伸为 `'static` 交给核心
-/// 会话。安全性由三条不变量保证：
-///
-/// 1. 堆分配地址稳定：移动 `Box<Document>` 只搬移指针而不移动堆上的 `Document`，
-///    且本 crate 从不重写或提前释放 `document` 字段；
-/// 2. 字段声明顺序 `session` 在 `document` 之前，Drop 时先释放会话再释放文档，
-///    借用永远不悬空；
-/// 3. 会话只在 `new` / `dispatch` / `snapshot` / `evaluate_answers` 内使用，
-///    期间 `self` 可变/不可变借用始终有效。
+/// 核心的 `FlowSession` 在构造时接管 `Document` 的所有权，导出类只需持有
+/// 会话本身，借用生命周期与指针稳定性都由核心类型自行保证。
 ///
 /// 仅在 wasm32 目标导出：wasm-bindgen 的类导出 wrapper 在原生目标会 panic
 /// （“function not implemented on non-wasm32 targets”），纯函数无此限制。
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct FlowSession {
-    session: CoreFlowSession<'static>,
-    _document: Box<Document>,
+    session: CoreFlowSession,
 }
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl FlowSession {
-    /// 绑定文档并创建空会话；失败时返回 JSON 错误字符串（非信封，见计划约定）。
+    /// 解析文档、接管所有权并创建空会话；失败时返回 JSON 错误字符串（非信封）。
     #[wasm_bindgen(constructor)]
     pub fn new(document_json: String) -> Result<FlowSession, JsValue> {
         let document: Document = serde_json::from_str(&document_json).map_err(|error| {
@@ -209,17 +198,10 @@ impl FlowSession {
                 "document_json 不是合法 JSON：{error}"
             )))))
         })?;
-        let document = Box::new(document);
-        // SAFETY：引用指向 Box 的堆分配，移动 Box 只搬指针不搬堆对象，地址始终稳定；
-        // 字段声明顺序保证 session 先于 document 释放，失败路径引用亦不逃逸。
-        let document_ref: &'static Document = unsafe { &*(&*document as *const Document) };
-        let session = CoreFlowSession::new(document_ref).map_err(|error| {
+        let session = CoreFlowSession::from_document(document).map_err(|error| {
             JsValue::from_str(&envelope_generic::<Value>(Err(domain_error(error))))
         })?;
-        Ok(Self {
-            session,
-            _document: document,
-        })
+        Ok(Self { session })
     }
 
     /// 应用一个流程事件；事件 JSON 反序列化失败或流程拒绝时返回 error 信封。

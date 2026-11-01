@@ -76,9 +76,9 @@ impl AppError {
         Self::new(StatusCode::FORBIDDEN, "forbidden", "没有执行此操作的权限")
     }
 
-    /// 内部错误的统一出口：记录错误类别与发起位置，并生成可回传检索的标识。
+    /// 内部错误的统一出口：记录错误原因与发起位置，并生成可回传检索的标识。
     ///
-    /// 原始错误可能包含数据库中的原始值或 SQL 文本，绝不记录 `error.to_string()`；
+    /// 错误原因只写入服务端日志，不会出现在响应体中；
     /// `#[track_caller]` 让位置指向真正发起操作的位置，而不是本函数。
     /// 用于 `map_err` 时须写成 `|error| AppError::internal(error)`，避免函数适配器丢失位置。
     #[track_caller]
@@ -88,6 +88,7 @@ impl AppError {
             error_id = %error_id,
             error_kind = std::any::type_name_of_val(&error),
             location = %std::panic::Location::caller(),
+            error = %error,
             "internal operation failed"
         );
         Self {
@@ -130,12 +131,6 @@ impl IntoResponse for AppError {
 impl From<sea_orm::DbErr> for AppError {
     #[track_caller]
     fn from(error: sea_orm::DbErr) -> Self {
-        Self::internal(error)
-    }
-}
-impl From<sqlx::Error> for AppError {
-    #[track_caller]
-    fn from(error: sqlx::Error) -> Self {
         Self::internal(error)
     }
 }

@@ -260,8 +260,8 @@ enum Arithmetic {
 #[derive(Debug)]
 struct Binding {
     value_type: LogicValueType,
-    /// 按 UUID 升序去重的选项身份；紧凑切片避免每个选项一个 B 树节点。
-    options: Box<[Uuid]>,
+    /// 选项身份；每题至多 [`MAX_CHOICES`] 个，线性查找即可。
+    options: Vec<Uuid>,
     variable: bool,
 }
 
@@ -426,27 +426,20 @@ impl CompilationContext {
         }
         let mut bindings = BTreeMap::new();
         for question in questions {
-            let (value_type, options) = match &question.kind {
-                QuestionKind::SingleChoice { options } => {
-                    (LogicValueType::Choice, options.as_slice())
-                }
-                QuestionKind::MultipleChoice { options, .. } => {
-                    (LogicValueType::Choices, options.as_slice())
-                }
-                QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => {
-                    (LogicValueType::Text, &[][..])
-                }
-                QuestionKind::Number { .. } | QuestionKind::Rating { .. } => {
-                    (LogicValueType::Number, &[][..])
-                }
+            let options = question.kind.options().unwrap_or(&[]);
+            let value_type = match &question.kind {
+                QuestionKind::SingleChoice { .. } => LogicValueType::Choice,
+                QuestionKind::MultipleChoice { .. } => LogicValueType::Choices,
+                QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => LogicValueType::Text,
+                QuestionKind::Number { .. } | QuestionKind::Rating { .. } => LogicValueType::Number,
             };
-            // 选项身份排序后存入紧凑切片：重复检查、空身份检查与后续包含判断都走二分。
+            // 排序只为让重复身份相邻，便于一次扫描发现。
             let mut ids: Vec<Uuid> = options.iter().map(|option| option.id).collect();
             ids.sort_unstable();
             if question.id.is_nil()
                 || bindings.contains_key(&question.id)
                 || ids.windows(2).any(|pair| pair[0] == pair[1])
-                || ids.binary_search(&Uuid::nil()).is_ok()
+                || ids.contains(&Uuid::nil())
             {
                 return Err(error(
                     LogicErrorCode::InvalidReference,
@@ -465,7 +458,7 @@ impl CompilationContext {
                 question.id,
                 Binding {
                     value_type,
-                    options: ids.into_boxed_slice(),
+                    options: ids,
                     variable: false,
                 },
             );
@@ -478,7 +471,7 @@ impl CompilationContext {
                 *id,
                 Binding {
                     value_type: *value_type,
-                    options: Box::default(),
+                    options: Vec::new(),
                     variable: true,
                 },
             );
@@ -744,7 +737,7 @@ fn selection(
     let mut ids = BTreeSet::new();
     for raw in options {
         let option = reference(&raw, path).map_err(|_| invalid())?;
-        if binding.options.binary_search(&option).is_err() || !ids.insert(option) {
+        if !binding.options.contains(&option) || !ids.insert(option) {
             return Err(invalid());
         }
     }
@@ -777,7 +770,7 @@ fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<Logic
             let option = raw
                 .as_str()
                 .and_then(crate::identity::parse)
-                .filter(|option| binding.options.binary_search(option).is_ok())
+                .filter(|option| binding.options.contains(option))
                 .ok_or_else(invalid)?;
             Ok(LogicValue::Choice(option))
         }
@@ -791,7 +784,7 @@ fn read_answer(raw: Option<&Value>, binding: &Binding, id: Uuid) -> Result<Logic
                 let option = value
                     .as_str()
                     .and_then(crate::identity::parse)
-                    .filter(|option| binding.options.binary_search(option).is_ok())
+                    .filter(|option| binding.options.contains(option))
                     .ok_or_else(invalid)?;
                 if !options.insert(option) {
                     return Err(invalid());
@@ -1041,7 +1034,7 @@ mod tests {
             id(1),
             Binding {
                 value_type: LogicValueType::Choice,
-                options: Box::from([id(101), id(102)]),
+                options: vec![id(101), id(102)],
                 variable: false,
             },
         );
@@ -1049,7 +1042,7 @@ mod tests {
             id(2),
             Binding {
                 value_type: LogicValueType::Choices,
-                options: Box::from([id(201)]),
+                options: vec![id(201)],
                 variable: false,
             },
         );
@@ -1057,7 +1050,7 @@ mod tests {
             id(3),
             Binding {
                 value_type: LogicValueType::Text,
-                options: Box::default(),
+                options: Vec::new(),
                 variable: false,
             },
         );
@@ -1065,7 +1058,7 @@ mod tests {
             id(4),
             Binding {
                 value_type: LogicValueType::Number,
-                options: Box::default(),
+                options: Vec::new(),
                 variable: true,
             },
         );
@@ -1159,7 +1152,7 @@ mod tests {
     fn 答案读取拒绝越界与超量选项() {
         let 单选 = Binding {
             value_type: LogicValueType::Choice,
-            options: Box::from([id(101)]),
+            options: vec![id(101)],
             variable: false,
         };
         for 值 in [json!(id(999).to_string()), json!("not-a-uuid"), json!(101)] {
@@ -1170,7 +1163,7 @@ mod tests {
 
         let 多选 = Binding {
             value_type: LogicValueType::Choices,
-            options: Box::from([id(101), id(102), id(103)]),
+            options: vec![id(101), id(102), id(103)],
             variable: false,
         };
         let 超量 = read_answer(

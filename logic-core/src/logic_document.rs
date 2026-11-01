@@ -7,7 +7,7 @@ use serde_json::{Number, Value, json};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::domain::{MAX_QUESTIONS, Question, QuestionKind};
+use crate::domain::{MAX_QUESTIONS, Question};
 use crate::logic::{
     CompilationContext, CompiledExpression, LogicError, LogicErrorCode, LogicValue, LogicValueType,
     check_raw_budget, error,
@@ -291,9 +291,7 @@ impl DocumentLogic {
             .collect();
         let mut occupied: BTreeSet<_> = questions.iter().map(|question| question.id).collect();
         for question in questions {
-            if let QuestionKind::SingleChoice { options }
-            | QuestionKind::MultipleChoice { options, .. } = &question.kind
-            {
+            if let Some(options) = question.kind.options() {
                 occupied.extend(options.iter().map(|option| option.id));
             }
         }

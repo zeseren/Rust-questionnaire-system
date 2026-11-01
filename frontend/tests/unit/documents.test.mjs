@@ -5,6 +5,7 @@ import {
   TEXT_ANSWER_LIMITS,
   duplicateQuestion,
   duplicateSurveyDocument,
+  moveQuestion,
   newQuestion,
   removeQuestion,
 } from '../../src/documents.ts'
@@ -94,6 +95,29 @@ test('duplicateSurveyDocument 同步重写整卷全部引用', () => {
   assert.equal(duplicated.logic.flow.entry, duplicated.logic.flow.nodes[0].id)
   const compiled = compileDocumentLogic(duplicated.logic, duplicated.questions)
   assert.equal(compiled.variableOrder.length, 2, '菱形文档声明两个计算变量')
+})
+
+test('moveQuestion 同步流程页面与题目顺序', () => {
+  const document = readFlowDocument('diamond')
+  document.logic.flow.nodes[0].question_ids.push(document.questions[1].id)
+  document.logic.flow.nodes[2].question_ids = [document.questions[2].id]
+  document.logic.rules = []
+  document.logic.variables = []
+  document.logic.flow.nodes[1].branches[0].when = { op: 'boolean', value: true }
+  const original = document.questions.map((question) => question.id)
+  moveQuestion(document, 0, 1)
+  assert.deepEqual(
+    document.questions.map((question) => question.id),
+    [original[1], original[0], ...original.slice(2)],
+  )
+  const pages = document.logic.flow.nodes.filter((node) => node.type === 'page')
+  assert.deepEqual(
+    pages.flatMap((page) => page.question_ids),
+    document.questions.map((question) => question.id),
+    '所有页面按节点顺序拼接后必须等于题目顺序',
+  )
+  const compiled = compileDocumentLogic(document.logic, document.questions)
+  assert.deepEqual(compiled.variableOrder, [], '移动题目后流程仍应通过编译')
 })
 
 test('removeQuestion 清理题目、规则与流程归属', () => {

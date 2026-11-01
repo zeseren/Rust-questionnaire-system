@@ -98,7 +98,7 @@ function revive(error: EnvelopeError): LogicError | LogicTextError {
       error.question_id,
       error.message,
     )
-  return new LogicError(error.code, error.path, error.question_id)
+  return new LogicError(error.code, error.path, error.question_id, error.message)
 }
 
 /** `FlowSession` 构造失败只能抛出携带 JSON 错误串的 JS 值（wasm-bindgen 契约）。 */

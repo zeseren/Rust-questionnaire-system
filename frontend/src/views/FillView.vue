@@ -9,7 +9,7 @@ import { api, ApiError, message } from '../api'
 import { buildAnswers, isAnswered, type Inputs } from '../answers'
 import { dateTime, shareLink } from '../format'
 import { useAuth } from '../stores'
-import type { Answer, PublicSurvey, Receipt, Submission, User } from '../types'
+import type { Answer, PublicSurvey, Receipt, Submission } from '../types'
 import SurveyFields from '../components/SurveyFields.vue'
 import FlowFields from '../components/FlowFields.vue'
 import AuthForm from '../components/AuthForm.vue'
@@ -32,7 +32,6 @@ const loginNeeded = ref(false)
 const uncertain = ref(false)
 const versionChanged = ref(false)
 const pending = shallowRef<Submission | null>(null)
-const account = ref<{ id: string; username: string } | null>(null)
 const flowFields = ref<InstanceType<typeof FlowFields>>()
 const flowAnswered = ref(0)
 function flowChanged(count: number) {
@@ -71,10 +70,6 @@ function resetFill() {
   flowFields.value?.reset()
 }
 async function loginSuccess() {
-  if (account.value && auth.user?.id !== account.value.id) {
-    error.value = '请使用本次提交时的同一账号重新登录，当前输入仍然保留。'
-    return
-  }
   loginNeeded.value = false
   error.value = ''
   if (!survey.value) await load()
@@ -114,17 +109,13 @@ async function submit(flowAnswers?: Answer[]) {
       })),
     }
   }
+  // 登录态由提交接口鉴权；未登录时先弹出登录表单，不额外预请求账号信息。
+  if (survey.value.mode === 'login_once' && !auth.user) {
+    loginNeeded.value = true
+    return
+  }
   busy.value = true
   try {
-    if (survey.value.mode === 'login_once') {
-      const current = await api<User>('/api/auth/me')
-      auth.user = current
-      if (account.value && current.id !== account.value.id) {
-        loginNeeded.value = true
-        throw new ApiError(401, 'account_changed', '请使用本次提交时的同一账号重试。')
-      }
-      account.value = { id: current.id, username: current.username }
-    }
     const result = await api<Receipt>(`/api/public/surveys/${id}/responses`, 'POST', pending.value)
     if (result.status !== 'submitted')
       throw new ApiError(0, 'invalid_response', '尚未收到完整回执，请重试原提交。')
@@ -149,10 +140,7 @@ async function submit(flowAnswers?: Answer[]) {
         reason.status === 401 ||
         reason.code === 'idempotency_conflict'
     } else uncertain.value = true
-    if (!uncertain.value) {
-      pending.value = null
-      account.value = null
-    }
+    if (!uncertain.value) pending.value = null
   } finally {
     busy.value = false
     await nextTick()
@@ -313,14 +301,9 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
     </template>
   </div>
   <Modal v-if="loginNeeded && survey" title="请重新登录后继续" :dismissible="false">
-    <p class="subtle mb">
-      当前回答仍然保留。{{ account ? '请使用提交时的同一账号登录。' : '请登录后重试提交。' }}
-    </p>
+    <p class="subtle mb">当前回答仍然保留。请登录后重试提交。</p>
     <ErrorNotice :message="error" />
-    <AuthForm
-      :initial-username="account?.username || auth.user?.username"
-      @success="loginSuccess"
-    />
+    <AuthForm :initial-username="auth.user?.username" @success="loginSuccess" />
     <div class="actions between mt">
       <RouterLink class="text-button" to="/">先返回首页</RouterLink>
     </div>

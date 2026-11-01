@@ -32,12 +32,12 @@ const messages: Record<LogicErrorCode, string> = {
   arithmetic_error: '规则计算发生除零或数值溢出',
   dependency_cycle: '计算变量存在循环依赖',
   forward_reference: '题目规则不能依赖自身或后续题目',
-  invalid_flow: '流程结构或题目归属无效',
-  unavailable_dependency: '规则必须显式处理分支答案缺失',
-  invalid_event: '当前状态不允许此事件',
-  required_answer: '请回答当前必填题目',
-  constraint_failed: '答案不满足自定义约束',
-  unknown_condition: '条件尚不能确定',
+  invalid_flow: '流程结构无效、不可达或包含回跳',
+  unavailable_dependency: '此依赖可能被分支绕过，请明确处理缺失值',
+  invalid_event: '当前填写状态不接受此操作',
+  required_answer: '此题为必填项',
+  constraint_failed: '答案不符合自定义约束',
+  unknown_condition: '条件尚不能确定，请补全相关答案',
   inapplicable_answer: '提交包含隐藏或未进入分支的题目，请核对当前路径',
   screened_out: '筛选结束不产生正式答卷',
 }
@@ -47,8 +47,13 @@ export class LogicError extends Error {
   readonly path: string
   readonly question_id: string | null
 
-  constructor(code: LogicErrorCode, path: string, questionId: string | null = null) {
-    super(messages[code])
+  constructor(
+    code: LogicErrorCode,
+    path: string,
+    questionId: string | null = null,
+    message: string = messages[code],
+  ) {
+    super(message)
     this.name = 'LogicError'
     this.code = code
     this.path = path

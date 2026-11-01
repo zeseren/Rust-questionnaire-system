@@ -95,6 +95,15 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
     window.clearTimeout(timer)
   }
 }
+/** 触发浏览器下载；对象 URL 延迟回收，避免部分浏览器在点击后仍在读取。 */
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 export async function download(path: string, filename: string): Promise<void> {
   const { response, timer } = await send(path)
   let blob: Blob
@@ -103,10 +112,5 @@ export async function download(path: string, filename: string): Promise<void> {
   } finally {
     window.clearTimeout(timer)
   }
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.click()
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  downloadBlob(blob, filename)
 }

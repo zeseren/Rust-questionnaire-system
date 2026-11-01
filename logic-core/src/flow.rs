@@ -1,6 +1,7 @@
 //! 流程只能向前转换；改答按前置有效答案重算路径，回退不恢复已清除的答案。
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -494,26 +495,35 @@ pub(crate) struct CompiledPlan {
     flow: CompiledFlow,
 }
 
-/// 只持有不可变题面与编译计划；交互会话和服务端重建共用同一段顺序求值。
+/// 持有共享文档句柄与编译计划；交互会话和服务端重建共用同一段顺序求值。
 #[derive(Debug)]
-pub struct FlowEvaluator<'a> {
-    document: &'a Document,
+pub struct FlowEvaluator {
+    document: Arc<Document>,
     plan: CompiledPlan,
 }
 
-impl<'a> FlowEvaluator<'a> {
-    /// 编译并绑定文档；同一发布版本可复用此实例重建多份答卷。
+impl FlowEvaluator {
+    /// 复制文档后编译；同一发布版本可复用此实例重建多份答卷。
     ///
     /// # 错误
     /// 草稿结构、规则或流程不合法时返回定位错误。
-    pub fn new(document: &'a Document) -> Result<Self, LogicError> {
+    pub fn new(document: &Document) -> Result<Self, LogicError> {
+        Self::from_document(document.clone())
+    }
+
+    /// 取得文档所有权后编译，避免复制题面。
+    ///
+    /// # 错误
+    /// 与 [`Self::new`] 相同。
+    pub fn from_document(document: Document) -> Result<Self, LogicError> {
         document
             .validate_draft_fields()
             .map_err(|failure| error(LogicErrorCode::InvalidFlow, "$", failure.question_id))?;
         let logic = document.compile_logic()?;
+        let plan = CompiledPlan::from_compiled(&document, logic);
         Ok(Self {
-            document,
-            plan: CompiledPlan::from_compiled(document, logic),
+            document: Arc::new(document),
+            plan,
         })
     }
 
@@ -522,7 +532,7 @@ impl<'a> FlowEvaluator<'a> {
     /// # 错误
     /// 重复/未知题目、不适用答案、校验失败、未决条件或筛选结束均拒绝。
     pub fn evaluate_answers(&self, answers: Vec<Answer>) -> Result<EvaluatedResponse, LogicError> {
-        self.plan.evaluate_answers(self.document, answers)
+        self.plan.evaluate_answers(&self.document, answers)
     }
 
     /// 校验答案并返回规范化结果，跳过 `question_states` 与 `path` 的构建分配。
@@ -533,7 +543,7 @@ impl<'a> FlowEvaluator<'a> {
         &self,
         answers: Vec<Answer>,
     ) -> Result<BTreeMap<Uuid, Value>, LogicError> {
-        self.plan.validate_answers_only(self.document, answers)
+        self.plan.validate_answers_only(&self.document, answers)
     }
 
     /// 从已存储答案重算规则并返回规范化答案与题目适用性，跳过路径构建。
@@ -544,7 +554,7 @@ impl<'a> FlowEvaluator<'a> {
         &self,
         answers: &BTreeMap<Uuid, Value>,
     ) -> Result<StoredStates, LogicError> {
-        self.plan.evaluate_stored_states(self.document, answers)
+        self.plan.evaluate_stored_states(&self.document, answers)
     }
 }
 
@@ -835,22 +845,32 @@ impl CompiledPlan {
 
 /// 状态只能通过事件修改，不能从客户端反序列化可信运行历史。
 #[derive(Debug)]
-pub struct FlowSession<'a> {
-    evaluator: FlowEvaluator<'a>,
+pub struct FlowSession {
+    evaluator: FlowEvaluator,
     inputs: BTreeMap<Uuid, Value>,
     history: Vec<usize>,
     projection: Projection,
     cleared: Vec<Uuid>,
 }
 
-impl<'a> FlowSession<'a> {
-    /// 绑定不可变文档并创建空填写会话；未配置 `logic` 的问卷使用内存中的单页流程。
+impl FlowSession {
+    /// 复制文档后创建空填写会话；未配置 `logic` 的问卷使用内存中的单页流程。
     ///
     /// # 错误
     /// 草稿、规则或流程不合法时拒绝启动。
-    pub fn new(document: &'a Document) -> Result<Self, LogicError> {
-        let evaluator = FlowEvaluator::new(document)?;
-        let projection = evaluator.plan.project(evaluator.document, &BTreeMap::new());
+    pub fn new(document: &Document) -> Result<Self, LogicError> {
+        Self::from_document(document.clone())
+    }
+
+    /// 取得文档所有权后创建空填写会话，避免复制题面。
+    ///
+    /// # 错误
+    /// 与 [`Self::new`] 相同。
+    pub fn from_document(document: Document) -> Result<Self, LogicError> {
+        let evaluator = FlowEvaluator::from_document(document)?;
+        let projection = evaluator
+            .plan
+            .project(&evaluator.document, &BTreeMap::new());
         Ok(Self {
             evaluator,
             inputs: BTreeMap::new(),
@@ -924,7 +944,7 @@ impl<'a> FlowSession<'a> {
                 let projection = self
                     .evaluator
                     .plan
-                    .project(self.evaluator.document, &self.inputs);
+                    .project(&self.evaluator.document, &self.inputs);
                 // 单遍裁剪输入并同步收集被清除的题目；路径仍保持投影顺序。
                 let cleared = &mut self.cleared;
                 cleared.clear();

@@ -125,16 +125,15 @@ $Stats | Select-Object version_number, total_count, timezone
 ### 3.2 草稿 `revision` 与发布版本 `version`
 
 1. **草稿乐观锁**：`surveys.revision` 从 `1` 起始，每次 `PUT /api/surveys/{id}/draft` 保存成功后递增。保存与发布均需传入客户端持有的 `revision`，不匹配时返回 `409 revision_conflict`。
-2. **发布顺序与幂等重放**：`POST /api/surveys/{id}/publish` 在持锁事务内**先**校验可编辑状态、`revision` 一致性、`Document::validate_publish()` 及 `mode` 非空；校验全部通过后，再比对当前草稿与 `current_version_id` 指向的版本内容——若完全相同则直接返回 `200 OK` 与当前版本（不新增版本号），否则插入 `versions` 新行（`number = max + 1`）并更新 `current_version_id`，返回 `201 Created`。
+2. **发布顺序与幂等重放**：`POST /api/surveys/{id}/publish` 在持锁事务内校验可编辑状态、`revision` 一致性及 `mode` 非空后，先比对当前草稿与 `current_version_id` 指向的版本内容——若完全相同则直接返回 `200 OK` 与当前版本（不新增版本号，且先于发布内容校验）；否则执行 `Document::prepare_publish()`，插入 `versions` 新行（`number = max + 1`）并更新 `current_version_id`，返回 `201 Created`。
 3. **状态正交性**：
    - 截止时间（`deadline`）到期后问卷自动按 `closed` 处理；后续延长或清空 `deadline` 不会自动重开回收，必须显式调用 `POST .../resume`。
    - 管理员下架标志 `taken_down` 与发布者的 `status` 相互独立：发布者 `resume` 不会解除 `taken_down`，管理员恢复问卷也不会自动开启已关闭或已归档的问卷。
 
-### 3.3 并发锁序与只读快照
+### 3.3 并发控制与无锁只读查询
 
-- **单一写锁顺序**：所有涉及问卷写入的事务统一遵循 **`users` 行锁（`FOR SHARE` 或 `FOR NO KEY UPDATE`）→ `surveys` 行锁（`FOR UPDATE`）**（集中在 `repository.rs`）。
-- **持锁重验 Session**：请求体读取期间账号可能发生退出、改密或被管理员禁用。因此所有需要认证的写操作在进入事务并锁住用户行后，通过 `repository::lock_session_user` 重新校验当前 Cookie Session，确保已失效会话绝不落库。
-- **只读事务快照**：公开读题面（`GET /api/public/surveys/{id}`）、问卷列表、答卷列表、统计、CSV 导出与管理员列表统一使用 `IsolationLevel::RepeatableRead` + `AccessMode::ReadOnly` 只读事务，不持有任何 `FOR UPDATE`/`FOR SHARE` 锁，读操作绝不阻塞并发答卷提交。列表查询通过 JSONB 字段投影（`cast_json_field("title")`）仅读取标题，不反序列化整份 `Document`。
+- **按需问卷行锁**：发布者修改问卷（保存草稿、发布、关闭/恢复/归档）在事务内通过 `repository::lock_owned_survey_meta` 直接对 `surveys` 元数据行加 `FOR UPDATE` 排他锁并核对归属；公开提交答卷对 `surveys` 行加 `FOR SHARE` 共享锁，既与关闭/下架互斥，又允许同一问卷的并发答卷提交并行执行。
+- **无锁只读查询**：公开读题面（`GET /api/public/surveys/{id}`）、问卷列表、答卷列表、统计、CSV 导出与管理员列表直接通过连接池执行普通只读查询，不开启长事务或持有行锁。列表查询通过 JSONB 字段投影（`cast_json_field("title")`）仅读取标题，不反序列化整份 `Document`。
 
 ### 3.4 幂等提交判定流程
 

@@ -2,18 +2,13 @@
 //!
 //! 草稿与发布版本分别保存；修改草稿不会影响填写者已经读取的题面。
 
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-};
+use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseTransaction, EntityTrait, FromQueryResult,
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait, sea_query::Expr,
 };
 use serde::{Deserialize, Deserializer, Serialize};
-use std::sync::Arc;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
@@ -25,7 +20,7 @@ use crate::{
     entities::{survey, version},
     error::{AppError, AppResult, ErrorResponse},
     http::{ApiJson, ApiPath, ApiQuery, Page, Pagination},
-    repository::{self, CachedVersion, SurveyMetaRow},
+    repository::{self, SurveyMetaRow},
 };
 
 pub(crate) use crate::entities::{FillingMode, SurveyStatus};
@@ -195,10 +190,9 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
 async fn create(
     State(state): State<AppState>,
     user: AuthUser,
-    headers: HeaderMap,
     ApiJson(input): ApiJson<CreateSurvey>,
 ) -> AppResult<(StatusCode, Json<SurveyDetail>)> {
-    let result = create_survey(&state, user.id, &headers, input.document).await?;
+    let result = create_survey(&state, user.id, input.document).await?;
     Ok((StatusCode::CREATED, Json(result)))
 }
 
@@ -277,13 +271,10 @@ async fn detail(
 async fn save_draft(
     State(state): State<AppState>,
     user: AuthUser,
-    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<SaveDraft>,
 ) -> AppResult<Json<SurveyDetail>> {
-    Ok(Json(
-        save_survey_draft(&state, user.id, &headers, id, input).await?,
-    ))
+    Ok(Json(save_survey_draft(&state, user.id, id, input).await?))
 }
 
 /// 预览已保存草稿，不产生正式答卷
@@ -337,10 +328,9 @@ async fn preview(
 async fn copy(
     State(state): State<AppState>,
     user: AuthUser,
-    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<(StatusCode, Json<SurveyDetail>)> {
-    let result = copy_survey(&state, user.id, &headers, id).await?;
+    let result = copy_survey(&state, user.id, id).await?;
     Ok((StatusCode::CREATED, Json(result)))
 }
 
@@ -361,10 +351,9 @@ async fn copy(
 async fn delete(
     State(state): State<AppState>,
     user: AuthUser,
-    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<StatusCode> {
-    delete_survey(&state, user.id, &headers, id).await?;
+    delete_survey(&state, user.id, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -393,11 +382,10 @@ async fn delete(
 async fn publish(
     State(state): State<AppState>,
     user: AuthUser,
-    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<PublishSurvey>,
 ) -> AppResult<(StatusCode, Json<PublishedSurvey>)> {
-    let (status, result) = publish_survey(&state, user.id, &headers, id, input.revision).await?;
+    let (status, result) = publish_survey(&state, user.id, id, input.revision).await?;
     Ok((status, Json(result)))
 }
 
@@ -422,13 +410,10 @@ async fn publish(
 async fn collection(
     State(state): State<AppState>,
     user: AuthUser,
-    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<CollectionSettings>,
 ) -> AppResult<Json<SurveyDetail>> {
-    Ok(Json(
-        update_collection(&state, user.id, &headers, id, input).await?,
-    ))
+    Ok(Json(update_collection(&state, user.id, id, input).await?))
 }
 
 /// 主动关闭回收
@@ -450,11 +435,10 @@ async fn collection(
 async fn close(
     State(state): State<AppState>,
     user: AuthUser,
-    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<Json<SurveyDetail>> {
     Ok(Json(
-        change_status(&state, user.id, &headers, id, CollectionAction::Close).await?,
+        change_status(&state, user.id, id, CollectionAction::Close).await?,
     ))
 }
 
@@ -477,11 +461,10 @@ async fn close(
 async fn resume(
     State(state): State<AppState>,
     user: AuthUser,
-    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<Json<SurveyDetail>> {
     Ok(Json(
-        change_status(&state, user.id, &headers, id, CollectionAction::Resume).await?,
+        change_status(&state, user.id, id, CollectionAction::Resume).await?,
     ))
 }
 
@@ -504,11 +487,10 @@ async fn resume(
 async fn archive(
     State(state): State<AppState>,
     user: AuthUser,
-    headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<Json<SurveyDetail>> {
     Ok(Json(
-        change_status(&state, user.id, &headers, id, CollectionAction::Archive).await?,
+        change_status(&state, user.id, id, CollectionAction::Archive).await?,
     ))
 }
 
@@ -540,18 +522,15 @@ async fn versions(
     Ok(Json(list_versions(&state, user.id, id, pagination).await?))
 }
 
-// 以下是业务层。所有写入只使用同一个 tx，绝不在事务中绕回连接池执行写入。
-// 写入函数接收原请求头，只用于持锁后重验 Session；授权主体仍是 owner_id。
+// 以下是业务层。所有写入只使用同一个 tx，绝不在事务中绕回连接池执行写入；授权主体是 owner_id。
 
 async fn create_survey(
     state: &AppState,
     owner_id: Uuid,
-    headers: &HeaderMap,
     document: Document,
 ) -> AppResult<SurveyDetail> {
     document.validate_draft()?;
     let tx = state.db.begin().await?;
-    repository::lock_session_user(&tx, headers, owner_id).await?;
     let now = repository::now_micros();
     let meta = insert_draft(&tx, owner_id, &document, now).await?;
     // 直接使用请求中的已校验文档，无需把刚写入的 JSONB 再读回并反序列化。
@@ -634,8 +613,7 @@ async fn list_surveys(
         };
         query = query.filter(condition);
     }
-    let tx = repository::read_snapshot(&state.db).await?;
-    let total = query.clone().count(&tx).await?;
+    let total = query.clone().count(&state.db).await?;
     let rows = query
         .select_only()
         .columns([
@@ -655,7 +633,7 @@ async fn list_surveys(
         .offset(bounds.offset)
         .limit(bounds.limit)
         .into_model::<SurveyListRow>()
-        .all(&tx)
+        .all(&state.db)
         .await?;
     let items = rows
         .into_iter()
@@ -672,21 +650,19 @@ async fn list_surveys(
             updated_at: row.updated_at,
         })
         .collect();
-    tx.commit().await?;
     Ok(Page::new(items, total, bounds))
 }
 
 async fn save_survey_draft(
     state: &AppState,
     owner_id: Uuid,
-    headers: &HeaderMap,
     id: Uuid,
     input: SaveDraft,
 ) -> AppResult<SurveyDetail> {
     input.document.validate_draft()?;
     let tx = state.db.begin().await?;
     // 只锁元数据行；旧草稿内容与本请求无关，不读取也不解码。
-    let meta = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
+    let meta = repository::lock_owned_survey_meta(&tx, owner_id, id).await?;
     let now = repository::now_micros();
     let meta = repository::expire_survey(&tx, meta, now).await?;
     ensure_editable(&meta)?;
@@ -715,31 +691,19 @@ async fn save_survey_draft(
     Ok(result)
 }
 
-async fn copy_survey(
-    state: &AppState,
-    owner_id: Uuid,
-    headers: &HeaderMap,
-    id: Uuid,
-) -> AppResult<SurveyDetail> {
+async fn copy_survey(state: &AppState, owner_id: Uuid, id: Uuid) -> AppResult<SurveyDetail> {
     let tx = state.db.begin().await?;
-    let source = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
+    let source = repository::lock_owned_survey_meta(&tx, owner_id, id).await?;
     let mut document: Document = if source.status == SurveyStatus::Archived {
         let version_id = source
             .current_version_id
             .ok_or_else(|| AppError::internal("归档问卷缺少发布版本"))?;
-        match state.versions.get(id, version_id) {
-            Some(version) => version.prepared.document().clone(),
-            None => serde_json::from_value(
-                version::Entity::find_by_id(version_id)
-                    .filter(version::Column::SurveyId.eq(id))
-                    .select_only()
-                    .column(version::Column::Document)
-                    .into_tuple::<serde_json::Value>()
-                    .one(&tx)
-                    .await?
-                    .ok_or_else(|| AppError::internal("归档问卷缺少发布版本"))?,
-            )?,
-        }
+        repository::load_version(&tx, id, version_id)
+            .await?
+            .ok_or_else(|| AppError::internal("归档问卷缺少发布版本"))?
+            .prepared
+            .document()
+            .clone()
     } else {
         serde_json::from_value(repository::load_survey_draft(&tx, id).await?)?
     };
@@ -752,15 +716,10 @@ async fn copy_survey(
     Ok(result)
 }
 
-async fn delete_survey(
-    state: &AppState,
-    owner_id: Uuid,
-    headers: &HeaderMap,
-    id: Uuid,
-) -> AppResult<()> {
+async fn delete_survey(state: &AppState, owner_id: Uuid, id: Uuid) -> AppResult<()> {
     let tx = state.db.begin().await?;
     // 删除响应是 204，只需元数据判断是否从未发布，不读取草稿。
-    let meta = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
+    let meta = repository::lock_owned_survey_meta(&tx, owner_id, id).await?;
     if meta.status != SurveyStatus::Unpublished {
         return Err(AppError::conflict(
             "survey_published",
@@ -775,24 +734,21 @@ async fn delete_survey(
 async fn publish_survey(
     state: &AppState,
     owner_id: Uuid,
-    headers: &HeaderMap,
     id: Uuid,
     revision: i64,
 ) -> AppResult<(StatusCode, PublishedSurvey)> {
     let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
+    let record = repository::lock_owned_survey_meta(&tx, owner_id, id).await?;
     let now = repository::now_micros();
     let record = repository::expire_survey(&tx, record, now).await?;
     ensure_editable(&record)?;
     ensure_revision(&record, revision)?;
-
-    // 只读取草稿列并先按当前规则校验这版内容，再判断是否为幂等重放。
-    let draft = repository::load_survey_draft(&tx, id).await?;
-    let prepared = Document::deserialize(&draft)?.prepare_publish()?;
     if record.mode.is_none() {
         return Err(AppError::conflict("mode_required", "请先设置填写模式"));
     }
 
+    // 只读取草稿列；重放判定先于内容校验，历史版本未改动内容仍可重复发布。
+    let draft = repository::load_survey_draft(&tx, id).await?;
     // 内容与当前版本完全一致的重复发布（例如响应丢失后的重试）是幂等重放：
     // 不新增版本，直接返回当前版本，避免同一份题面出现两个版本号。
     if let Some(current_id) = record.current_version_id {
@@ -802,8 +758,7 @@ async fn publish_survey(
             .ok_or_else(|| AppError::internal("current version is missing"))?;
         if current.document == draft {
             let result = PublishedSurvey {
-                // 重放直接消费已编译文档，不再深拷贝题面。
-                survey: survey_detail(record, prepared.into_document(), now),
+                survey: survey_detail(record, Document::deserialize(&draft)?, now),
                 version: VersionSummary {
                     id: current.id,
                     number: current.number,
@@ -815,6 +770,8 @@ async fn publish_survey(
             return Ok((StatusCode::OK, result));
         }
     }
+
+    let prepared = Document::deserialize(&draft)?.prepare_publish()?;
 
     let first_publish = record.current_version_id.is_none();
     if first_publish {
@@ -864,9 +821,8 @@ async fn publish_survey(
     }
     .update_without_returning(&tx)
     .await?;
-    let prepared = Arc::new(prepared);
     let result = PublishedSurvey {
-        survey: survey_detail(meta, prepared.document().clone(), now),
+        survey: survey_detail(meta, prepared.into_document(), now),
         version: VersionSummary {
             id: version_id,
             number,
@@ -875,25 +831,17 @@ async fn publish_survey(
         },
     };
     tx.commit().await?;
-    state.versions.insert(CachedVersion {
-        id: version_id,
-        survey_id: id,
-        number,
-        published_at: now,
-        prepared,
-    });
     Ok((StatusCode::CREATED, result))
 }
 
 async fn update_collection(
     state: &AppState,
     owner_id: Uuid,
-    headers: &HeaderMap,
     id: Uuid,
     input: CollectionSettings,
 ) -> AppResult<SurveyDetail> {
     let tx = state.db.begin().await?;
-    let mut meta = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
+    let mut meta = repository::lock_owned_survey_meta(&tx, owner_id, id).await?;
     let now = repository::now_micros();
     // 必须在覆盖 deadline 之前执行，否则延期会抹掉“已经到期”的事实。
     meta = repository::expire_survey(&tx, meta, now).await?;
@@ -938,12 +886,11 @@ pub(crate) enum CollectionAction {
 async fn change_status(
     state: &AppState,
     owner_id: Uuid,
-    headers: &HeaderMap,
     id: Uuid,
     action: CollectionAction,
 ) -> AppResult<SurveyDetail> {
     let tx = state.db.begin().await?;
-    let mut meta = repository::lock_owned_survey_meta(&tx, headers, owner_id, id).await?;
+    let mut meta = repository::lock_owned_survey_meta(&tx, owner_id, id).await?;
     let now = repository::now_micros();
     meta = repository::expire_survey(&tx, meta, now).await?;
     let current = meta.status;
@@ -973,10 +920,9 @@ async fn list_versions(
     pagination: Pagination,
 ) -> AppResult<Page<VersionSummary>> {
     let bounds = pagination.bounds()?;
-    let tx = repository::read_snapshot(&state.db).await?;
-    let meta = repository::owned_survey_meta(&tx, owner_id, id).await?;
+    let meta = repository::owned_survey_meta(&state.db, owner_id, id).await?;
     let query = version::Entity::find().filter(version::Column::SurveyId.eq(meta.id));
-    let total = query.clone().count(&tx).await?;
+    let total = query.clone().count(&state.db).await?;
     let rows = query
         .select_only()
         .columns([
@@ -988,7 +934,7 @@ async fn list_versions(
         .offset(bounds.offset)
         .limit(bounds.limit)
         .into_model::<VersionListRow>()
-        .all(&tx)
+        .all(&state.db)
         .await?;
     let items = rows
         .into_iter()
@@ -999,7 +945,6 @@ async fn list_versions(
             is_current: meta.current_version_id == Some(row.id),
         })
         .collect();
-    tx.commit().await?;
     Ok(Page::new(items, total, bounds))
 }
 

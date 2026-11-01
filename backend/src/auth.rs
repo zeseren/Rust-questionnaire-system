@@ -226,7 +226,12 @@ async fn logout(
     headers: HeaderMap,
 ) -> AppResult<(StatusCode, [(header::HeaderName, HeaderValue); 1])> {
     let cookie = session_cookie("", 0, state.config.cookie_secure)?;
-    revoke_session(&state.db, session_token(&headers)).await?;
+    // 会话删除是单条按主键的语句，不需要事务或账号行锁。
+    if let Some(token) = session_token(&headers) {
+        session::Entity::delete_by_id(hash_secret(token))
+            .exec(&state.db)
+            .await?;
+    }
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]))
 }
 
@@ -259,7 +264,6 @@ async fn me(user: AuthUser) -> Json<UserProfile> {
 async fn change_password(
     State(state): State<AppState>,
     user: AuthUser,
-    headers: HeaderMap,
     ApiJson(request): ApiJson<ChangePasswordRequest>,
 ) -> AppResult<(StatusCode, [(header::HeaderName, HeaderValue); 1])> {
     validate_password(&request.new_password)?;
@@ -267,25 +271,17 @@ async fn change_password(
         .one(&state.db)
         .await?
         .ok_or_else(AppError::unauthorized)?;
-    // 旧密码校验与新密码哈希都使用 Argon2id 阻塞任务，并行执行可将改密耗时减半。
-    let (verified, new_hash) = tokio::try_join!(
-        verify_password(request.old_password, candidate.password_hash.clone()),
-        hash_password(request.new_password),
-    )?;
-    if !verified {
+    // 先验证旧密码；验证失败时不再付出新密码哈希的开销。
+    if !verify_password(request.old_password, candidate.password_hash.clone()).await? {
         return Err(invalid_credentials());
     }
+    let new_hash = hash_password(request.new_password).await?;
     let cookie = session_cookie("", 0, state.config.cookie_secure)?;
 
     let tx = state.db.begin().await?;
     let current = lock_unchanged_credentials(&tx, user.id, &candidate.password_hash)
         .await?
         .ok_or_else(AppError::unauthorized)?;
-    let authenticated = authenticate(&headers, &tx).await?;
-    // 锁前算出的验证结果，只能用于同一个仍有效的会话和没有变化的密码版本。
-    if authenticated.id != user.id {
-        return Err(AppError::unauthorized());
-    }
     let mut updated = current.into_active_model();
     updated.password_hash = Set(new_hash);
     updated.update(&tx).await?;
@@ -298,7 +294,6 @@ async fn change_password(
 }
 
 /// 用同一条查询检查会话有效期与账号状态，既可传连接，也可传当前业务事务。
-/// 涉及资格变更的业务应先持有账号行锁，再调用本函数重验 Session。
 pub(crate) async fn authenticate(
     headers: &HeaderMap,
     db: &impl ConnectionTrait,
@@ -482,23 +477,4 @@ pub(crate) fn session_cookie(token: &str, max_age: i64, secure: bool) -> AppResu
         .secure(secure)
         .build();
     HeaderValue::from_str(&cookie.to_string()).map_err(|error| AppError::internal(error))
-}
-
-async fn revoke_session(db: &DatabaseConnection, token: Option<&str>) -> AppResult<()> {
-    let Some(token) = token else { return Ok(()) };
-    let id_hash = hash_secret(token);
-    let tx = db.begin().await?;
-    if let Some(existing) = session::Entity::find_by_id(id_hash.clone())
-        .one(&tx)
-        .await?
-    {
-        // NO KEY UPDATE 与提交方的 FOR SHARE 互斥，但不会阻塞审计外键的 KEY SHARE。
-        user::Entity::find_by_id(existing.user_id)
-            .lock(LockType::NoKeyUpdate)
-            .one(&tx)
-            .await?;
-        session::Entity::delete_by_id(id_hash).exec(&tx).await?;
-    }
-    tx.commit().await?;
-    Ok(())
 }

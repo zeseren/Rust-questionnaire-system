@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::{Number, Value, json};
 use uuid::Uuid;
 
-use crate::domain::{Question, QuestionKind};
+use crate::domain::Question;
 use crate::flow::{FlowBranch, FlowDefinition, FlowNode, FlowOutcome};
 use crate::logic::{LogicError, LogicErrorCode, LogicValueType, check_budget, error};
 use crate::logic_document::{ComputedVariable, DocumentLogic, QuestionRule};
@@ -643,9 +643,7 @@ impl<'a> Compiler<'a> {
         let mut option_ids = BTreeSet::new();
         for question in questions {
             question_ids.insert(question.id);
-            if let QuestionKind::SingleChoice { options }
-            | QuestionKind::MultipleChoice { options, .. } = &question.kind
-            {
+            if let Some(options) = question.kind.options() {
                 option_ids.extend(options.iter().map(|option| option.id));
             }
         }
@@ -958,9 +956,7 @@ pub fn format_logic_text(
     let mut formatter = Formatter::new(&logic.dsl_version, &logic.semantics_version);
     for (index, question) in questions.iter().enumerate() {
         formatter.bind("question", question.id, format!("q{}", index + 1));
-        if let QuestionKind::SingleChoice { options }
-        | QuestionKind::MultipleChoice { options, .. } = &question.kind
-        {
+        if let Some(options) = question.kind.options() {
             for (order, option) in options.iter().enumerate() {
                 formatter.bind(
                     "option",

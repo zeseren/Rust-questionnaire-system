@@ -240,6 +240,10 @@ test('readConditionGroup 识别可无损表达的节点', () => {
     mode: 'all',
     conditions: [],
   })
+  assert.deepEqual(readConditionGroup({ op: 'answered', question_id: 'q', extra: true }), {
+    mode: 'all',
+    conditions: [{ questionId: 'q', operator: 'answered', value: '' }],
+  })
 })
 
 test('readConditionGroup 拒绝无法无损表达的节点', () => {
@@ -247,7 +251,6 @@ test('readConditionGroup 拒绝无法无损表达的节点', () => {
     { op: 'all', expressions: [{ op: 'all', expressions: [] }] },
     { op: 'all', expressions: [{ op: 'boolean', value: true }] },
     { op: 'all' },
-    { op: 'answered', question_id: 'q', extra: true },
     { op: 'answered' },
     { op: 'selected', question_id: 'q' },
     {

@@ -5,11 +5,11 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import type { DocumentLogic, Question } from '../types'
-import { message } from '../api'
+import { downloadBlob, message } from '../api'
 import { encode } from '../json'
 import { LogicTextError } from '../logic'
 import { formatLogicText, parseLogicText } from '../wasm/index'
-import { logicTextSignature, textBindings, textErrorOffset } from '../logic-text-tools'
+import { textBindings, textErrorOffset } from '../logic-text-tools'
 import Icon from './Icon.vue'
 const DslCodeEditor = defineAsyncComponent(() => import('./DslCodeEditor.vue'))
 const logic = defineModel<DocumentLogic>({ required: true })
@@ -18,9 +18,7 @@ const emit = defineEmits<{ pending: [value: boolean] }>()
 const source = ref<{ focus: (offset: number) => void; insert: (text: string) => void }>()
 const fileInput = ref<HTMLInputElement>()
 const text = ref(''),
-  baseline = ref(''),
-  syncedLogic = ref(''),
-  syncedQuestions = ref('')
+  baseline = ref('')
 const validation = shallowRef<{ message: string; offset: number; path?: string } | null>(null)
 const checked = ref(false)
 const importError = ref('')
@@ -36,12 +34,7 @@ const questionSignature = computed(() =>
     })),
   ),
 )
-const stale = computed(
-  () =>
-    syncedLogic.value !== logicTextSignature(logic.value, props.questions) ||
-    syncedQuestions.value !== questionSignature.value,
-)
-const pending = computed(() => text.value !== baseline.value || stale.value)
+const pending = computed(() => text.value !== baseline.value)
 const bindings = computed(() => textBindings(text.value, props.questions))
 const visibleBindings = computed(() =>
   bindings.value
@@ -80,10 +73,8 @@ function scheduleCheck() {
   timer = setTimeout(check, 300)
 }
 watch([text, questionSignature], scheduleCheck, { flush: 'sync' })
-function synchronize(current = logic.value) {
+function synchronize() {
   baseline.value = text.value
-  syncedLogic.value = logicTextSignature(current, props.questions)
-  syncedQuestions.value = questionSignature.value
 }
 function generate() {
   try {
@@ -108,7 +99,7 @@ function apply() {
     return
   }
   logic.value = result
-  synchronize(result)
+  synchronize()
   importError.value = ''
 }
 function format() {
@@ -119,12 +110,7 @@ function format() {
   check()
 }
 function download() {
-  const url = URL.createObjectURL(new Blob([text.value], { type: 'text/plain;charset=utf-8' }))
-  const link = document.createElement('a')
-  link.href = url
-  link.download = 'survey-logic.dsl'
-  link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  downloadBlob(new Blob([text.value], { type: 'text/plain;charset=utf-8' }), 'survey-logic.dsl')
 }
 async function importText(event: Event) {
   const input = event.currentTarget
@@ -187,7 +173,6 @@ onBeforeUnmount(() => {
         />
       </div>
     </div>
-    <p v-if="stale" class="notice">题目或规则已变化，请恢复当前规则文本，或核对引用后重新应用。</p>
     <p v-if="importError" class="notice" role="alert">{{ importError }}</p>
     <div class="dsl-layout">
       <div class="dsl-source-pane">

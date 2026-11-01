@@ -100,7 +100,8 @@ pub(crate) fn check(state: &AppState, request: &Request) -> AppResult<()> {
             ));
         }
         let path = request.uri().path();
-        if path.starts_with("/api/auth/") {
+        // 只有登录与注册消耗认证配额；退出登录和改密不能被全局限流锁死。
+        if path == "/api/auth/login" || path == "/api/auth/register" {
             admit(&state.limits.auth, state.config.auth_requests_per_minute)?;
         } else if *method == Method::POST
             && path.starts_with("/api/public/surveys/")

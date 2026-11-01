@@ -19,7 +19,6 @@ mod tests;
 use crate::{
     config::Config,
     error::{AppError, AppResult},
-    repository::VersionCache,
     security::Limits,
 };
 use anyhow::{Context, bail};
@@ -45,8 +44,6 @@ pub(crate) struct AppState {
     pub db: DatabaseConnection,
     pub config: Arc<Config>,
     pub limits: Arc<Limits>,
-    /// 已发布版本的编译结果；提交、报表与公开题面共享，避免重复解析与编译。
-    pub versions: Arc<VersionCache>,
 }
 
 /// 从环境变量启动服务，或执行 migrate / create-admin 子命令。
@@ -104,7 +101,6 @@ pub async fn run() -> anyhow::Result<()> {
         db,
         config: Arc::new(config),
         limits: Arc::new(Limits::new()),
-        versions: Arc::new(VersionCache::new()),
     };
     let listener = tokio::net::TcpListener::bind(listen)
         .await

@@ -160,6 +160,31 @@ pub enum QuestionKind {
     },
 }
 
+impl QuestionKind {
+    /// 选择题的选项；非选择题返回 `None`。
+    #[must_use]
+    pub fn options(&self) -> Option<&[Choice]> {
+        match self {
+            Self::SingleChoice { options } | Self::MultipleChoice { options, .. } => Some(options),
+            Self::Text { .. }
+            | Self::Textarea { .. }
+            | Self::Number { .. }
+            | Self::Rating { .. } => None,
+        }
+    }
+
+    /// 选择题的可变选项；非选择题返回 `None`。
+    pub fn options_mut(&mut self) -> Option<&mut Vec<Choice>> {
+        match self {
+            Self::SingleChoice { options } | Self::MultipleChoice { options, .. } => Some(options),
+            Self::Text { .. }
+            | Self::Textarea { .. }
+            | Self::Number { .. }
+            | Self::Rating { .. } => None,
+        }
+    }
+}
+
 /// 选择题的一个选项；文字可以重复，身份 ID 不能重复。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -204,16 +229,18 @@ impl ValidationError {
 impl Document {
     /// 校验草稿的容量、字段长度、稳定 ID 和数值有限性。
     ///
-    /// 允许空问卷、空白标题、暂缺选项及暂时矛盾的配置范围；发布前须补全。
+    /// 允许空问卷、空白标题、暂缺选项及暂时矛盾的配置范围；规则与流程可以
+    /// 处于未写完的中间状态，发布或提交时才要求编译通过。
     /// 此函数不修改内容，也不会自动生成或修复重复 ID。
     ///
     /// # Errors
     /// 超过容量、文本含空字符、出现空或重复 ID、数值边界非有限时返回可定位的错误。
     pub fn validate_draft(&self) -> Result<(), ValidationError> {
-        self.validate_draft_compiled().map(|_| ())
+        self.validate_draft_fields()
     }
 
-    fn validate_draft_compiled(&self) -> Result<Option<CompiledDocumentLogic>, ValidationError> {
+    /// 草稿字段校验通过后编译规则，供发布校验与发布态文档使用。
+    fn validate_compiled(&self) -> Result<Option<CompiledDocumentLogic>, ValidationError> {
         self.validate_draft_fields()?;
         self.compile_logic()
             .map_err(|error| ValidationError::new(error.question_id, error.to_string()))
@@ -235,11 +262,7 @@ impl Document {
         let option_capacity = self
             .questions
             .iter()
-            .map(|question| match &question.kind {
-                QuestionKind::SingleChoice { options }
-                | QuestionKind::MultipleChoice { options, .. } => options.len(),
-                _ => 0,
-            })
+            .map(|question| question.kind.options().map_or(0, |options| options.len()))
             .sum();
         let mut question_ids = HashSet::with_capacity(self.questions.len());
         let mut option_ids = HashSet::with_capacity(option_capacity);
@@ -249,28 +272,27 @@ impl Document {
                 return Err(ValidationError::new(id, "题目 ID 不能为空或重复"));
             }
             check_length(&question.title, MAX_QUESTION_TITLE_LENGTH, id, "题目标题")?;
+            if let Some(options) = question.kind.options() {
+                if options.len() > MAX_CHOICES {
+                    return Err(ValidationError::new(
+                        id,
+                        format!("每道选择题最多允许 {MAX_CHOICES} 个选项"),
+                    ));
+                }
+                for option in options {
+                    if option.id.is_nil() || !option_ids.insert(option.id) {
+                        return Err(ValidationError::new(id, "选项 ID 不能为空或在问卷中重复"));
+                    }
+                    check_length(&option.label, MAX_CHOICE_LABEL_LENGTH, id, "选项文字")?;
+                }
+            }
             match &question.kind {
-                QuestionKind::SingleChoice { options }
-                | QuestionKind::MultipleChoice { options, .. } => {
-                    if options.len() > MAX_CHOICES {
-                        return Err(ValidationError::new(
-                            id,
-                            format!("每道选择题最多允许 {MAX_CHOICES} 个选项"),
-                        ));
-                    }
-                    for option in options {
-                        if option.id.is_nil() || !option_ids.insert(option.id) {
-                            return Err(ValidationError::new(id, "选项 ID 不能为空或在问卷中重复"));
-                        }
-                        check_length(&option.label, MAX_CHOICE_LABEL_LENGTH, id, "选项文字")?;
-                    }
-                    if let QuestionKind::MultipleChoice {
-                        min_choices,
-                        max_choices,
-                        ..
-                    } = &question.kind
-                        && (*min_choices > MAX_CHOICES || *max_choices > MAX_CHOICES)
-                    {
+                QuestionKind::MultipleChoice {
+                    min_choices,
+                    max_choices,
+                    ..
+                } => {
+                    if *min_choices > MAX_CHOICES || *max_choices > MAX_CHOICES {
                         return Err(ValidationError::new(
                             id,
                             format!("选择数量配置不能超过 {MAX_CHOICES}"),
@@ -308,6 +330,7 @@ impl Document {
                     check_length(min_label, MAX_RATING_LABEL_LENGTH, id, "最低分说明")?;
                     check_length(max_label, MAX_RATING_LABEL_LENGTH, id, "最高分说明")?;
                 }
+                QuestionKind::SingleChoice { .. } => {}
             }
         }
         Ok(())
@@ -336,7 +359,7 @@ impl Document {
     }
 
     fn validate_publish_compiled(&self) -> Result<Option<CompiledDocumentLogic>, ValidationError> {
-        let logic = self.validate_draft_compiled()?;
+        let logic = self.validate_compiled()?;
         // 筛选结果的保存与账号限次策略尚未确定，暂不发布包含筛选结束的流程。
         if self
             .logic
@@ -374,30 +397,30 @@ impl Document {
             if question.title.trim().is_empty() {
                 return Err(ValidationError::new(id, "发布前请填写题目标题"));
             }
-            match &question.kind {
-                QuestionKind::SingleChoice { options }
-                | QuestionKind::MultipleChoice { options, .. } => {
-                    if options.len() < 2 {
-                        return Err(ValidationError::new(id, "选择题至少需要两个选项"));
-                    }
-                    if options.iter().any(|option| option.label.trim().is_empty()) {
-                        return Err(ValidationError::new(id, "发布前请填写所有选项文字"));
-                    }
-                    if let QuestionKind::MultipleChoice {
-                        min_choices,
-                        max_choices,
-                        ..
-                    } = &question.kind
-                        && (*max_choices == 0
-                            || min_choices > max_choices
-                            || *max_choices > options.len())
-                    {
-                        return Err(ValidationError::new(
-                            id,
-                            "选择数量上下界必须有序，且最大值介于 1 和选项总数之间",
-                        ));
-                    }
+            if let Some(options) = question.kind.options() {
+                if options.len() < 2 {
+                    return Err(ValidationError::new(id, "选择题至少需要两个选项"));
                 }
+                if options.iter().any(|option| option.label.trim().is_empty()) {
+                    return Err(ValidationError::new(id, "发布前请填写所有选项文字"));
+                }
+                if let QuestionKind::MultipleChoice {
+                    min_choices,
+                    max_choices,
+                    ..
+                } = &question.kind
+                    && (*max_choices == 0
+                        || min_choices > max_choices
+                        || *max_choices > options.len())
+                {
+                    return Err(ValidationError::new(
+                        id,
+                        "选择数量上下界必须有序，且最大值介于 1 和选项总数之间",
+                    ));
+                }
+            }
+            match &question.kind {
+                QuestionKind::SingleChoice { .. } | QuestionKind::MultipleChoice { .. } => {}
                 QuestionKind::Text { max_length } | QuestionKind::Textarea { max_length } => {
                     if *max_length == 0 {
                         return Err(ValidationError::new(id, "文本最大长度至少为 1"));
@@ -433,19 +456,12 @@ impl Document {
             let new_id = Uuid::new_v4();
             question_ids.insert(question.id, new_id);
             question.id = new_id;
-            match &mut question.kind {
-                QuestionKind::SingleChoice { options }
-                | QuestionKind::MultipleChoice { options, .. } => {
-                    for option in options {
-                        let new_id = Uuid::new_v4();
-                        option_ids.insert(option.id, new_id);
-                        option.id = new_id;
-                    }
+            if let Some(options) = question.kind.options_mut() {
+                for option in options {
+                    let new_id = Uuid::new_v4();
+                    option_ids.insert(option.id, new_id);
+                    option.id = new_id;
                 }
-                QuestionKind::Text { .. }
-                | QuestionKind::Textarea { .. }
-                | QuestionKind::Number { .. }
-                | QuestionKind::Rating { .. } => {}
             }
         }
         if let Some(logic) = &mut self.logic {
@@ -503,7 +519,7 @@ impl PreparedDocument {
     /// # Errors
     /// 草稿字段、规则或流程不合法时返回可定位的校验错误。
     pub fn new(document: Document) -> Result<Self, ValidationError> {
-        let logic = document.validate_draft_compiled()?;
+        let logic = document.validate_compiled()?;
         Ok(Self::from_compiled(document, logic))
     }
 

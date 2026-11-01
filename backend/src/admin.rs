@@ -65,8 +65,7 @@ async fn users(
 ) -> AppResult<Json<Page<UserItem>>> {
     require_admin(&actor)?;
     let bounds = pagination.bounds()?;
-    let tx = repository::read_snapshot(&state.db).await?;
-    let total = user::Entity::find().count(&tx).await?;
+    let total = user::Entity::find().count(&state.db).await?;
     let items = user::Entity::find()
         .select_only()
         .columns([
@@ -81,9 +80,8 @@ async fn users(
         .offset(bounds.offset)
         .limit(bounds.limit)
         .into_model::<UserItem>()
-        .all(&tx)
+        .all(&state.db)
         .await?;
-    tx.commit().await?;
     Ok(Json(Page::new(items, total, bounds)))
 }
 
@@ -98,23 +96,19 @@ pub(crate) struct ChangeUser {
 async fn change_user(
     State(state): State<AppState>,
     actor: AuthUser,
-    headers: axum::http::HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<ChangeUser>,
 ) -> AppResult<StatusCode> {
     require_admin(&actor)?;
     reason(&input.reason)?;
     let tx = state.db.begin().await?;
-    // 与提交/登录持有的用户锁排队；禁用成功之后的新请求不能绕过状态检查。
+    // 锁定目标账号：禁用成功之后的新请求不能绕过状态检查，审计可原子提交。
+    // NO KEY UPDATE 不阻塞审计外键的 KEY SHARE，避免管理员交叉治理时互锁。
     let target = user::Entity::find_by_id(id)
         .lock(LockType::NoKeyUpdate)
         .one(&tx)
         .await?
         .ok_or_else(AppError::not_found)?;
-    // 请求体可能迟到：锁定目标后重新判定当前 Session，不能沿用提取器中的旧身份。
-    // NO KEY UPDATE 不阻塞审计外键的 KEY SHARE，避免管理员交叉治理时互锁。
-    // 角色不可通过治理接口更改，入口已校验管理员身份，重验后无需重复判定。
-    let actor = crate::auth::authenticate(&headers, &tx).await?;
     let mut update = target.into_active_model();
     update.disabled = Set(input.disabled);
     update.update(&tx).await?;
@@ -207,21 +201,19 @@ async fn surveys(
     require_admin(&actor)?;
     let bounds = pagination.bounds()?;
     let now = Utc::now();
-    // 只读快照：总数与分页数据来自同一时刻，且不为列表取任何写锁。
-    let tx = repository::read_snapshot(&state.db).await?;
-    let total = survey::Entity::find().count(&tx).await?;
+    // 列表只做只读查询，不为分页读取任何写锁。
+    let total = survey::Entity::find().count(&state.db).await?;
     let items = governance_query()
         .order_by_desc(survey::Column::CreatedAt)
         .order_by_desc(survey::Column::Id)
         .offset(bounds.offset)
         .limit(bounds.limit)
         .into_model::<SurveyRow>()
-        .all(&tx)
+        .all(&state.db)
         .await?
         .into_iter()
         .map(|row| SurveyItem::from_row(row, now))
         .collect();
-    tx.commit().await?;
     Ok(Json(Page::new(items, total, bounds)))
 }
 
@@ -265,25 +257,14 @@ pub(crate) struct ChangeSurvey {
 async fn change_survey(
     State(state): State<AppState>,
     actor: AuthUser,
-    headers: axum::http::HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<ChangeSurvey>,
 ) -> AppResult<StatusCode> {
     require_admin(&actor)?;
     reason(&input.reason)?;
-    // 预读只取归属列；治理操作随后只锁元数据行，三次操作都不再搬运 1 MiB 草稿。
-    let owner_id = survey::Entity::find_by_id(id)
-        .select_only()
-        .column(survey::Column::OwnerId)
-        .into_tuple::<Uuid>()
-        .one(&state.db)
-        .await?
-        .ok_or_else(AppError::not_found)?;
     let tx = state.db.begin().await?;
-    repository::lock_user_record(&tx, owner_id).await?;
+    // 直接锁定目标问卷元数据行：归属不再需要预读，下架与回收写入仍按同一行串行。
     repository::lock_survey_meta(&tx, id).await?;
-    // 同上：只重验 Session，管理员身份已在入口校验且角色不可变。
-    let actor = crate::auth::authenticate(&headers, &tx).await?;
     let now = repository::now_micros();
     survey::ActiveModel {
         id: Set(id),
@@ -329,16 +310,14 @@ async fn audits(
 ) -> AppResult<Json<Page<AuditItem>>> {
     require_admin(&actor)?;
     let bounds = pagination.bounds()?;
-    let tx = repository::read_snapshot(&state.db).await?;
-    let total = audit::Entity::find().count(&tx).await?;
+    let total = audit::Entity::find().count(&state.db).await?;
     let items = audit::Entity::find()
         .order_by_desc(audit::Column::CreatedAt)
         .order_by_desc(audit::Column::Id)
         .offset(bounds.offset)
         .limit(bounds.limit)
         .into_model::<AuditItem>()
-        .all(&tx)
+        .all(&state.db)
         .await?;
-    tx.commit().await?;
     Ok(Json(Page::new(items, total, bounds)))
 }

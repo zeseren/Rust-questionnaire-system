@@ -78,7 +78,7 @@ function record(raw: unknown): Record<string, unknown> {
   return isRecord(raw) ? raw : {}
 }
 function keys(node: Record<string, unknown>, names: readonly string[]) {
-  return Object.keys(node).length === names.length && names.every((key) => Object.hasOwn(node, key))
+  return names.every((key) => key in node)
 }
 function readCondition(raw: unknown): SimpleCondition | null {
   const node = record(raw)

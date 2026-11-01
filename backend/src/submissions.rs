@@ -11,7 +11,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, QuerySelect, Set,
-    TransactionTrait,
+    TransactionTrait, sea_query::LockType,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -161,27 +161,25 @@ async fn submit(
     Ok((status, Json(receipt)))
 }
 
-/// 题面读取不需要写锁：只读快照保证题面、发布者状态、发布版本与是否已提交
-/// 来自同一时刻，也不与回收写入争抢 users / surveys 行锁。
+/// 题面读取不需要写锁，也不开启只读事务：元数据、题面与是否已提交各自直接查询。
 async fn read_public_survey(
     state: &AppState,
     headers: &HeaderMap,
     id: Uuid,
 ) -> AppResult<PublicSurvey> {
-    let tx = repository::read_snapshot(&state.db).await?;
     // 元数据投影不包含 1 MiB 草稿；题面来自不可变的发布版本。
     let survey = survey::Entity::find_by_id(id)
         .select_only()
         .columns(repository::survey_meta_columns())
         .into_model::<repository::SurveyMetaRow>()
-        .one(&tx)
+        .one(&state.db)
         .await?
         .ok_or_else(AppError::not_found)?;
     // anonymous 与尚未设置的模式完全不解释 Cookie；只有 login_once 才要求有效会话。
     let (mode, respondent_id) = match survey.mode.unwrap_or(FillingMode::Anonymous) {
         FillingMode::LoginOnce => (
             FillingMode::LoginOnce,
-            Some(auth::authenticate(headers, &tx).await?.id),
+            Some(auth::authenticate(headers, &state.db).await?.id),
         ),
         FillingMode::Anonymous => (FillingMode::Anonymous, None),
     };
@@ -189,7 +187,7 @@ async fn read_public_survey(
         .select_only()
         .column(user::Column::Disabled)
         .into_tuple::<bool>()
-        .one(&tx)
+        .one(&state.db)
         .await?
         .ok_or_else(|| AppError::internal("survey publisher is missing"))?;
     if publisher_disabled {
@@ -205,19 +203,14 @@ async fn read_public_survey(
         Utc::now(),
     )?;
     if let Some(respondent_id) = respondent_id {
-        ensure_not_submitted(&tx, id, respondent_id).await?;
+        ensure_not_submitted(&state.db, id, respondent_id).await?;
     }
     let version_id = survey
         .current_version_id
         .ok_or_else(|| AppError::internal("collecting survey has no version"))?;
-    // 命中缓存时完全不查询版本表；未命中时只投影所需列。
-    let lookup = repository::lookup_version(&tx, &state.versions, id, version_id)
+    let version = repository::load_version(&state.db, id, version_id)
         .await?
         .ok_or_else(|| AppError::internal("current version is missing"))?;
-    let privacy = privacy_notice(mode);
-    // 先结束只读事务并释放连接，再反序列化 1 MiB JSONB 并编译规则。
-    tx.commit().await?;
-    let version = lookup.resolve(&state.versions, id)?;
     Ok(PublicSurvey {
         survey_id: id,
         version_id,
@@ -225,7 +218,7 @@ async fn read_public_survey(
         mode,
         deadline: survey.deadline,
         document: version.prepared.document_arc(),
-        privacy,
+        privacy: privacy_notice(mode),
     })
 }
 
@@ -267,10 +260,9 @@ async fn submit_response(
             ensure_not_submitted(&locked.tx, id, respondent_id).await?;
         }
     }
-    let published =
-        repository::load_cached_version(&locked.tx, &state.versions, id, request.version_id)
-            .await?
-            .ok_or_else(|| AppError::validation("version_id 不属于本问卷的已发布版本"))?;
+    let published = repository::load_version(&locked.tx, id, request.version_id)
+        .await?
+        .ok_or_else(|| AppError::validation("version_id 不属于本问卷的已发布版本"))?;
     if previous.is_none() && locked.survey.current_version_id != Some(request.version_id) {
         return Err(AppError::conflict(
             "version_changed",
@@ -280,7 +272,7 @@ async fn submit_response(
 
     // 历史版本不可变：旧版本重试仍按旧规则规范化；有逻辑时从入口重建路径，
     // 只有已校验且适用的答案进入下游条件，客户端不能指定可信历史或可见题目。
-    // 缓存复用已编译规则与流程，命中时不再读取 versions 表或重新编译。
+    // 加载版本时已编译规则与流程，提交校验直接复用同一份编译结果。
     let answers = published.prepared.validate_answers(request.answers)?;
     let payload_hash = submission_payload_hash(request.version_id, &answers)?;
     if let Some((receipt_id, _, original_hash)) = previous {
@@ -334,42 +326,35 @@ async fn lock_public_survey(
     headers: &HeaderMap,
     id: Uuid,
 ) -> AppResult<LockedSurvey> {
-    // 锁之前只读归属和模式以决定是否认证，匿名路径绝不解释 Cookie。
-    let (owner_id, initial_mode) = survey::Entity::find_by_id(id)
+    let tx = state.db.begin().await?;
+    // 共享锁读取元数据行：与关闭/下架等写操作互斥，并发提交之间不互相阻塞。
+    // 提交路径只读问卷行；到期由 `ensure_collecting` 按截止时间推导，不在此物化。
+    let survey = survey::Entity::find_by_id(id)
         .select_only()
-        .column(survey::Column::OwnerId)
-        .column(survey::Column::Mode)
-        .into_tuple::<(Uuid, Option<FillingMode>)>()
-        .one(&state.db)
+        .columns(repository::survey_meta_columns())
+        .lock(LockType::Share)
+        .into_model::<repository::SurveyMetaRow>()
+        .one(&tx)
         .await?
         .ok_or_else(AppError::not_found)?;
-    // anonymous 与尚未设置的模式绝不解释 Cookie。
-    let respondent_id = match initial_mode {
-        Some(FillingMode::LoginOnce) => Some(auth::authenticate(headers, &state.db).await?.id),
+    // anonymous 与尚未设置的模式绝不解释 Cookie；login_once 只在这里认证一次。
+    let respondent_id = match survey.mode {
+        Some(FillingMode::LoginOnce) => Some(auth::authenticate(headers, &tx).await?.id),
         Some(FillingMode::Anonymous) | None => None,
     };
-
-    let tx = state.db.begin().await?;
-    // 全部写路径都使用 owner share → survey update 的锁序，与关闭、下架及禁用串行。
-    // 这里只锁发布者记录；禁用状态不能阻止已经成功的合法重试。
-    let owner = repository::lock_user_record(&tx, owner_id).await?;
-    // 只锁问卷元数据行：答卷提交路径不再读取、解码或回写 1 MiB 草稿。
-    let survey = repository::lock_survey_meta(&tx, id).await?;
-    if survey.owner_id != owner_id || survey.mode != initial_mode {
-        return Err(AppError::conflict(
-            "collection_changed",
-            "问卷填写设置已变化，请重新加载题面",
-        ));
-    }
-    if let Some(subject_id) = respondent_id {
-        // 等待锁时可能发生退出、改密或禁用；必须在同一事务内重新验证会话。
-        repository::lock_session_user(&tx, headers, subject_id).await?;
-    }
+    // 发布者禁用状态在同一事务内读取；禁用不能阻止已经成功的合法重试。
+    let owner_disabled = user::Entity::find_by_id(survey.owner_id)
+        .select_only()
+        .column(user::Column::Disabled)
+        .into_tuple::<bool>()
+        .one(&tx)
+        .await?
+        .ok_or_else(|| AppError::internal("survey publisher is missing"))?;
     Ok(LockedSurvey {
         tx,
         survey,
         respondent_id,
-        owner_disabled: owner.disabled,
+        owner_disabled,
     })
 }
 

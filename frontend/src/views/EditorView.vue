@@ -3,21 +3,23 @@
 <!-- [主提交通道在哪] 顶部固定栏最右侧「发布问卷 / 发布新版本」是全视图唯一主按钮，左侧紧邻次级「保存修改」。 -->
 <!-- 草稿修订号独立保存，回收设置的响应不能掩盖其他窗口的编辑冲突。 -->
 <script setup lang="ts">
-import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  provide,
-  ref,
-  shallowRef,
-  watch,
-} from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, shallowRef } from 'vue'
 import { onBeforeRouteLeave, RouterLink, useRoute, useRouter } from 'vue-router'
-import { api, ApiError, message } from '../api'
+import { api, ApiError, downloadBlob, message } from '../api'
 import { encode } from '../json'
 import { dateTime, localInput, questionNames, shareLink, statusNames, toTimestamp } from '../format'
-import { duplicateQuestion, newQuestion, removeQuestion } from '../documents'
+import {
+  duplicateQuestion,
+  moveQuestion,
+  newQuestion,
+  removeQuestion,
+  syncFlowOrder,
+} from '../documents'
+import {
+  SURVEY_ACTION_DESCRIPTIONS,
+  SURVEY_ACTION_NAMES,
+  type SurveyLifecycleAction,
+} from '../survey-actions'
 import { useNotice } from '../stores'
 import type {
   FillingMode,
@@ -39,7 +41,6 @@ import { createSurveyTemplate } from '../survey-templates'
 import type { SurveyTemplateId } from '../survey-templates'
 import { editorDisabledKey } from '../editor-context'
 import '../editor.css'
-import { compileDocumentLogic } from '../wasm/index'
 import { LogicError } from '../logic'
 const route = useRoute()
 const router = useRouter()
@@ -48,9 +49,9 @@ const id = String(route.params.id)
 const survey = shallowRef<SurveyDetail | null>(null)
 const draft = ref<SurveyDocument | null>(null)
 const revision = ref(0)
-const dirty = ref(false)
-// 加载与服务端回写期间不把程序化赋值当作编辑；同步 watcher 保证窗口内捕获全部变更。
-let applyingServerState = false
+/** 最近一次服务端确认的草稿序列化结果；与当前草稿比较即可得到脏状态。 */
+const savedDraft = ref('')
+const dirty = computed(() => !!draft.value && encode(draft.value) !== savedDraft.value)
 const loading = ref(true)
 const busy = ref(false)
 const error = ref('')
@@ -59,20 +60,13 @@ const conflict = ref(false)
 const mode = ref<FillingMode | null>(null)
 const deadline = ref('')
 const editorForm = ref<HTMLFormElement>()
-const action = ref<'publish' | 'close' | 'resume' | 'archive' | 'delete' | null>(null)
+const action = ref<SurveyLifecycleAction | null>(null)
 const textPending = ref(false)
 const workspace = ref<'questions' | 'logic' | 'preview' | 'settings'>('questions')
 const logicEditor = ref<InstanceType<typeof LogicEditor>>()
 const editorKey = ref(0)
 const templateDialog = ref(false)
 const selectedTemplate = ref<SurveyTemplateId | null>('feedback')
-watch(
-  draft,
-  () => {
-    if (!applyingServerState && draft.value) dirty.value = true
-  },
-  { deep: true, flush: 'sync' },
-)
 const settingsDirty = computed(
   () =>
     !!survey.value &&
@@ -86,21 +80,6 @@ const changed = computed(
 )
 const locked = computed(() => busy.value || survey.value?.status === 'archived')
 provide(editorDisabledKey, locked)
-const actionNames = {
-  publish: '发布问卷',
-  close: '关闭回收',
-  resume: '恢复回收',
-  archive: '归档问卷',
-  delete: '删除草稿',
-}
-const descriptions = {
-  publish:
-    '将已保存的草稿发布为一个新版本。发布后，填写模式不能更改。已关闭的问卷发布新版本后仍保持关闭。',
-  close: '关闭后停止接收新答卷，已有答卷和统计仍然保留。',
-  resume: '恢复后重新接受当前版本的答卷。请确认截止时间尚未到达。',
-  archive: '归档不可撤销。归档后不能编辑或再次发布，历史答卷和统计仍可查看，也可以复制为新问卷。',
-  delete: '这份未发布草稿将被永久删除，无法恢复。',
-}
 async function handleError(reason: unknown) {
   error.value = message(reason)
   if (reason instanceof ApiError) {
@@ -119,26 +98,26 @@ async function handleError(reason: unknown) {
     await logicEditor.value?.locate()
   }
 }
+/** 集中回写服务端返回的问卷详情；回收设置响应不重置本地草稿。 */
+function applySurveyDetail(result: SurveyDetail, resetDraft = true) {
+  survey.value = result
+  revision.value = result.revision
+  mode.value = result.mode
+  deadline.value = localInput(result.deadline)
+  if (resetDraft) {
+    draft.value = result.draft
+    savedDraft.value = encode(result.draft)
+  }
+}
 async function load() {
   loading.value = true
   error.value = ''
   conflict.value = false
   fieldError.value = null
   try {
-    const result = await api<SurveyDetail>(`/api/surveys/${id}`)
-    applyingServerState = true
-    try {
-      survey.value = result
-      draft.value = result.draft
-      revision.value = result.revision
-      mode.value = result.mode
-      deadline.value = localInput(result.deadline)
-      editorKey.value++
-      textPending.value = false
-    } finally {
-      applyingServerState = false
-    }
-    dirty.value = false
+    applySurveyDetail(await api<SurveyDetail>(`/api/surveys/${id}`))
+    editorKey.value++
+    textPending.value = false
   } catch (reason) {
     await handleError(reason)
   } finally {
@@ -176,27 +155,29 @@ async function save() {
   conflict.value = false
   fieldError.value = null
   try {
-    if (draft.value.logic) compileDocumentLogic(draft.value.logic, draft.value.questions)
+    // 草稿 PUT 必须先用旧修订号检测其他窗口的编辑冲突；回收设置的响应不参与这一步。
+    const collection = settingsDirty.value ? { mode: mode.value, deadline: deadline.value } : null
     if (dirty.value) {
-      const result = await api<SurveyDetail>(`/api/surveys/${id}/draft`, 'PUT', {
-        revision: revision.value,
-        document: draft.value,
-      })
-      applyingServerState = true
-      try {
-        revision.value = result.revision
-        draft.value = result.draft
-        survey.value = result
-      } finally {
-        applyingServerState = false
+      applySurveyDetail(
+        await api<SurveyDetail>(`/api/surveys/${id}/draft`, 'PUT', {
+          revision: revision.value,
+          document: draft.value,
+        }),
+      )
+      // 草稿响应带回的是尚未保存的回收参数；先恢复用户刚选的值，等 PATCH 成功再确认。
+      if (collection) {
+        mode.value = collection.mode
+        deadline.value = collection.deadline
       }
-      dirty.value = false
     }
-    if (settingsDirty.value) {
-      survey.value = await api<SurveyDetail>(`/api/surveys/${id}/collection`, 'PATCH', {
-        mode: mode.value,
-        deadline: toTimestamp(deadline.value),
-      })
+    if (collection) {
+      applySurveyDetail(
+        await api<SurveyDetail>(`/api/surveys/${id}/collection`, 'PATCH', {
+          mode: collection.mode,
+          deadline: toTimestamp(collection.deadline),
+        }),
+        false,
+      )
     }
     notice.show('草稿与回收设置已保存。')
   } catch (reason) {
@@ -240,7 +221,6 @@ async function performAction() {
     if (requested === 'delete') {
       await api(`/api/surveys/${id}`, 'DELETE')
       draft.value = null
-      dirty.value = false
       survey.value = null
       action.value = null
       notice.show('草稿已删除。')
@@ -251,15 +231,15 @@ async function performAction() {
         'POST',
         { revision: revision.value },
       )
-      survey.value = result.survey
+      applySurveyDetail(result.survey)
       action.value = null
       notice.show(
         `版本 V${result.version.number} 已发布${result.survey.status === 'closed' ? '，问卷仍保持关闭。' : '，现在可以分享问卷。'}`,
       )
     } else {
-      survey.value = await api<SurveyDetail>(`/api/surveys/${id}/${requested}`, 'POST')
+      applySurveyDetail(await api<SurveyDetail>(`/api/surveys/${id}/${requested}`, 'POST'))
       action.value = null
-      notice.show(`${actionNames[requested]}成功。`)
+      notice.show(`${SURVEY_ACTION_NAMES[requested]}成功。`)
     }
   } catch (reason) {
     await handleError(reason)
@@ -286,8 +266,7 @@ async function add(type: Question['type']) {
   const question = newQuestion(type)
   workspace.value = 'questions'
   draft.value.questions.push(question)
-  const page = draft.value.logic?.flow?.nodes.filter((node) => node.type === 'page').at(-1)
-  if (page?.type === 'page') page.question_ids.push(question.id)
+  syncFlowOrder(draft.value)
   await nextTick()
   document.getElementById(`question-${question.id}`)?.focus()
 }
@@ -327,24 +306,16 @@ function applyTemplate() {
 }
 function move(index: number, direction: number) {
   if (!draft.value) return
-  const questions = draft.value.questions
-  const next = index + direction
-  if (next < 0 || next >= questions.length) return
-  const question = questions.splice(index, 1)[0]!
-  questions.splice(next, 0, question)
+  moveQuestion(draft.value, index, direction)
 }
 function selectInputText(event: FocusEvent) {
   if (event.target instanceof HTMLInputElement) event.target.select()
 }
 function exportDraft() {
-  const url = URL.createObjectURL(
+  downloadBlob(
     new Blob([encode(draft.value)], { type: 'application/json;charset=utf-8' }),
+    `draft-${id}.json`,
   )
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `draft-${id}.json`
-  link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 async function copyLink() {
   try {
@@ -731,8 +702,13 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
       </button>
     </div>
   </Modal>
-  <Modal v-if="action" :title="actionNames[action]" :dismissible="!busy" @close="action = null">
-    <p class="subtle mb">{{ descriptions[action] }}</p>
+  <Modal
+    v-if="action"
+    :title="SURVEY_ACTION_NAMES[action]"
+    :dismissible="!busy"
+    @close="action = null"
+  >
+    <p class="subtle mb">{{ SURVEY_ACTION_DESCRIPTIONS[action] }}</p>
     <p v-if="action === 'publish'" class="notice">
       将发布修订 {{ revision }}，共 {{ draft?.questions.length }} 道题。
     </p>
@@ -748,7 +724,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
         :disabled="busy"
         @click="performAction"
       >
-        {{ busy ? '正在处理…' : `确认${actionNames[action]}` }}
+        {{ busy ? '正在处理…' : `确认${SURVEY_ACTION_NAMES[action]}` }}
       </button>
     </div>
   </Modal>

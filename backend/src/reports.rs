@@ -203,7 +203,7 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
 
 /// 分页查看本人问卷答卷
 ///
-/// 按提交时间升序、回执 UUID 升序稳定排列。一个请求内的总数与分页数据来自同一只读快照。
+/// 按提交时间升序、回执 UUID 升序稳定排列；总数与分页分别查询。
 /// 管理员也只能读取自己拥有的问卷；省略 version_id 且问卷未发布时返回 409。
 #[utoipa::path(
     get, path = "/api/surveys/{id}/responses", tag = "答卷与报表",
@@ -231,11 +231,10 @@ async fn list_responses(
 ) -> AppResult<Json<ResponsePage>> {
     let bounds = query.pagination.bounds()?;
     let range = TimeRange::parse(&query.filter)?;
-    let tx = repository::read_snapshot(&state.db).await?;
     let (version_id, version_number) =
-        selected_version_meta(&tx, user.id, id, query.filter.version_id).await?;
+        selected_version_meta(&state.db, user.id, id, query.filter.version_id).await?;
     let responses = filtered_responses(id, version_id, &range);
-    let total = responses.clone().count(&tx).await?;
+    let total = responses.clone().count(&state.db).await?;
     let rows = responses
         .select_only()
         .columns([response::Column::Id, response::Column::SubmittedAt])
@@ -244,9 +243,8 @@ async fn list_responses(
         .offset(bounds.offset)
         .limit(bounds.limit)
         .into_model::<ResponseHead>()
-        .all(&tx)
+        .all(&state.db)
         .await?;
-    tx.commit().await?;
     Ok(Json(ResponsePage {
         selection: range.selection(version_id, version_number),
         page: Page::new(
@@ -285,8 +283,7 @@ async fn response_detail(
     user: AuthUser,
     ApiPath((id, receipt_id)): ApiPath<(Uuid, Uuid)>,
 ) -> AppResult<Json<ResponseDetail>> {
-    let tx = repository::read_snapshot(&state.db).await?;
-    repository::owned_survey_meta(&tx, user.id, id).await?;
+    repository::owned_survey_meta(&state.db, user.id, id).await?;
     // 显式投影需要的字段，连查询结果也不携带内部身份或幂等哈希。
     let row = response::Entity::find_by_id(receipt_id)
         .filter(response::Column::SurveyId.eq(id))
@@ -298,15 +295,13 @@ async fn response_detail(
             response::Column::Answers,
         ])
         .into_model::<ResponseContent>()
-        .one(&tx)
+        .one(&state.db)
         .await?
         .ok_or_else(AppError::not_found)?;
-    // 命中缓存时零 SQL 查询、零 JSONB 解码、零规则重编译。
-    let lookup = repository::lookup_version(&tx, &state.versions, id, row.version_id)
+    // 版本不可变；按答卷绑定的版本加载并编译题面后再重建规则状态。
+    let version = repository::load_version(&state.db, id, row.version_id)
         .await?
         .ok_or_else(AppError::not_found)?;
-    tx.commit().await?;
-    let version = lookup.resolve(&state.versions, id)?;
     let row = snapshot_row(
         &version.prepared,
         row.id,
@@ -357,17 +352,19 @@ async fn statistics(
 ) -> AppResult<Json<StatisticsResponse>> {
     let range = TimeRange::parse(&filter)?;
     let loaded = load_report(&state, user.id, id, filter.version_id, &range).await?;
-    let version_id = loaded.version_id;
-    let version_number = loaded.version_number;
-    // 空样本直接在调用线程产出零值统计；大样本的汇总与均值计算卸载到阻塞线程。
-    let summary = if loaded.rows.is_empty() {
-        summarize_report(&loaded.prepared, &loaded.rows)?
-    } else {
-        let LoadedReport { prepared, rows, .. } = loaded;
-        tokio::task::spawn_blocking(move || summarize_report(&prepared, &rows))
-            .await
-            .map_err(|error| AppError::internal(error))??
-    };
+    let LoadedReport {
+        version_id,
+        version_number,
+        prepared,
+        stored,
+    } = loaded;
+    // JSONB 解码、规则重建与逐题汇总都在同一个阻塞任务内完成，避免两次线程切换。
+    let summary = tokio::task::spawn_blocking(move || {
+        let rows = snapshot_rows(&prepared, stored)?;
+        summarize_report(&prepared, &rows)
+    })
+    .await
+    .map_err(|error| AppError::internal(error))??;
     Ok(Json(StatisticsResponse {
         selection: range.selection(version_id, version_number),
         total_count: summary.total_count,
@@ -407,24 +404,19 @@ async fn export_csv(
 ) -> AppResult<Response> {
     let range = TimeRange::parse(&filter)?;
     let loaded = load_report(&state, user.id, id, filter.version_id, &range).await?;
-    let version_id = loaded.version_id;
-    let version_number = loaded.version_number;
-    // 空样本只需表头；非空导出在阻塞线程中编码，避免大文件占用异步 worker。
-    let bytes = if loaded.rows.is_empty() {
-        encode_csv(
-            loaded.prepared.document(),
-            version_id,
-            version_number,
-            &loaded.rows,
-        )?
-    } else {
-        let LoadedReport { prepared, rows, .. } = loaded;
-        tokio::task::spawn_blocking(move || {
-            encode_csv(prepared.document(), version_id, version_number, &rows)
-        })
-        .await
-        .map_err(|error| AppError::internal(error))??
-    };
+    let LoadedReport {
+        version_id,
+        version_number,
+        prepared,
+        stored,
+    } = loaded;
+    // 行解码、规则状态重建与 CSV 编码都在同一个阻塞任务内完成，避免两次线程切换。
+    let bytes = tokio::task::spawn_blocking(move || {
+        let rows = snapshot_rows(&prepared, stored)?;
+        encode_csv(prepared.document(), version_id, version_number, &rows)
+    })
+    .await
+    .map_err(|error| AppError::internal(error))??;
     let mut response = bytes.into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -516,12 +508,12 @@ async fn selected_version_meta(
         .ok_or_else(AppError::not_found)
 }
 
-/// 统计与导出共用的单次读取结果：版本标识、已编译题面和固定快照的答卷。
+/// 统计与导出共用的单次读取结果：版本标识、已编译题面和原始答卷行。
 struct LoadedReport {
     version_id: Uuid,
     version_number: i32,
-    prepared: Arc<PreparedDocument>,
-    rows: Vec<SnapshotRow>,
+    prepared: PreparedDocument,
+    stored: Vec<StoredResponseRow>,
 }
 
 async fn load_report(
@@ -531,11 +523,10 @@ async fn load_report(
     version_id: Option<Uuid>,
     range: &TimeRange,
 ) -> AppResult<LoadedReport> {
-    let tx = repository::read_snapshot(&state.db).await?;
-    let survey = repository::owned_survey_meta(&tx, owner_id, survey_id).await?;
+    let survey = repository::owned_survey_meta(&state.db, owner_id, survey_id).await?;
     let version_id = resolve_version_id(survey.current_version_id, version_id)?;
-    // 同一只读快照内校验版本归属：命中缓存零查询，未命中则投影版本行并在提交后编译。
-    let lookup = repository::lookup_version(&tx, &state.versions, survey_id, version_id)
+    // 校验版本归属并编译题面；答卷随后按同一版本读取，解码与汇总交给阻塞线程。
+    let version = repository::load_version(&state.db, survey_id, version_id)
         .await?
         .ok_or_else(AppError::not_found)?;
     let stored = filtered_responses(survey_id, version_id, range)
@@ -548,32 +539,13 @@ async fn load_report(
         .order_by_asc(response::Column::SubmittedAt)
         .order_by_asc(response::Column::Id)
         .into_model::<StoredResponseRow>()
-        .all(&tx)
+        .all(&state.db)
         .await?;
-    // 报表可能扫描大量 JSONB：先结束只读事务并释放连接，再反序列化与求值。
-    tx.commit().await?;
-    let version = lookup.resolve(&state.versions, survey_id)?;
-    let version_number = version.number;
-    let prepared = version.prepared;
-    // 空样本无需逐行解码、流程求值或占用阻塞线程，直接返回空行集。
-    if stored.is_empty() {
-        return Ok(LoadedReport {
-            version_id,
-            version_number,
-            prepared,
-            rows: Vec::new(),
-        });
-    }
-    // JSONB 解码与规则重建可能很重，卸载到阻塞线程，避免占住异步 worker。
-    let document = Arc::clone(&prepared);
-    let rows = tokio::task::spawn_blocking(move || snapshot_rows(&document, stored))
-        .await
-        .map_err(|error| AppError::internal(error))??;
     Ok(LoadedReport {
         version_id,
-        version_number,
-        prepared,
-        rows,
+        version_number: version.number,
+        prepared: version.prepared,
+        stored,
     })
 }
 

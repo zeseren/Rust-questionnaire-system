@@ -162,6 +162,13 @@ async fn 认证与提交使用互不干扰的限流桶() {
     let error = security::check(&state, &raw_request("POST", "/api/auth/register", &同源))
         .expect_err("认证桶满后所有认证入口都必须限流");
     assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
+    // 退出登录与改密不消耗认证配额：即使桶已满也不能被锁死，否则用户无法自救。
+    for (方法, 路径) in [("POST", "/api/auth/logout"), ("PUT", "/api/auth/password")] {
+        assert!(
+            security::check(&state, &raw_request(方法, 路径, &同源)).is_ok(),
+            "{路径} 不受认证限流影响"
+        );
+    }
 }
 
 #[test]

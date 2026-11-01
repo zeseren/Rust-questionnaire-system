@@ -18,6 +18,7 @@ import Pagination from '../components/Pagination.vue'
 import SurveyTemplatePicker from '../components/SurveyTemplatePicker.vue'
 import { createSurveyTemplate, surveyTemplates } from '../survey-templates'
 import type { SurveyTemplateId } from '../survey-templates'
+import { SURVEY_ACTION_DESCRIPTIONS, SURVEY_ACTION_NAMES, type CardAction } from '../survey-actions'
 import '../editor.css'
 const route = useRoute()
 const router = useRouter()
@@ -116,24 +117,7 @@ async function duplicate(id: string) {
     busy.value = false
   }
 }
-type CardAction = 'delete' | 'close' | 'resume' | 'archive'
 const pendingAction = ref<{ survey: SurveySummary; action: CardAction } | null>(null)
-const actionNames: Record<CardAction, string> = {
-  delete: '删除草稿',
-  close: '关闭回收',
-  resume: '恢复回收',
-  archive: '归档问卷',
-}
-const actionDescriptions: Record<CardAction, string> = {
-  delete: '这份未发布草稿将被永久删除，无法恢复。',
-  close: '关闭后停止接收新答卷，已有答卷和统计仍然保留。',
-  resume: '恢复后重新接受当前版本的答卷。请确认截止时间尚未到达。',
-  archive: '归档不可撤销。归档后不能编辑或再次发布，历史答卷和统计仍可查看。',
-}
-// Rule 1：卡片行只在该状态确有可执行操作时渲染操作列，避免归档卡片出现空行。
-function hasCardActions(survey: SurveySummary) {
-  return survey.status !== 'archived'
-}
 function confirmAction(survey: SurveySummary, act: CardAction) {
   if (busy.value) return
   actionError.value = ''
@@ -151,7 +135,7 @@ async function performAction() {
   try {
     if (act === 'delete') await api(`/api/surveys/${survey.id}`, 'DELETE')
     else await api<SurveyDetail>(`/api/surveys/${survey.id}/${act}`, 'POST')
-    notice.show(act === 'delete' ? '草稿已删除。' : `${actionNames[act]}成功。`)
+    notice.show(act === 'delete' ? '草稿已删除。' : `${SURVEY_ACTION_NAMES[act]}成功。`)
     pendingAction.value = null
     refresh()
   } catch (error) {
@@ -345,7 +329,7 @@ async function copySurveyLink(survey: SurveySummary) {
             <span class="meta-dot">·</span>
             <span>修订 {{ survey.revision }}</span>
           </div>
-          <div v-if="hasCardActions(survey)" class="card-actions">
+          <div v-if="survey.status !== 'archived'" class="card-actions">
             <button
               v-if="!survey.current_version_id"
               type="button"
@@ -382,7 +366,7 @@ async function copySurveyLink(survey: SurveySummary) {
               恢复回收
             </button>
             <button
-              v-if="survey.current_version_id && survey.status !== 'archived'"
+              v-if="survey.current_version_id"
               type="button"
               class="text-button danger-text"
               :disabled="busy"
@@ -454,12 +438,12 @@ async function copySurveyLink(survey: SurveySummary) {
   </Modal>
   <Modal
     v-if="pendingAction"
-    :title="actionNames[pendingAction.action]"
+    :title="SURVEY_ACTION_NAMES[pendingAction.action]"
     :dismissible="!busy"
     @close="closeAction"
   >
     <ErrorNotice :message="actionError" />
-    <p class="subtle mb">{{ actionDescriptions[pendingAction.action] }}</p>
+    <p class="subtle mb">{{ SURVEY_ACTION_DESCRIPTIONS[pendingAction.action] }}</p>
     <p class="subtle mb">问卷：{{ pendingAction.survey.title || '无标题问卷' }}</p>
     <div class="actions between">
       <button class="button" :disabled="busy" @click="closeAction">取消</button>
@@ -475,7 +459,7 @@ async function copySurveyLink(survey: SurveySummary) {
         :disabled="busy"
         @click="performAction"
       >
-        {{ busy ? '正在处理…' : `确认${actionNames[pendingAction.action]}` }}
+        {{ busy ? '正在处理…' : `确认${SURVEY_ACTION_NAMES[pendingAction.action]}` }}
       </button>
     </div>
   </Modal>
