@@ -27,8 +27,8 @@ export class FlowSession {
     let deferred2_0
     let deferred2_1
     try {
-      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-      const ptr0 = passStringToWasm0(event_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0
+      const ptr0 = passStringToWasm0(event_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
       const len0 = WASM_VECTOR_LEN
       wasm.flowsession_dispatch(retptr, this.__wbg_ptr, ptr0, len0)
       var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
@@ -38,7 +38,7 @@ export class FlowSession {
       return getStringFromWasm0(r0, r1)
     } finally {
       wasm.__wbindgen_add_to_stack_pointer(16)
-      wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1)
+      wasm.__wbindgen_export5(deferred2_0, deferred2_1, 1)
     }
   }
   /**
@@ -56,8 +56,8 @@ export class FlowSession {
     let deferred2_0
     let deferred2_1
     try {
-      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-      const ptr0 = passStringToWasm0(answers_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0
+      const ptr0 = passStringToWasm0(answers_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
       const len0 = WASM_VECTOR_LEN
       wasm.flowsession_evaluate_answers(retptr, this.__wbg_ptr, ptr0, len0)
       var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
@@ -67,7 +67,7 @@ export class FlowSession {
       return getStringFromWasm0(r0, r1)
     } finally {
       wasm.__wbindgen_add_to_stack_pointer(16)
-      wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1)
+      wasm.__wbindgen_export5(deferred2_0, deferred2_1, 1)
     }
   }
   /**
@@ -76,11 +76,11 @@ export class FlowSession {
    */
   constructor(document_json) {
     try {
-      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0
       const ptr0 = passStringToWasm0(
         document_json,
-        wasm.__wbindgen_export2,
         wasm.__wbindgen_export3,
+        wasm.__wbindgen_export4,
       )
       const len0 = WASM_VECTOR_LEN
       wasm.flowsession_new(retptr, ptr0, len0)
@@ -88,7 +88,7 @@ export class FlowSession {
       var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
       var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true)
       if (r2) {
-        throw takeObject(r1)
+        throw takeFromExternrefTable0(r1)
       }
       this.__wbg_ptr = r0
       FlowSessionFinalization.register(this, this.__wbg_ptr, this)
@@ -105,7 +105,7 @@ export class FlowSession {
     let deferred1_0
     let deferred1_1
     try {
-      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
+      const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0
       wasm.flowsession_snapshot(retptr, this.__wbg_ptr)
       var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
       var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
@@ -114,7 +114,7 @@ export class FlowSession {
       return getStringFromWasm0(r0, r1)
     } finally {
       wasm.__wbindgen_add_to_stack_pointer(16)
-      wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1)
+      wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1)
     }
   }
 }
@@ -133,11 +133,22 @@ export function compile_document_logic(logic_json, questions_json) {
   let deferred3_0
   let deferred3_1
   try {
-    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-    const ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len0 = WASM_VECTOR_LEN
-    const ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len1 = WASM_VECTOR_LEN
+    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0
+    let ptr0, len0, ptr1, len1
+    try {
+      ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len0 = WASM_VECTOR_LEN
+      ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len1 = WASM_VECTOR_LEN
+    } catch (e) {
+      if (ptr1) {
+        wasm.__wbindgen_export5(ptr1, len1 * 1, 1)
+      }
+      if (ptr0) {
+        wasm.__wbindgen_export5(ptr0, len0 * 1, 1)
+      }
+      throw e
+    }
     wasm.compile_document_logic(retptr, ptr0, len0, ptr1, len1)
     var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
     var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
@@ -146,7 +157,7 @@ export function compile_document_logic(logic_json, questions_json) {
     return getStringFromWasm0(r0, r1)
   } finally {
     wasm.__wbindgen_add_to_stack_pointer(16)
-    wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1)
+    wasm.__wbindgen_export5(deferred3_0, deferred3_1, 1)
   }
 }
 
@@ -160,11 +171,22 @@ export function compile_expression(raw_json, questions_json) {
   let deferred3_0
   let deferred3_1
   try {
-    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-    const ptr0 = passStringToWasm0(raw_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len0 = WASM_VECTOR_LEN
-    const ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len1 = WASM_VECTOR_LEN
+    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0
+    let ptr0, len0, ptr1, len1
+    try {
+      ptr0 = passStringToWasm0(raw_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len0 = WASM_VECTOR_LEN
+      ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len1 = WASM_VECTOR_LEN
+    } catch (e) {
+      if (ptr1) {
+        wasm.__wbindgen_export5(ptr1, len1 * 1, 1)
+      }
+      if (ptr0) {
+        wasm.__wbindgen_export5(ptr0, len0 * 1, 1)
+      }
+      throw e
+    }
     wasm.compile_expression(retptr, ptr0, len0, ptr1, len1)
     var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
     var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
@@ -173,7 +195,7 @@ export function compile_expression(raw_json, questions_json) {
     return getStringFromWasm0(r0, r1)
   } finally {
     wasm.__wbindgen_add_to_stack_pointer(16)
-    wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1)
+    wasm.__wbindgen_export5(deferred3_0, deferred3_1, 1)
   }
 }
 
@@ -191,13 +213,27 @@ export function evaluate_document_logic(logic_json, questions_json, answers_json
   let deferred4_0
   let deferred4_1
   try {
-    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-    const ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len0 = WASM_VECTOR_LEN
-    const ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len1 = WASM_VECTOR_LEN
-    const ptr2 = passStringToWasm0(answers_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len2 = WASM_VECTOR_LEN
+    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0
+    let ptr0, len0, ptr1, len1, ptr2, len2
+    try {
+      ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len0 = WASM_VECTOR_LEN
+      ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len1 = WASM_VECTOR_LEN
+      ptr2 = passStringToWasm0(answers_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len2 = WASM_VECTOR_LEN
+    } catch (e) {
+      if (ptr2) {
+        wasm.__wbindgen_export5(ptr2, len2 * 1, 1)
+      }
+      if (ptr1) {
+        wasm.__wbindgen_export5(ptr1, len1 * 1, 1)
+      }
+      if (ptr0) {
+        wasm.__wbindgen_export5(ptr0, len0 * 1, 1)
+      }
+      throw e
+    }
     wasm.evaluate_document_logic(retptr, ptr0, len0, ptr1, len1, ptr2, len2)
     var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
     var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
@@ -206,7 +242,7 @@ export function evaluate_document_logic(logic_json, questions_json, answers_json
     return getStringFromWasm0(r0, r1)
   } finally {
     wasm.__wbindgen_add_to_stack_pointer(16)
-    wasm.__wbindgen_export4(deferred4_0, deferred4_1, 1)
+    wasm.__wbindgen_export5(deferred4_0, deferred4_1, 1)
   }
 }
 
@@ -227,13 +263,27 @@ export function evaluate_expression(raw_json, questions_json, answers_json) {
   let deferred4_0
   let deferred4_1
   try {
-    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-    const ptr0 = passStringToWasm0(raw_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len0 = WASM_VECTOR_LEN
-    const ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len1 = WASM_VECTOR_LEN
-    const ptr2 = passStringToWasm0(answers_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len2 = WASM_VECTOR_LEN
+    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0
+    let ptr0, len0, ptr1, len1, ptr2, len2
+    try {
+      ptr0 = passStringToWasm0(raw_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len0 = WASM_VECTOR_LEN
+      ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len1 = WASM_VECTOR_LEN
+      ptr2 = passStringToWasm0(answers_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len2 = WASM_VECTOR_LEN
+    } catch (e) {
+      if (ptr2) {
+        wasm.__wbindgen_export5(ptr2, len2 * 1, 1)
+      }
+      if (ptr1) {
+        wasm.__wbindgen_export5(ptr1, len1 * 1, 1)
+      }
+      if (ptr0) {
+        wasm.__wbindgen_export5(ptr0, len0 * 1, 1)
+      }
+      throw e
+    }
     wasm.evaluate_expression(retptr, ptr0, len0, ptr1, len1, ptr2, len2)
     var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
     var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
@@ -242,7 +292,7 @@ export function evaluate_expression(raw_json, questions_json, answers_json) {
     return getStringFromWasm0(r0, r1)
   } finally {
     wasm.__wbindgen_add_to_stack_pointer(16)
-    wasm.__wbindgen_export4(deferred4_0, deferred4_1, 1)
+    wasm.__wbindgen_export5(deferred4_0, deferred4_1, 1)
   }
 }
 
@@ -256,11 +306,22 @@ export function format_logic_text(logic_json, questions_json) {
   let deferred3_0
   let deferred3_1
   try {
-    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-    const ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len0 = WASM_VECTOR_LEN
-    const ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len1 = WASM_VECTOR_LEN
+    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0
+    let ptr0, len0, ptr1, len1
+    try {
+      ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len0 = WASM_VECTOR_LEN
+      ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len1 = WASM_VECTOR_LEN
+    } catch (e) {
+      if (ptr1) {
+        wasm.__wbindgen_export5(ptr1, len1 * 1, 1)
+      }
+      if (ptr0) {
+        wasm.__wbindgen_export5(ptr0, len0 * 1, 1)
+      }
+      throw e
+    }
     wasm.format_logic_text(retptr, ptr0, len0, ptr1, len1)
     var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
     var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
@@ -269,7 +330,7 @@ export function format_logic_text(logic_json, questions_json) {
     return getStringFromWasm0(r0, r1)
   } finally {
     wasm.__wbindgen_add_to_stack_pointer(16)
-    wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1)
+    wasm.__wbindgen_export5(deferred3_0, deferred3_1, 1)
   }
 }
 
@@ -283,11 +344,22 @@ export function parse_logic_text(source, questions_json) {
   let deferred3_0
   let deferred3_1
   try {
-    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-    const ptr0 = passStringToWasm0(source, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len0 = WASM_VECTOR_LEN
-    const ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
-    const len1 = WASM_VECTOR_LEN
+    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0
+    let ptr0, len0, ptr1, len1
+    try {
+      ptr0 = passStringToWasm0(source, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len0 = WASM_VECTOR_LEN
+      ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
+      len1 = WASM_VECTOR_LEN
+    } catch (e) {
+      if (ptr1) {
+        wasm.__wbindgen_export5(ptr1, len1 * 1, 1)
+      }
+      if (ptr0) {
+        wasm.__wbindgen_export5(ptr0, len0 * 1, 1)
+      }
+      throw e
+    }
     wasm.parse_logic_text(retptr, ptr0, len0, ptr1, len1)
     var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
     var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true)
@@ -296,7 +368,7 @@ export function parse_logic_text(source, questions_json) {
     return getStringFromWasm0(r0, r1)
   } finally {
     wasm.__wbindgen_add_to_stack_pointer(16)
-    wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1)
+    wasm.__wbindgen_export5(deferred3_0, deferred3_1, 1)
   }
 }
 
@@ -309,8 +381,8 @@ export function renew_document_ids(document_json) {
   let deferred2_0
   let deferred2_1
   try {
-    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16)
-    const ptr0 = passStringToWasm0(document_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3)
+    const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0
+    const ptr0 = passStringToWasm0(document_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4)
     const len0 = WASM_VECTOR_LEN
     wasm.renew_document_ids(retptr, ptr0, len0)
     var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true)
@@ -320,13 +392,13 @@ export function renew_document_ids(document_json) {
     return getStringFromWasm0(r0, r1)
   } finally {
     wasm.__wbindgen_add_to_stack_pointer(16)
-    wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1)
+    wasm.__wbindgen_export5(deferred2_0, deferred2_1, 1)
   }
 }
-export function __wbg___wbindgen_throw_41e9ee4f547fc59a(arg0, arg1) {
+export function __wbg___wbindgen_throw_4c88d8bf264fd984(arg0, arg1) {
   throw new Error(getStringFromWasm0(arg0, arg1))
 }
-export function __wbg_getRandomValues_436a51d0629d84e1() {
+export function __wbg_getRandomValues_8b6f1f663e6f188d() {
   return handleError(function (arg0, arg1) {
     globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1))
   }, arguments)
@@ -334,29 +406,25 @@ export function __wbg_getRandomValues_436a51d0629d84e1() {
 export function __wbindgen_generic_0000000000000001(arg0, arg1) {
   // Cast intrinsic for `Ref(String) -> Externref`.
   const ret = getStringFromWasm0(arg0, arg1)
-  return addHeapObject(ret)
+  return ret
 }
-export function __wbindgen_object_drop_ref(arg0) {
-  takeObject(arg0)
+export function __wbindgen_init_externref_table() {
+  const table = wasm.__wbindgen_externrefs
+  table.set(0, undefined)
+  table.set(1024, undefined)
+  table.set(1025, null)
+  table.set(1026, true)
+  table.set(1027, false)
 }
 const FlowSessionFinalization =
   typeof FinalizationRegistry === 'undefined'
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry((ptr) => wasm.__wbg_flowsession_free(ptr, 1))
 
-function addHeapObject(obj) {
-  if (heap_next === heap.length) heap.push(heap.length + 1)
-  const idx = heap_next
-  heap_next = heap[idx]
-
-  heap[idx] = obj
+function addToExternrefTable0(obj) {
+  const idx = wasm.__wbindgen_export2()
+  wasm.__wbindgen_externrefs.set(idx, obj)
   return idx
-}
-
-function dropObject(idx) {
-  if (idx < 1028) return
-  heap[idx] = heap_next
-  heap_next = idx
 }
 
 function getArrayU8FromWasm0(ptr, len) {
@@ -378,7 +446,8 @@ function getDataViewMemory0() {
 }
 
 function getStringFromWasm0(ptr, len) {
-  return decodeText(ptr >>> 0, len)
+  ptr = ptr >>> 0
+  return decodeText(getUint8ArrayMemory0().subarray(ptr, ptr + len))
 }
 
 let cachedUint8ArrayMemory0 = null
@@ -389,22 +458,14 @@ function getUint8ArrayMemory0() {
   return cachedUint8ArrayMemory0
 }
 
-function getObject(idx) {
-  return heap[idx]
-}
-
 function handleError(f, args) {
   try {
     return f.apply(this, args)
   } catch (e) {
-    wasm.__wbindgen_export(addHeapObject(e))
+    const idx = addToExternrefTable0(e)
+    wasm.__wbindgen_export(idx)
   }
 }
-
-let heap = new Array(1024).fill(undefined)
-heap.push(undefined, null, true, false)
-
-let heap_next = heap.length
 
 function passStringToWasm0(arg, malloc, realloc) {
   if (realloc === undefined) {
@@ -445,24 +506,24 @@ function passStringToWasm0(arg, malloc, realloc) {
   return ptr
 }
 
-function takeObject(idx) {
-  const ret = getObject(idx)
-  dropObject(idx)
-  return ret
+function takeFromExternrefTable0(idx) {
+  const value = wasm.__wbindgen_externrefs.get(idx)
+  wasm.__wbindgen_export6(idx)
+  return value
 }
 
-let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true })
+let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true })
 cachedTextDecoder.decode()
 const MAX_SAFARI_DECODE_BYTES = 2146435072
 let numBytesDecoded = 0
-function decodeText(ptr, len) {
-  numBytesDecoded += len
+function decodeText(bytes) {
+  numBytesDecoded += bytes.length
   if (numBytesDecoded >= MAX_SAFARI_DECODE_BYTES) {
-    cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true })
+    cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true })
     cachedTextDecoder.decode()
-    numBytesDecoded = len
+    numBytesDecoded = bytes.length
   }
-  return cachedTextDecoder.decode(getUint8ArrayMemory0().subarray(ptr, ptr + len))
+  return cachedTextDecoder.decode(bytes)
 }
 
 const cachedTextEncoder = new TextEncoder()

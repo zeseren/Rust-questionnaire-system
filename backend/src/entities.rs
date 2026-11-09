@@ -1,4 +1,4 @@
-//! SeaORM 实体只映射数据库。HTTP 响应用各业务模块的 DTO，避免泄露密码和提交秘密。
+//! `SeaORM` 实体只映射数据库。HTTP 响应用各业务模块的 DTO，避免泄露密码和提交秘密。
 //!
 //! 状态、模式、角色与审计动作直接以强类型枚举映射文本列：字符串编解码只由
 //! `DeriveActiveEnum` 负责，业务代码不再手写 `match` 转换。
@@ -35,7 +35,7 @@ impl SurveyStatus {
     }
 }
 
-/// anonymous 不关联账号；login_once 对同一问卷按账号跨版本限交一次。
+/// `anonymous` 不关联账号；`login_once` 对同一问卷按账号跨版本限交一次。
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema, EnumIter, DeriveActiveEnum,
 )]

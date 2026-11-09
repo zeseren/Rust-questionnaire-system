@@ -145,7 +145,10 @@ fn 共享流程拒绝非法拓扑和未保护的分支依赖() {
             for segment in edit["path"].as_array().unwrap() {
                 target = match segment {
                     Value::String(key) => &mut target[key],
-                    Value::Number(index) => &mut target[index.as_u64().unwrap() as usize],
+                    Value::Number(index) => {
+                        let position = usize::try_from(index.as_u64().unwrap()).unwrap();
+                        &mut target[position]
+                    }
                     _ => panic!("样例路径只能包含字段或索引"),
                 };
             }

@@ -116,7 +116,7 @@ pub(crate) struct OptionFrequency {
     pub(crate) option_id: Uuid,
     pub(crate) label: String,
     pub(crate) count: u64,
-    /// 频次 / 本题 answered_count，取值 0..1；分母为 0 时为 null。
+    /// 频次 / 本题 `answered_count`，取值 0..1；分母为 0 时为 null。
     pub(crate) proportion: Option<f64>,
 }
 
@@ -204,7 +204,7 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
 /// 分页查看本人问卷答卷
 ///
 /// 按提交时间升序、回执 UUID 升序稳定排列；总数与分页分别查询。
-/// 管理员也只能读取自己拥有的问卷；省略 version_id 且问卷未发布时返回 409。
+/// 管理员也只能读取自己拥有的问卷；省略 `version_id` 且问卷未发布时返回 409。
 #[utoipa::path(
     get, path = "/api/surveys/{id}/responses", tag = "答卷与报表",
     params(
@@ -876,17 +876,17 @@ pub(crate) fn encode_csv(
     version_number: i32,
     rows: &[SnapshotRow],
 ) -> AppResult<Vec<u8>> {
-    let estimated_bytes = rows
-        .len()
-        .saturating_mul(document.questions.len() * 16 + 64)
-        .saturating_add(128)
-        .min(16 << 20);
     #[track_caller]
     fn write_cell(writer: &mut csv::Writer<Vec<u8>>, cell: &str) -> AppResult<()> {
         writer
             .write_field(formula_safe(cell).as_bytes())
             .map_err(|error| AppError::internal(error))
     }
+    let estimated_bytes = rows
+        .len()
+        .saturating_mul(document.questions.len() * 16 + 64)
+        .saturating_add(128)
+        .min(16 << 20);
     let mut writer = csv::WriterBuilder::new()
         .terminator(csv::Terminator::CRLF)
         .from_writer(Vec::with_capacity(estimated_bytes));

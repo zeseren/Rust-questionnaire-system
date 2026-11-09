@@ -143,7 +143,7 @@ async fn register(
     Ok((StatusCode::CREATED, Json(user.into())))
 }
 
-/// 登录成功后只通过 HttpOnly Cookie 发送新的会话秘密。
+/// 登录成功后只通过 `HttpOnly` Cookie 发送新的会话秘密。
 #[utoipa::path(
     post, path = "/api/auth/login", tag = "账号",
     request_body = LoginRequest,

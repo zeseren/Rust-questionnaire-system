@@ -3,7 +3,7 @@
 //!
 //! # 边界不变量
 //!
-//! - 所有导出的参数与返回值均为 String：入参是 JSON 文本，出参是信封
+//! - 纯函数导出以借用字符串（`&str`）接收 JSON 文本，返回值是 `String` 信封
 //!   `{"ok":…}` 或 `{"error":{code,path,question_id,line?,column?}}`。
 //! - 数字按标准有限 `f64` 语义穿透 JSON 信封，与 JS 原生 `number` 直接对应。
 //! - 错误对象由 serde 序列化 `LogicError` / `LogicTextError` 得到，不手拼 JSON，
@@ -57,20 +57,22 @@ fn domain_error(error: impl serde::Serialize) -> Value {
 
 /// 解析文本 DSL；失败信封额外携带 `line` / `column`。
 #[wasm_bindgen]
-pub fn parse_logic_text(source: String, questions_json: String) -> String {
+#[must_use]
+pub fn parse_logic_text(source: &str, questions_json: &str) -> String {
     let result = (|| {
-        let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
-        core_parse_logic_text(&source, &questions).map_err(domain_error)
+        let questions: Vec<Question> = decode(questions_json, "questions_json")?;
+        core_parse_logic_text(source, &questions).map_err(domain_error)
     })();
     envelope_generic(result)
 }
 
 /// 把规则 JSON 格式化回文本 DSL。
 #[wasm_bindgen]
-pub fn format_logic_text(logic_json: String, questions_json: String) -> String {
+#[must_use]
+pub fn format_logic_text(logic_json: &str, questions_json: &str) -> String {
     let result = (|| {
-        let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
-        let logic: DocumentLogic = decode(&logic_json, "logic_json")?;
+        let questions: Vec<Question> = decode(questions_json, "questions_json")?;
+        let logic: DocumentLogic = decode(logic_json, "logic_json")?;
         core_format_logic_text(&logic, &questions).map_err(domain_error)
     })();
     envelope_generic(result)
@@ -94,10 +96,11 @@ struct CompiledExpressionResponse {
 /// 成功信封同时返回 `variable_order`：计算变量的拓扑顺序，供前端在编译期展示
 /// 与断言使用（`evaluate_document_logic` 只负责按答案求值）。
 #[wasm_bindgen]
-pub fn compile_document_logic(logic_json: String, questions_json: String) -> String {
+#[must_use]
+pub fn compile_document_logic(logic_json: &str, questions_json: &str) -> String {
     let result = (|| {
-        let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
-        let logic: DocumentLogic = decode(&logic_json, "logic_json")?;
+        let questions: Vec<Question> = decode(questions_json, "questions_json")?;
+        let logic: DocumentLogic = decode(logic_json, "logic_json")?;
         let compiled = logic.compile(&questions).map_err(domain_error)?;
         Ok(CompiledDocumentLogicResponse {
             variable_order: compiled.variable_order().to_vec(),
@@ -108,10 +111,11 @@ pub fn compile_document_logic(logic_json: String, questions_json: String) -> Str
 
 /// 编译单个表达式包：`{"value_type":…,"dependencies":[…]}`，供表达式编辑器提示。
 #[wasm_bindgen]
-pub fn compile_expression(raw_json: String, questions_json: String) -> String {
+#[must_use]
+pub fn compile_expression(raw_json: &str, questions_json: &str) -> String {
     let result = (|| {
-        let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
-        let raw: Value = decode(&raw_json, "raw_json")?;
+        let questions: Vec<Question> = decode(questions_json, "questions_json")?;
+        let raw: Value = decode(raw_json, "raw_json")?;
         let compiled = core_compile_expression(&raw, &questions).map_err(domain_error)?;
         Ok(CompiledExpressionResponse {
             value_type: compiled.value_type(),
@@ -122,9 +126,10 @@ pub fn compile_expression(raw_json: String, questions_json: String) -> String {
 }
 /// 重写整份问卷的身份（复制问卷/规则时使用）。
 #[wasm_bindgen]
-pub fn renew_document_ids(document_json: String) -> String {
+#[must_use]
+pub fn renew_document_ids(document_json: &str) -> String {
     let result = (|| {
-        let mut document: Document = decode(&document_json, "document_json")?;
+        let mut document: Document = decode(document_json, "document_json")?;
         document.renew_ids();
         Ok(document)
     })();
@@ -139,15 +144,12 @@ pub fn renew_document_ids(document_json: String) -> String {
 /// # 错误
 /// 入参非法、编译失败或引用答案的类型/数值不合法时返回 error 信封。
 #[wasm_bindgen]
-pub fn evaluate_expression(
-    raw_json: String,
-    questions_json: String,
-    answers_json: String,
-) -> String {
+#[must_use]
+pub fn evaluate_expression(raw_json: &str, questions_json: &str, answers_json: &str) -> String {
     let result = (|| {
-        let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
-        let raw: Value = decode(&raw_json, "raw_json")?;
-        let StrictAnswers(answers) = decode(&answers_json, "answers_json")?;
+        let questions: Vec<Question> = decode(questions_json, "questions_json")?;
+        let raw: Value = decode(raw_json, "raw_json")?;
+        let StrictAnswers(answers) = decode(answers_json, "answers_json")?;
         let compiled = core_compile_expression(&raw, &questions).map_err(domain_error)?;
         compiled.evaluate(&answers).map_err(domain_error)
     })();
@@ -159,15 +161,16 @@ pub fn evaluate_expression(
 /// # 错误
 /// 编译失败或求值中出现类型、引用、除零、溢出错误时返回 error 信封。
 #[wasm_bindgen]
+#[must_use]
 pub fn evaluate_document_logic(
-    logic_json: String,
-    questions_json: String,
-    answers_json: String,
+    logic_json: &str,
+    questions_json: &str,
+    answers_json: &str,
 ) -> String {
     let result = (|| {
-        let questions: Vec<Question> = decode(&questions_json, "questions_json")?;
-        let logic: DocumentLogic = decode(&logic_json, "logic_json")?;
-        let StrictAnswers(answers) = decode(&answers_json, "answers_json")?;
+        let questions: Vec<Question> = decode(questions_json, "questions_json")?;
+        let logic: DocumentLogic = decode(logic_json, "logic_json")?;
+        let StrictAnswers(answers) = decode(answers_json, "answers_json")?;
         let compiled = logic.compile(&questions).map_err(domain_error)?;
         compiled.evaluate(&answers).map_err(domain_error)
     })();

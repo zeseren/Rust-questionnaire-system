@@ -35,7 +35,7 @@ pub(crate) struct PublicSurvey {
     pub survey_id: Uuid,
     pub version_id: Uuid,
     pub version_number: i32,
-    /// anonymous 为公开匿名；login_once 为同一账号跨版本仅提交一次。
+    /// `anonymous` 为公开匿名；`login_once` 为同一账号跨版本仅提交一次。
     pub mode: FillingMode,
     pub deadline: Option<DateTime<Utc>>,
     /// purpose 是发布者说明的收集目的；文本只能作为普通文本展示。
@@ -53,7 +53,7 @@ pub(crate) struct PrivacyNotice {
     pub public_link_notice: &'static str,
 }
 
-/// 一个逻辑提交只生成一次 UUIDv4 秘密；网络重试必须保留原秘密与输入。
+/// 一个逻辑提交只生成一次 `UUIDv4` 秘密；网络重试必须保留原秘密与输入。
 /// 不实现 Debug，避免排错时顺手输出答案正文或提交秘密。
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -99,7 +99,7 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
 
 /// 读取当前可填写题面。
 ///
-/// anonymous 完全忽略 Cookie；login_once 要求有效会话且尚未提交。
+/// `anonymous` 完全忽略 Cookie；`login_once` 要求有效会话且尚未提交。
 /// 已关闭、到期、下架或发布者禁用时不返回题面。隐私提示与 purpose 应在填写前展示。
 #[utoipa::path(
     get,
@@ -127,9 +127,9 @@ async fn public_survey(
 /// 提交完整答卷或重试同一次提交。
 ///
 /// 首次成功返回 201，合法重试返回 200 和原回执。相同作用域中改变版本或规范化答案返回
-/// idempotency_conflict。题目顺序及多选集合顺序不影响幂等性，但重复题目和选项仍会拒绝。
-/// 成功后的原载荷重试可跨关闭、下架、发布者禁用及版本切换；login_once 仍须验证填写者身份。
-/// 没有成功记录的旧版本提交返回 version_changed；未知版本和非法答案返回 validation_failed。
+/// `idempotency_conflict`。题目顺序及多选集合顺序不影响幂等性，但重复题目和选项仍会拒绝。
+/// 成功后的原载荷重试可跨关闭、下架、发布者禁用及版本切换；`login_once` 仍须验证填写者身份。
+/// 没有成功记录的旧版本提交返回 `version_changed`；未知版本和非法答案返回 `validation_failed`。
 #[utoipa::path(
     post,
     path = "/api/public/surveys/{id}/responses",

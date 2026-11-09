@@ -12,6 +12,7 @@ pub use uuid::Uuid;
 const INVALID_ID: &str = "身份 ID 必须是非零的小写连字符 UUID";
 
 /// 严格解析身份文本：只接受 36 字符、非空、全小写连字符 UUID。
+#[must_use]
 pub fn parse(raw: &str) -> Option<Uuid> {
     let id = Uuid::parse_str(raw).ok().filter(|id| !id.is_nil())?;
     (raw.len() == 36
@@ -21,12 +22,20 @@ pub fn parse(raw: &str) -> Option<Uuid> {
     .then_some(id)
 }
 
+/// 反序列化单个身份字符串，并复用严格解析规则。
+///
+/// # Errors
+/// 输入不是字符串，或不是非零的小写连字符 UUID 时返回反序列化错误。
 pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Uuid, D::Error> {
     let raw = String::deserialize(deserializer)
         .map_err(|_| D::Error::custom("非零的小写连字符 UUID 字符串"))?;
     parse(&raw).ok_or_else(|| D::Error::custom(INVALID_ID))
 }
 
+/// 反序列化身份字符串数组，逐元素复用严格解析规则。
+///
+/// # Errors
+/// 输入不是字符串数组，或任一元素不是非零的小写连字符 UUID 时返回反序列化错误。
 pub fn deserialize_vec<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Uuid>, D::Error> {
     Vec::<String>::deserialize(deserializer)
         .map_err(|_| D::Error::custom("非零的小写连字符 UUID 数组"))?
@@ -36,6 +45,9 @@ pub fn deserialize_vec<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec
 }
 
 /// 反序列化以题目身份为键的对象；键与单值身份使用同一套严格校验。
+///
+/// # Errors
+/// 输入不是对象，或任一键不是非零的小写连字符 UUID 时返回反序列化错误。
 pub fn deserialize_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<Uuid, V>, D::Error>
 where
     D: Deserializer<'de>,

@@ -181,6 +181,7 @@ impl CompiledDocumentLogic {
         Ok(value)
     }
     /// 同时可执行的变量按 UUID 排序，声明重排不改变计算顺序。
+    #[must_use]
     pub fn variable_order(&self) -> &[Uuid] {
         &self.order
     }
@@ -196,7 +197,7 @@ impl CompiledDocumentLogic {
 
     /// 对已规范化且已排除不适用答案的上下文计算规则；不代替流程或答案校验。
     ///
-    /// # 错误
+    /// # Errors
     /// 类型错误、无效答案、除零和数值溢出均返回领域错误。
     pub fn evaluate(
         &self,
@@ -255,7 +256,7 @@ fn expand_dependencies(
 impl DocumentLogic {
     /// 检查规则总容量、引用、类型、变量循环和间接前向依赖。
     ///
-    /// # 错误
+    /// # Errors
     /// 不接受未知版本、重复身份、空规则、类型错误、环或非法题目顺序。
     pub fn compile(&self, questions: &[Question]) -> Result<CompiledDocumentLogic, LogicError> {
         if self.variables.len() > MAX_QUESTIONS || self.rules.len() > MAX_QUESTIONS {
@@ -271,41 +272,13 @@ impl DocumentLogic {
             )?;
             return Ok(CompiledDocumentLogic::empty());
         }
-        for expression in self
-            .variables
-            .iter()
-            .map(|variable| &variable.expression)
-            .chain(self.rules.iter().flat_map(|rule| {
-                [&rule.visible_if, &rule.required_if, &rule.validate]
-                    .into_iter()
-                    .flatten()
-            }))
-            .chain(self.flow.iter().flat_map(|flow| flow.expressions()))
-        {
-            check_raw_budget(Some(expression), 1, &mut 0)?;
-        }
+        self.check_expression_budget()?;
         let positions: BTreeMap<_, _> = questions
             .iter()
             .enumerate()
             .map(|(index, question)| (question.id, index))
             .collect();
-        let mut occupied: BTreeSet<_> = questions.iter().map(|question| question.id).collect();
-        for question in questions {
-            if let Some(options) = question.kind.options() {
-                occupied.extend(options.iter().map(|option| option.id));
-            }
-        }
-        let mut types = BTreeMap::new();
-        for variable in &self.variables {
-            if variable.id.is_nil() || !occupied.insert(variable.id) {
-                return Err(error(
-                    LogicErrorCode::InvalidReference,
-                    "$.logic.variables",
-                    None,
-                ));
-            }
-            types.insert(variable.id, variable.value_type);
-        }
+        let (occupied, types) = self.collect_identities(questions)?;
         // 即使规则包为空，也必须检查版本和题目绑定。
         let context = CompilationContext::new(
             &self.dsl_version,
@@ -313,22 +286,8 @@ impl DocumentLogic {
             questions,
             &types,
         )?;
-        let compile = |expression: &Value, path: &str| {
-            context
-                .compile(expression)
-                .map_err(|failure| failure.relocate(path))
-        };
-        let mut variables = BTreeMap::new();
-        for (index, variable) in self.variables.iter().enumerate() {
-            let path = format!("$.logic.variables[{index}].expression");
-            let expression = compile(&variable.expression, &path)?;
-            if expression.value_type() != variable.value_type {
-                return Err(error(LogicErrorCode::TypeMismatch, &path, None));
-            }
-            variables.insert(variable.id, CompiledVariable { expression, path });
-        }
-        // 计算变量按拓扑序展开：入度只统计尚未就绪的直接变量依赖，
-        // 就绪集合每次取最小 UUID，保持与逐轮全表扫描完全一致的确定性顺序。
+        let variables = self.compile_variables(&context)?;
+        // 同时就绪的变量按最小 UUID 取出，保持确定性的求值与依赖展开顺序。
         let mut indegree: BTreeMap<Uuid, usize> = variables
             .iter()
             .map(|(id, variable)| (*id, variable.expression.variable_dependencies().count()))
@@ -368,6 +327,98 @@ impl DocumentLogic {
                 None,
             ));
         }
+        let (rules, rule_indices) =
+            self.compile_rules(&context, &positions, &question_dependencies)?;
+        let mut compiled = CompiledDocumentLogic {
+            variables,
+            order,
+            rules,
+            rule_indices,
+            question_dependencies,
+            flow: None,
+        };
+        if let Some(flow) = &self.flow {
+            // 题目、选项与变量身份已在上面登记，流程节点身份直接续用同一集合。
+            compiled.flow = Some(crate::flow::compile_flow(
+                flow, occupied, &compiled, questions, &context,
+            )?);
+        }
+        Ok(compiled)
+    }
+
+    /// 规则包中的表达式逐条检查原始预算，避免编译前消耗过多资源。
+    fn check_expression_budget(&self) -> Result<(), LogicError> {
+        for expression in self
+            .variables
+            .iter()
+            .map(|variable| &variable.expression)
+            .chain(self.rules.iter().flat_map(|rule| {
+                [&rule.visible_if, &rule.required_if, &rule.validate]
+                    .into_iter()
+                    .flatten()
+            }))
+            .chain(
+                self.flow
+                    .iter()
+                    .flat_map(crate::flow::FlowDefinition::expressions),
+            )
+        {
+            check_raw_budget(Some(expression), 1, &mut 0)?;
+        }
+        Ok(())
+    }
+
+    /// 登记题目、选项与变量身份，返回占用集合及变量声明类型。
+    fn collect_identities(
+        &self,
+        questions: &[Question],
+    ) -> Result<(BTreeSet<Uuid>, BTreeMap<Uuid, LogicValueType>), LogicError> {
+        let mut occupied: BTreeSet<_> = questions.iter().map(|question| question.id).collect();
+        for question in questions {
+            if let Some(options) = question.kind.options() {
+                occupied.extend(options.iter().map(|option| option.id));
+            }
+        }
+        let mut types = BTreeMap::new();
+        for variable in &self.variables {
+            if variable.id.is_nil() || !occupied.insert(variable.id) {
+                return Err(error(
+                    LogicErrorCode::InvalidReference,
+                    "$.logic.variables",
+                    None,
+                ));
+            }
+            types.insert(variable.id, variable.value_type);
+        }
+        Ok((occupied, types))
+    }
+
+    /// 编译变量表达式并核对声明类型；声明顺序不参与执行顺序。
+    fn compile_variables(
+        &self,
+        context: &CompilationContext,
+    ) -> Result<BTreeMap<Uuid, CompiledVariable>, LogicError> {
+        let mut variables = BTreeMap::new();
+        for (index, variable) in self.variables.iter().enumerate() {
+            let path = format!("$.logic.variables[{index}].expression");
+            let expression = context
+                .compile(&variable.expression)
+                .map_err(|failure| failure.relocate(&path))?;
+            if expression.value_type() != variable.value_type {
+                return Err(error(LogicErrorCode::TypeMismatch, &path, None));
+            }
+            variables.insert(variable.id, CompiledVariable { expression, path });
+        }
+        Ok(variables)
+    }
+
+    /// 编译题目规则，保持文档声明顺序并保留路径定位。
+    fn compile_rules(
+        &self,
+        context: &CompilationContext,
+        positions: &BTreeMap<Uuid, usize>,
+        question_dependencies: &BTreeMap<Uuid, BTreeSet<Uuid>>,
+    ) -> Result<(Vec<RuleExpressions>, BTreeMap<Uuid, usize>), LogicError> {
         let mut seen = BTreeSet::new();
         let mut rules = Vec::with_capacity(self.rules.len());
         let mut rule_indices = BTreeMap::new();
@@ -402,7 +453,9 @@ impl DocumentLogic {
                     return Ok(None);
                 };
                 let path = format!("{path}.{field}");
-                let expression = compile(raw, &path)?;
+                let expression = context
+                    .compile(raw)
+                    .map_err(|failure| failure.relocate(&path))?;
                 if expression.value_type() != LogicValueType::Boolean {
                     return Err(error(
                         LogicErrorCode::TypeMismatch,
@@ -410,7 +463,7 @@ impl DocumentLogic {
                         Some(rule.question_id),
                     ));
                 }
-                let dependencies = expand_dependencies(&expression, &question_dependencies);
+                let dependencies = expand_dependencies(&expression, question_dependencies);
                 if dependencies.iter().any(|id| {
                     positions[id] > *position || (!allow_self && positions[id] == *position)
                 }) {
@@ -431,21 +484,7 @@ impl DocumentLogic {
                 path,
             });
         }
-        let mut compiled = CompiledDocumentLogic {
-            variables,
-            order,
-            rules,
-            rule_indices,
-            question_dependencies,
-            flow: None,
-        };
-        if let Some(flow) = &self.flow {
-            // 题目、选项与变量身份已在上面登记，流程节点身份直接续用同一集合。
-            compiled.flow = Some(crate::flow::compile_flow(
-                flow, occupied, &compiled, questions, &context,
-            )?);
-        }
-        Ok(compiled)
+        Ok((rules, rule_indices))
     }
 
     pub(crate) fn renew_references(
@@ -585,7 +624,7 @@ mod tests {
     #[test]
     fn 空规则包不产生变量规则与流程() {
         let 空 = CompiledDocumentLogic::empty();
-        assert!(空.variable_order().is_empty());
+        assert_eq!(空.variable_order(), &[] as &[Uuid]);
         assert!(空.rules().is_empty());
         assert!(空.flow.is_none());
 

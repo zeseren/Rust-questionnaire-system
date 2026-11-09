@@ -26,7 +26,10 @@ use crate::logic_document::{ComputedVariable, DocumentLogic, QuestionRule};
 struct Grammar;
 
 static PRECEDENCE: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
-    use Rule::*;
+    use Rule::{
+        add, divide, equal, greater, greater_equal, less, less_equal, logical_and, logical_or,
+        multiply, negation, not_equal, subtract,
+    };
     PrattParser::new()
         .op(Op::infix(logical_or, Assoc::Left))
         .op(Op::infix(logical_and, Assoc::Left))
@@ -454,27 +457,7 @@ impl<'a> Compiler<'a> {
         program: Pair<'a, Rule>,
         questions: &[Question],
     ) -> Result<DocumentLogic, LogicTextError> {
-        let mut declarations = program.into_inner();
-        let header = next(&mut declarations);
-        let first_offset = header.as_span().start();
-        let mut header = header.into_inner();
-        next(&mut header);
-        let dsl = next(&mut header);
-        next(&mut header);
-        let semantics = next(&mut header);
-        let mut logic = DocumentLogic {
-            dsl_version: dsl
-                .as_str()
-                .parse()
-                .map_err(|_| self.failure(&dsl, LogicErrorCode::InvalidSyntax))?,
-            semantics_version: semantics
-                .as_str()
-                .parse()
-                .map_err(|_| self.failure(&semantics, LogicErrorCode::InvalidSyntax))?,
-            variables: Vec::new(),
-            rules: Vec::new(),
-            flow: None,
-        };
+        let (first_offset, declarations, mut logic) = self.header(program)?;
         let mut bound_ids = BTreeSet::new();
         let mut definitions = BTreeSet::new();
         let mut nodes = Vec::new();
@@ -545,20 +528,15 @@ impl<'a> Compiler<'a> {
                 Rule::question_rule => {
                     let rule_kind = next(&mut fields);
                     let question_id = self.reference(next(&mut fields), Category::Question)?;
-                    let index = match self.rule_indices.get(&question_id) {
-                        Some(index) => *index,
-                        None => {
-                            logic.rules.push(QuestionRule {
-                                question_id,
-                                visible_if: None,
-                                required_if: None,
-                                validate: None,
-                            });
-                            let index = logic.rules.len() - 1;
-                            self.rule_indices.insert(question_id, index);
-                            index
-                        }
-                    };
+                    let index = *self.rule_indices.entry(question_id).or_insert_with(|| {
+                        logic.rules.push(QuestionRule {
+                            question_id,
+                            visible_if: None,
+                            required_if: None,
+                            validate: None,
+                        });
+                        logic.rules.len() - 1
+                    });
                     let (slot, field) = match rule_kind.as_str() {
                         "visible" => (&mut logic.rules[index].visible_if, RuleField::Visible),
                         "required" => (&mut logic.rules[index].required_if, RuleField::Required),
@@ -638,6 +616,46 @@ impl<'a> Compiler<'a> {
             })?;
             logic.flow = Some(FlowDefinition { entry, nodes });
         }
+        self.validate_bindings(first_offset, questions, &definitions)?;
+        self.finish(logic, questions)
+    }
+
+    /// 读取版本头，返回头部起始位置、剩余声明和初始规则包。
+    fn header(
+        &self,
+        program: Pair<'a, Rule>,
+    ) -> Result<(usize, Pairs<'a, Rule>, DocumentLogic), LogicTextError> {
+        let mut declarations = program.into_inner();
+        let header = next(&mut declarations);
+        let first_offset = header.as_span().start();
+        let mut header = header.into_inner();
+        next(&mut header);
+        let dsl = next(&mut header);
+        next(&mut header);
+        let semantics = next(&mut header);
+        let logic = DocumentLogic {
+            dsl_version: dsl
+                .as_str()
+                .parse()
+                .map_err(|_| self.failure(&dsl, LogicErrorCode::InvalidSyntax))?,
+            semantics_version: semantics
+                .as_str()
+                .parse()
+                .map_err(|_| self.failure(&semantics, LogicErrorCode::InvalidSyntax))?,
+            variables: Vec::new(),
+            rules: Vec::new(),
+            flow: None,
+        };
+        Ok((first_offset, declarations, logic))
+    }
+
+    /// 校验每个别名都绑定到文档中真实存在的题目、选项、变量或流程节点。
+    fn validate_bindings(
+        &self,
+        first_offset: usize,
+        questions: &[Question],
+        definitions: &BTreeSet<Uuid>,
+    ) -> Result<(), LogicTextError> {
         // 预先索引题目与选项身份，绑定校验从逐项扫描降为集合查找。
         let mut question_ids = BTreeSet::new();
         let mut option_ids = BTreeSet::new();
@@ -661,6 +679,15 @@ impl<'a> Compiler<'a> {
                 ));
             }
         }
+        Ok(())
+    }
+
+    /// 编译规则包，失败时把错误路径映射回最具体的声明位置。
+    fn finish(
+        self,
+        logic: DocumentLogic,
+        questions: &[Question],
+    ) -> Result<DocumentLogic, LogicTextError> {
         logic.compile(questions).map_err(|error| {
             // 成功路径只保留轻量位置枚举；仅在报错时格式化路径并选最长前缀。
             let offset = self

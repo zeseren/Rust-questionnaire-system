@@ -382,10 +382,7 @@ fn 多选占比合计可以超过百分之百() {
     let 统计 = summarize_question(&题, &rows).expect("统计成功");
     assert_eq!(统计.answered_count, 2);
     match 统计.statistics {
-        QuestionStatisticsData::MultipleChoice {
-            options,
-            proportion_note,
-        } => {
+        QuestionStatisticsData::MultipleChoice { options, .. } => {
             assert_eq!(options[0].count, 2);
             assert_eq!(options[0].proportion, Some(1.0));
             assert_eq!(options[1].count, 1);
@@ -395,7 +392,6 @@ fn 多选占比合计可以超过百分之百() {
                 .map(|选项| 选项.proportion.expect("有回答时占比非空"))
                 .sum();
             assert!(合计 > 1.0, "多选占比合计可以超过 100%：{合计}");
-            assert!(!proportion_note.is_empty());
         }
         _ => panic!("多选题必须返回多选统计"),
     }

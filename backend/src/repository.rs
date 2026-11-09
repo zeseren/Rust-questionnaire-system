@@ -1,6 +1,6 @@
 //! 共享的归属查询和行锁。涉及问卷的写操作先锁问卷元数据行，再在同一事务内完成写入。
 //!
-//! 列表查询共用 `title_column` 与 `owned_survey_meta`，避免把整份 JsonBinary 草稿搬进内存；
+//! 列表查询共用 `title_column` 与 `owned_survey_meta`，避免把整份 `JsonBinary` 草稿搬进内存；
 //! 已发布版本不可变，`load_version` 统一加载并编译发布版本题面。
 
 use chrono::{DateTime, Utc};

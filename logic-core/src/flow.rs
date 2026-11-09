@@ -228,68 +228,141 @@ impl CompiledFlow {
     }
 }
 
-pub(crate) fn compile_flow(
-    flow: &FlowDefinition,
-    mut occupied: BTreeSet<Uuid>,
-    logic: &CompiledDocumentLogic,
-    questions: &[Question],
-    context: &CompilationContext,
-) -> Result<CompiledFlow, LogicError> {
-    let invalid = || error(LogicErrorCode::InvalidFlow, "$.logic.flow", None);
-    if flow.nodes.len() > MAX_FLOW_NODES {
-        return Err(error(LogicErrorCode::LimitExceeded, "$.logic.flow", None));
-    }
-    if !matches!(flow.nodes.first(), Some(FlowNode::Page { id, .. }) if *id == flow.entry) {
-        return Err(invalid());
-    }
-    let mut indices = BTreeMap::new();
-    for (index, node) in flow.nodes.iter().enumerate() {
-        if node.id().is_nil() || !occupied.insert(node.id()) {
-            return Err(invalid());
+/// 流程结构错误共用同一路径与分类。
+fn invalid_flow() -> LogicError {
+    error(LogicErrorCode::InvalidFlow, "$.logic.flow", None)
+}
+
+/// 校验后的流程索引与依赖事实：页面归属、支配关系和变量必然读取集合。
+struct FlowStructure {
+    indices: BTreeMap<Uuid, usize>,
+    pages: BTreeMap<Uuid, usize>,
+    dominators: Vec<BTreeSet<usize>>,
+    variable_reads: BTreeMap<Uuid, BTreeSet<Uuid>>,
+}
+
+impl FlowStructure {
+    /// 按原有顺序完成结构校验与规则可用性检查，再交给节点编译。
+    fn build(
+        flow: &FlowDefinition,
+        mut occupied: BTreeSet<Uuid>,
+        logic: &CompiledDocumentLogic,
+        questions: &[Question],
+    ) -> Result<Self, LogicError> {
+        if flow.nodes.len() > MAX_FLOW_NODES {
+            return Err(error(LogicErrorCode::LimitExceeded, "$.logic.flow", None));
         }
-        indices.insert(node.id(), index);
-    }
-    let mut flattened = Vec::new();
-    let mut pages = BTreeMap::new();
-    let mut predecessors = vec![Vec::new(); flow.nodes.len()];
-    for (index, node) in flow.nodes.iter().enumerate() {
-        if let FlowNode::Page { question_ids, .. } = node {
-            if question_ids.is_empty() {
-                return Err(invalid());
+        if !matches!(flow.nodes.first(), Some(FlowNode::Page { id, .. }) if *id == flow.entry) {
+            return Err(invalid_flow());
+        }
+        let mut indices = BTreeMap::new();
+        for (index, node) in flow.nodes.iter().enumerate() {
+            if node.id().is_nil() || !occupied.insert(node.id()) {
+                return Err(invalid_flow());
             }
-            for id in question_ids {
-                flattened.push(*id);
-                pages.insert(*id, index);
+            indices.insert(node.id(), index);
+        }
+        let mut flattened = Vec::new();
+        let mut pages = BTreeMap::new();
+        let mut predecessors = vec![Vec::new(); flow.nodes.len()];
+        for (index, node) in flow.nodes.iter().enumerate() {
+            if let FlowNode::Page { question_ids, .. } = node {
+                if question_ids.is_empty() {
+                    return Err(invalid_flow());
+                }
+                for id in question_ids {
+                    flattened.push(*id);
+                    pages.insert(*id, index);
+                }
+            }
+            if let FlowNode::Branch { branches, .. } = node
+                && (branches.is_empty() || branches.len() > MAX_BRANCHES)
+            {
+                return Err(invalid_flow());
+            }
+            for target in node.targets() {
+                let next = indices.get(&target).ok_or_else(invalid_flow)?;
+                if *next <= index {
+                    return Err(invalid_flow());
+                }
+                predecessors[*next].push(index);
             }
         }
-        if let FlowNode::Branch { branches, .. } = node
-            && (branches.is_empty() || branches.len() > MAX_BRANCHES)
+        if flattened
+            != questions
+                .iter()
+                .map(|question| question.id)
+                .collect::<Vec<_>>()
         {
-            return Err(invalid());
+            return Err(invalid_flow());
         }
-        for target in node.targets() {
-            let next = indices.get(&target).ok_or_else(invalid)?;
-            if *next <= index {
-                return Err(invalid());
-            }
-            predecessors[*next].push(index);
+        let dominators = dominators(&predecessors)?;
+        // 变量按拓扑顺序展开：每个变量只依赖更早的变量，因此读取集合可逐层复用。
+        let mut variable_reads = BTreeMap::new();
+        for id in logic.variable_order() {
+            variable_reads.insert(
+                *id,
+                logic
+                    .variable_expression(*id)
+                    .required_reads(&variable_reads),
+            );
         }
+        let structure = Self {
+            indices,
+            pages,
+            dominators,
+            variable_reads,
+        };
+        structure.check_rule_availability(logic)?;
+        Ok(structure)
     }
-    if flattened
-        != questions
+
+    fn check_available(
+        &self,
+        expression: &CompiledExpression,
+        node: usize,
+        path: &str,
+    ) -> Result<(), LogicError> {
+        if expression
+            .required_reads(&self.variable_reads)
             .iter()
-            .map(|question| question.id)
-            .collect::<Vec<_>>()
-    {
-        return Err(invalid());
+            .any(|id| !self.dominators[node].contains(&self.pages[id]))
+        {
+            return Err(error(LogicErrorCode::UnavailableDependency, path, None));
+        }
+        Ok(())
     }
-    let mut dominators: Vec<BTreeSet<usize>> = Vec::with_capacity(flow.nodes.len());
+
+    /// 题目规则与流程分支共用同一可用性判定。
+    fn check_rule_availability(&self, logic: &CompiledDocumentLogic) -> Result<(), LogicError> {
+        for rule in logic.rules() {
+            for (field, expression) in [
+                ("visible_if", &rule.visible_if),
+                ("required_if", &rule.required_if),
+                ("validate", &rule.validate),
+            ] {
+                if let Some(expression) = expression {
+                    self.check_available(
+                        expression,
+                        self.pages[&rule.question_id],
+                        &format!("{}.{field}", rule.path),
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 按拓扑顺序求支配集合；非首节点必须有前驱，否则流程不可达。
+fn dominators(predecessors: &[Vec<usize>]) -> Result<Vec<BTreeSet<usize>>, LogicError> {
+    let mut dominators: Vec<BTreeSet<usize>> = Vec::with_capacity(predecessors.len());
     for (index, parents) in predecessors.iter().enumerate() {
         let mut common = if index == 0 {
             BTreeSet::new()
         } else {
             let Some(first) = parents.first() else {
-                return Err(invalid());
+                return Err(invalid_flow());
             };
             dominators[*first].clone()
         };
@@ -299,45 +372,56 @@ pub(crate) fn compile_flow(
         common.insert(index);
         dominators.push(common);
     }
-    // 变量按拓扑顺序展开：每个变量只依赖更早的变量，因此读取集合可逐层复用。
-    let mut variable_reads = BTreeMap::new();
-    for id in logic.variable_order() {
-        variable_reads.insert(
-            *id,
-            logic
-                .variable_expression(*id)
-                .required_reads(&variable_reads),
-        );
-    }
-    let check_available =
-        |expression: &CompiledExpression, node: usize, path: &str| -> Result<(), LogicError> {
-            if expression
-                .required_reads(&variable_reads)
-                .iter()
-                .any(|id| !dominators[node].contains(&pages[id]))
-            {
-                return Err(error(LogicErrorCode::UnavailableDependency, path, None));
-            }
-            Ok(())
-        };
-    for rule in logic.rules() {
-        for (field, expression) in [
-            ("visible_if", &rule.visible_if),
-            ("required_if", &rule.required_if),
-            ("validate", &rule.validate),
-        ] {
-            if let Some(expression) = expression {
-                check_available(
-                    expression,
-                    pages[&rule.question_id],
-                    &format!("{}.{field}", rule.path),
-                )?;
-            }
+    Ok(dominators)
+}
+
+/// 分支条件按声明顺序编译；首个失败诊断即停止，保持原有错误优先级。
+fn compile_guards(
+    branches: &[FlowBranch],
+    index: usize,
+    logic: &CompiledDocumentLogic,
+    context: &CompilationContext,
+    structure: &FlowStructure,
+) -> Result<Vec<(CompiledExpression, usize)>, LogicError> {
+    let mut guards = Vec::with_capacity(branches.len());
+    for (branch_index, branch) in branches.iter().enumerate() {
+        let path = format!("$.logic.flow.nodes[{index}].branches[{branch_index}].when");
+        let expression = context
+            .compile(&branch.when)
+            .map_err(|failure| failure.relocate(&path))?;
+        if expression.value_type() != LogicValueType::Boolean {
+            return Err(error(LogicErrorCode::TypeMismatch, &path, None));
         }
+        // 常量条件只能是不遮蔽后续分支的最后一条 true 分支。
+        if let Some(literal) = expression.literal_boolean()
+            && (!literal || branch_index + 1 < branches.len())
+        {
+            return Err(error(LogicErrorCode::InvalidFlow, &path, None));
+        }
+        if logic
+            .dependencies(&expression)
+            .iter()
+            .any(|id| structure.pages[id] >= index)
+        {
+            return Err(error(LogicErrorCode::ForwardReference, &path, None));
+        }
+        structure.check_available(&expression, index, &path)?;
+        guards.push((expression, structure.indices[&branch.target]));
     }
+    Ok(guards)
+}
+
+pub(crate) fn compile_flow(
+    flow: &FlowDefinition,
+    occupied: BTreeSet<Uuid>,
+    logic: &CompiledDocumentLogic,
+    questions: &[Question],
+    context: &CompilationContext,
+) -> Result<CompiledFlow, LogicError> {
+    let structure = FlowStructure::build(flow, occupied, logic, questions)?;
     let mut nodes = Vec::with_capacity(flow.nodes.len());
     for (index, node) in flow.nodes.iter().enumerate() {
-        let compiled = match node {
+        nodes.push(match node {
             FlowNode::Page {
                 id,
                 question_ids,
@@ -345,7 +429,7 @@ pub(crate) fn compile_flow(
             } => Node::Page {
                 id: *id,
                 questions: question_ids.clone(),
-                next: indices[next],
+                next: structure.indices[next],
             },
             FlowNode::End { id, outcome } => Node::End {
                 id: *id,
@@ -355,39 +439,11 @@ pub(crate) fn compile_flow(
                 branches,
                 otherwise,
                 ..
-            } => {
-                let mut guards = Vec::with_capacity(branches.len());
-                for (branch_index, branch) in branches.iter().enumerate() {
-                    let path = format!("$.logic.flow.nodes[{index}].branches[{branch_index}].when");
-                    let expression = context
-                        .compile(&branch.when)
-                        .map_err(|failure| failure.relocate(&path))?;
-                    if expression.value_type() != LogicValueType::Boolean {
-                        return Err(error(LogicErrorCode::TypeMismatch, &path, None));
-                    }
-                    // 常量条件只能是不遮蔽后续分支的最后一条 true 分支。
-                    if let Some(literal) = expression.literal_boolean()
-                        && (!literal || branch_index + 1 < branches.len())
-                    {
-                        return Err(error(LogicErrorCode::InvalidFlow, &path, None));
-                    }
-                    if logic
-                        .dependencies(&expression)
-                        .iter()
-                        .any(|id| pages[id] >= index)
-                    {
-                        return Err(error(LogicErrorCode::ForwardReference, &path, None));
-                    }
-                    check_available(&expression, index, &path)?;
-                    guards.push((expression, indices[&branch.target]));
-                }
-                Node::Branch {
-                    guards,
-                    otherwise: indices[otherwise],
-                }
-            }
-        };
-        nodes.push(compiled);
+            } => Node::Branch {
+                guards: compile_guards(branches, index, logic, context, &structure)?,
+                otherwise: structure.indices[otherwise],
+            },
+        });
     }
     Ok(CompiledFlow {
         nodes: nodes.into(),
@@ -505,7 +561,7 @@ pub struct FlowEvaluator {
 impl FlowEvaluator {
     /// 复制文档后编译；同一发布版本可复用此实例重建多份答卷。
     ///
-    /// # 错误
+    /// # Errors
     /// 草稿结构、规则或流程不合法时返回定位错误。
     pub fn new(document: &Document) -> Result<Self, LogicError> {
         Self::from_document(document.clone())
@@ -513,7 +569,7 @@ impl FlowEvaluator {
 
     /// 取得文档所有权后编译，避免复制题面。
     ///
-    /// # 错误
+    /// # Errors
     /// 与 [`Self::new`] 相同。
     pub fn from_document(document: Document) -> Result<Self, LogicError> {
         document
@@ -529,7 +585,7 @@ impl FlowEvaluator {
 
     /// 从入口重建最终答卷，不接受客户端历史或预先计算的可见题目。
     ///
-    /// # 错误
+    /// # Errors
     /// 重复/未知题目、不适用答案、校验失败、未决条件或筛选结束均拒绝。
     pub fn evaluate_answers(&self, answers: Vec<Answer>) -> Result<EvaluatedResponse, LogicError> {
         self.plan.evaluate_answers(&self.document, answers)
@@ -537,7 +593,7 @@ impl FlowEvaluator {
 
     /// 校验答案并返回规范化结果，跳过 `question_states` 与 `path` 的构建分配。
     ///
-    /// # 错误
+    /// # Errors
     /// 与 [`Self::evaluate_answers`] 相同。
     pub fn validate_answers_only(
         &self,
@@ -548,7 +604,7 @@ impl FlowEvaluator {
 
     /// 从已存储答案重算规则并返回规范化答案与题目适用性，跳过路径构建。
     ///
-    /// # 错误
+    /// # Errors
     /// 与 [`Self::evaluate_answers`] 相同。
     pub fn evaluate_stored_states(
         &self,
@@ -724,114 +780,16 @@ impl CompiledPlan {
                 } => {
                     result.path.push(current);
                     for id in questions {
-                        // 流程编译保证页面题目都来自本文档，索引不会缺失。
-                        let question = &document.questions[self.questions[id]];
-                        let rule = self.logic.rule(*id);
-                        match rule
-                            .and_then(|rule| rule.visible_if.as_ref())
-                            .map(|expression| {
-                                self.logic.evaluate_expression(
-                                    expression,
-                                    &result.answers,
-                                    &mut variables,
-                                )
-                            })
-                            .unwrap_or(Ok(LogicValue::Boolean(true)))
-                        {
-                            Ok(LogicValue::Boolean(true)) => {}
-                            Ok(_) => continue,
-                            Err(failure) => {
-                                result.visible.push(*id);
-                                result.errors.insert(*id, failure.code);
-                                continue;
-                            }
-                        }
-                        result.visible.push(*id);
-                        let required = if question.required {
-                            Ok(LogicValue::Boolean(true))
-                        } else {
-                            rule.and_then(|rule| rule.required_if.as_ref())
-                                .map(|expression| {
-                                    self.logic.evaluate_expression(
-                                        expression,
-                                        &result.answers,
-                                        &mut variables,
-                                    )
-                                })
-                                .unwrap_or(Ok(LogicValue::Boolean(false)))
-                        };
-                        if matches!(&required, Ok(LogicValue::Boolean(true))) {
-                            result.required.push(*id);
-                        }
-                        let value = match question.normalize_answer(inputs.get(id)) {
-                            Ok(value) => value,
-                            Err(_) => {
-                                result.errors.insert(*id, LogicErrorCode::InvalidAnswer);
-                                continue;
-                            }
-                        };
-                        match required {
-                            Ok(LogicValue::Boolean(true)) if value.is_none() => {
-                                result.errors.insert(*id, LogicErrorCode::RequiredAnswer);
-                            }
-                            Ok(LogicValue::Missing) => {
-                                result.errors.insert(*id, LogicErrorCode::UnknownCondition);
-                            }
-                            Err(failure) => {
-                                result.errors.insert(*id, failure.code);
-                            }
-                            _ => {}
-                        }
-                        if let Some(value) = value {
-                            result.answers.insert(*id, value);
-                            if let Some(validate) = rule.and_then(|rule| rule.validate.as_ref()) {
-                                match self.logic.evaluate_expression(
-                                    validate,
-                                    &result.answers,
-                                    &mut variables,
-                                ) {
-                                    Ok(LogicValue::Boolean(true)) => {}
-                                    Ok(LogicValue::Missing) => {
-                                        result.errors.insert(*id, LogicErrorCode::UnknownCondition);
-                                    }
-                                    Ok(_) => {
-                                        result.errors.insert(*id, LogicErrorCode::ConstraintFailed);
-                                    }
-                                    Err(failure) => {
-                                        result.errors.insert(*id, failure.code);
-                                    }
-                                }
-                            }
-                            if result.errors.contains_key(id) {
-                                result.answers.remove(id);
-                                self.logic.evict_dependent_variables(&mut variables, *id);
-                            }
-                        }
+                        self.project_question(document, inputs, *id, &mut result, &mut variables);
                     }
                     current = *next;
                 }
                 Node::Branch { guards, otherwise } => {
-                    let mut target = *otherwise;
-                    for (guard, next) in guards {
-                        match self
-                            .logic
-                            .evaluate_expression(guard, &result.answers, &mut variables)
-                        {
-                            Ok(LogicValue::Boolean(true)) => {
-                                target = *next;
-                                break;
-                            }
-                            Ok(LogicValue::Boolean(false)) => {}
-                            Ok(_) => {
-                                result.route_error = Some(LogicErrorCode::UnknownCondition);
-                                return result;
-                            }
-                            Err(failure) => {
-                                result.route_error = Some(failure.code);
-                                return result;
-                            }
-                        }
-                    }
+                    let Some(target) =
+                        self.project_branch(guards, *otherwise, &mut result, &mut variables)
+                    else {
+                        return result;
+                    };
                     current = target;
                 }
                 Node::End { .. } => {
@@ -840,6 +798,121 @@ impl CompiledPlan {
                 }
             }
         }
+    }
+
+    /// 处理单题：可见性、动态必填、答案规范化与自定义校验。
+    ///
+    /// 校验失败只撤销本题答案并失效依赖变量，保留既有错误供修正。
+    fn project_question(
+        &self,
+        document: &Document,
+        inputs: &BTreeMap<Uuid, Value>,
+        id: Uuid,
+        result: &mut Projection,
+        variables: &mut BTreeMap<Uuid, LogicValue>,
+    ) {
+        // 流程编译保证页面题目都来自本文档，索引不会缺失。
+        let question = &document.questions[self.questions[&id]];
+        let rule = self.logic.rule(id);
+        match rule.and_then(|rule| rule.visible_if.as_ref()).map_or(
+            Ok(LogicValue::Boolean(true)),
+            |expression| {
+                self.logic
+                    .evaluate_expression(expression, &result.answers, variables)
+            },
+        ) {
+            Ok(LogicValue::Boolean(true)) => {}
+            Ok(_) => return,
+            Err(failure) => {
+                result.visible.push(id);
+                result.errors.insert(id, failure.code);
+                return;
+            }
+        }
+        result.visible.push(id);
+        let required = if question.required {
+            Ok(LogicValue::Boolean(true))
+        } else {
+            rule.and_then(|rule| rule.required_if.as_ref()).map_or(
+                Ok(LogicValue::Boolean(false)),
+                |expression| {
+                    self.logic
+                        .evaluate_expression(expression, &result.answers, variables)
+                },
+            )
+        };
+        if matches!(&required, Ok(LogicValue::Boolean(true))) {
+            result.required.push(id);
+        }
+        let Ok(value) = question.normalize_answer(inputs.get(&id)) else {
+            result.errors.insert(id, LogicErrorCode::InvalidAnswer);
+            return;
+        };
+        match required {
+            Ok(LogicValue::Boolean(true)) if value.is_none() => {
+                result.errors.insert(id, LogicErrorCode::RequiredAnswer);
+            }
+            Ok(LogicValue::Missing) => {
+                result.errors.insert(id, LogicErrorCode::UnknownCondition);
+            }
+            Err(failure) => {
+                result.errors.insert(id, failure.code);
+            }
+            _ => {}
+        }
+        let Some(value) = value else {
+            return;
+        };
+        result.answers.insert(id, value);
+        if let Some(validate) = rule.and_then(|rule| rule.validate.as_ref()) {
+            match self
+                .logic
+                .evaluate_expression(validate, &result.answers, variables)
+            {
+                Ok(LogicValue::Boolean(true)) => {}
+                Ok(LogicValue::Missing) => {
+                    result.errors.insert(id, LogicErrorCode::UnknownCondition);
+                }
+                Ok(_) => {
+                    result.errors.insert(id, LogicErrorCode::ConstraintFailed);
+                }
+                Err(failure) => {
+                    result.errors.insert(id, failure.code);
+                }
+            }
+        }
+        if result.errors.contains_key(&id) {
+            result.answers.remove(&id);
+            self.logic.evict_dependent_variables(variables, id);
+        }
+    }
+
+    /// 按声明顺序求值分支条件；未决或错误时记录路径错误并停止。
+    fn project_branch(
+        &self,
+        guards: &[(CompiledExpression, usize)],
+        otherwise: usize,
+        result: &mut Projection,
+        variables: &mut BTreeMap<Uuid, LogicValue>,
+    ) -> Option<usize> {
+        for (guard, next) in guards {
+            match self
+                .logic
+                .evaluate_expression(guard, &result.answers, variables)
+            {
+                Ok(LogicValue::Boolean(true)) => return Some(*next),
+                Ok(LogicValue::Boolean(false)) => {}
+                Ok(_) => {
+                    result.route_error = Some(LogicErrorCode::UnknownCondition);
+                    return None;
+                }
+                Err(failure) => {
+                    result.route_error = Some(failure.code);
+                    return None;
+                }
+            }
+        }
+        Some(otherwise)
     }
 }
 
@@ -856,7 +929,7 @@ pub struct FlowSession {
 impl FlowSession {
     /// 复制文档后创建空填写会话；未配置 `logic` 的问卷使用内存中的单页流程。
     ///
-    /// # 错误
+    /// # Errors
     /// 草稿、规则或流程不合法时拒绝启动。
     pub fn new(document: &Document) -> Result<Self, LogicError> {
         Self::from_document(document.clone())
@@ -864,7 +937,7 @@ impl FlowSession {
 
     /// 取得文档所有权后创建空填写会话，避免复制题面。
     ///
-    /// # 错误
+    /// # Errors
     /// 与 [`Self::new`] 相同。
     pub fn from_document(document: Document) -> Result<Self, LogicError> {
         let evaluator = FlowEvaluator::from_document(document)?;
@@ -882,7 +955,7 @@ impl FlowSession {
 
     /// 复用已绑定的求值器重建最终答卷，不读取或修改会话的输入与历史。
     ///
-    /// # 错误
+    /// # Errors
     /// 与独立求值器相同，拒绝无效答案、不适用答案、未决条件或筛选结束。
     pub fn evaluate_answers(&self, answers: Vec<Answer>) -> Result<EvaluatedResponse, LogicError> {
         self.evaluator.evaluate_answers(answers)
@@ -924,7 +997,7 @@ impl FlowSession {
 
     /// 应用事件；不合法事件不修改状态，改答会保留输入错误供修正。
     ///
-    /// # 错误
+    /// # Errors
     /// 页面校验失败、条件未决或越过当前页面改答时返回定位错误。
     pub fn dispatch(&mut self, event: FlowEvent) -> Result<(), LogicError> {
         let invalid = || error(LogicErrorCode::InvalidEvent, "$.event", None);

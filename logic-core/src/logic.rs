@@ -126,7 +126,8 @@ pub enum LogicValueType {
 }
 
 impl LogicValueType {
-    /// 稳定的 snake_case 名称；序列化名与文本 DSL 共用这一处事实源。
+    /// 稳定的 `snake_case` 名称；序列化名与文本 DSL 共用这一处事实源。
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Boolean => "boolean",
@@ -138,6 +139,7 @@ impl LogicValueType {
     }
 
     /// 从文本 DSL 类型名解析值类型。
+    #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "boolean" => Some(Self::Boolean),
@@ -335,7 +337,7 @@ impl CompiledExpression {
     /// 本入口防御性检查引用答案的类型、数字和选项身份，不代替问卷的必填、
     /// 长度、范围或路径校验。未引用的答案不会参与求值。
     ///
-    /// # 错误
+    /// # Errors
     /// 引用答案类型错误、除零或非有限结果时返回结构化错误。
     pub fn evaluate(&self, answers: &BTreeMap<Uuid, Value>) -> Result<LogicValue, LogicError> {
         self.evaluate_with_variables(answers, &BTreeMap::new())
@@ -374,7 +376,7 @@ impl CompiledExpression {
 
 /// 将 JSON 规则绑定到问卷题目，检查结构、版本、类型、引用和资源限制。
 ///
-/// # 错误
+/// # Errors
 /// 未知字段/版本、非法常量、无效引用、类型不匹配及超限均拒绝编译。
 pub fn compile_expression(
     raw: &Value,
@@ -973,7 +975,7 @@ mod tests {
         }
     }
 
-    fn 编译(expression: Value, questions: &[Question]) -> CompiledExpression {
+    fn 编译(expression: &Value, questions: &[Question]) -> CompiledExpression {
         compile_expression(
             &json!({"dsl_version": 1, "semantics_version": 1, "expression": expression}),
             questions,
@@ -1027,41 +1029,49 @@ mod tests {
         }
     }
 
+    /// 选择器用例的题目绑定：单选、多选、非选择与计算变量各一题。
+    fn 选择绑定() -> BTreeMap<Uuid, Binding> {
+        [
+            (
+                id(1),
+                Binding {
+                    value_type: LogicValueType::Choice,
+                    options: vec![id(101), id(102)],
+                    variable: false,
+                },
+            ),
+            (
+                id(2),
+                Binding {
+                    value_type: LogicValueType::Choices,
+                    options: vec![id(201)],
+                    variable: false,
+                },
+            ),
+            (
+                id(3),
+                Binding {
+                    value_type: LogicValueType::Text,
+                    options: Vec::new(),
+                    variable: false,
+                },
+            ),
+            (
+                id(4),
+                Binding {
+                    value_type: LogicValueType::Number,
+                    options: Vec::new(),
+                    variable: true,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect()
+    }
+
     #[test]
     fn 选择器校验题型选项归属与重复() {
-        let mut bindings = BTreeMap::new();
-        bindings.insert(
-            id(1),
-            Binding {
-                value_type: LogicValueType::Choice,
-                options: vec![id(101), id(102)],
-                variable: false,
-            },
-        );
-        bindings.insert(
-            id(2),
-            Binding {
-                value_type: LogicValueType::Choices,
-                options: vec![id(201)],
-                variable: false,
-            },
-        );
-        bindings.insert(
-            id(3),
-            Binding {
-                value_type: LogicValueType::Text,
-                options: Vec::new(),
-                variable: false,
-            },
-        );
-        bindings.insert(
-            id(4),
-            Binding {
-                value_type: LogicValueType::Number,
-                options: Vec::new(),
-                variable: true,
-            },
-        );
+        let bindings = 选择绑定();
         let 路径 = "$.expression";
 
         let 空 = selection(&id(1).to_string(), Vec::new(), false, 路径, &bindings).unwrap_err();
@@ -1190,16 +1200,16 @@ mod tests {
         };
 
         // answered 只判断有无答案，本身不读取答案内容。
-        let 表达式 = 编译(答(1), &questions);
+        let 表达式 = 编译(&答(1), &questions);
         assert!(表达式.required_reads(&BTreeMap::new()).is_empty());
 
         // 常量字面量没有任何题目依赖与存在性守护。
-        let 常量 = 编译(json!({"op": "boolean", "value": true}), &questions);
+        let 常量 = 编译(&json!({"op": "boolean", "value": true}), &questions);
         assert!(常量.required_reads(&BTreeMap::new()).is_empty());
 
         // all 中 answered(q1) 守护同一题的 answer 读取。
         let 守护 = 编译(
-            json!({"op": "all", "expressions": [答(1), 比较(1)]}),
+            &json!({"op": "all", "expressions": [答(1), 比较(1)]}),
             &questions,
         );
         assert!(
@@ -1207,7 +1217,7 @@ mod tests {
             "已由 answered(q1) 守护的读取不再计入必然读取"
         );
         let 未守护 = 编译(
-            json!({"op": "all", "expressions": [答(1), 比较(2)]}),
+            &json!({"op": "all", "expressions": [答(1), 比较(2)]}),
             &questions,
         );
         assert_eq!(
@@ -1217,7 +1227,7 @@ mod tests {
 
         // any 不能保证存在性，后续读取仍保留。
         let 表达式 = 编译(
-            json!({"op": "any", "expressions": [答(1), 比较(1)]}),
+            &json!({"op": "any", "expressions": [答(1), 比较(1)]}),
             &questions,
         );
         assert_eq!(
@@ -1227,7 +1237,7 @@ mod tests {
 
         // not(answered(q)) 不提供守护，后续读取仍保留。
         let 组合 = 编译(
-            json!({"op": "all", "expressions": [json!({"op": "not", "expression": 答(1)}), 比较(1)]}),
+            &json!({"op": "all", "expressions": [json!({"op": "not", "expression": 答(1)}), 比较(1)]}),
             &questions,
         );
         assert_eq!(
@@ -1238,12 +1248,12 @@ mod tests {
 
         // coalesce 只把回退分支视为必然读取。
         let 短路 = 编译(
-            json!({"op": "coalesce", "value": {"op": "answer", "question_id": id(1).to_string()}, "fallback": {"op": "number", "value": "0"}}),
+            &json!({"op": "coalesce", "value": {"op": "answer", "question_id": id(1).to_string()}, "fallback": {"op": "number", "value": "0"}}),
             &questions,
         );
         assert!(短路.required_reads(&BTreeMap::new()).is_empty());
         let 回退 = 编译(
-            json!({"op": "coalesce", "value": {"op": "number", "value": "0"}, "fallback": {"op": "answer", "question_id": id(2).to_string()}}),
+            &json!({"op": "coalesce", "value": {"op": "number", "value": "0"}, "fallback": {"op": "answer", "question_id": id(2).to_string()}}),
             &questions,
         );
         assert_eq!(

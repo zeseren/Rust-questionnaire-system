@@ -109,7 +109,7 @@ impl<'de> Deserialize<'de> for Question {
     }
 }
 
-/// 六种题型的配置；JSON 使用 `type` 字段和 snake_case 题型名区分。
+/// 六种题型的配置；JSON 使用 `type` 字段和 `snake_case` 题型名区分。
 /// 除 `type` 外只接受所选题型自己的配置项，未知字段直接拒绝。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -262,7 +262,7 @@ impl Document {
         let option_capacity = self
             .questions
             .iter()
-            .map(|question| question.kind.options().map_or(0, |options| options.len()))
+            .map(|question| question.kind.options().map_or(0, <[Choice]>::len))
             .sum();
         let mut question_ids = HashSet::with_capacity(self.questions.len());
         let mut option_ids = HashSet::with_capacity(option_capacity);
@@ -338,7 +338,7 @@ impl Document {
 
     /// 编译文档规则；未配置 `logic` 的文档返回 None。
     ///
-    /// # 错误
+    /// # Errors
     /// 规则类型、引用、容量或依赖关系不合法时返回定位信息。
     pub fn compile_logic(&self) -> Result<Option<CompiledDocumentLogic>, LogicError> {
         self.logic
@@ -609,33 +609,7 @@ impl Question {
                 options,
                 min_choices,
                 max_choices,
-            } => {
-                let Value::Array(values) = value else {
-                    return Err(ValidationError::new(id, "多选答案必须是选项 ID 数组"));
-                };
-                if values.is_empty() {
-                    return Ok(None);
-                }
-                if values.len() < *min_choices || values.len() > *max_choices {
-                    return Err(ValidationError::new(id, "所选数量不符合此题的上下限"));
-                }
-                let mut selected = BTreeSet::new();
-                for value in values {
-                    let option_id = parse_option_id(value, self.id)?;
-                    if !options.iter().any(|option| option.id == option_id) {
-                        return Err(ValidationError::new(id, "选项不属于此版本的当前题目"));
-                    }
-                    if !selected.insert(option_id) {
-                        return Err(ValidationError::new(id, "多选答案不能包含重复选项"));
-                    }
-                }
-                Ok(Some(Value::Array(
-                    selected
-                        .into_iter()
-                        .map(|option_id| Value::String(option_id.to_string()))
-                        .collect(),
-                )))
-            }
+            } => self.normalize_multiple_choice(options, *min_choices, *max_choices, value),
             QuestionKind::Text { max_length } | QuestionKind::Textarea { max_length } => {
                 let Value::String(text) = value else {
                     return Err(ValidationError::new(id, "文本答案必须是字符串"));
@@ -699,6 +673,42 @@ impl Question {
                 Ok(Some(canonical_number(number)))
             }
         }
+    }
+
+    /// 校验多选答案的数量、归属与重复，并按选项身份排序返回。
+    fn normalize_multiple_choice(
+        &self,
+        options: &[Choice],
+        min_choices: usize,
+        max_choices: usize,
+        value: &Value,
+    ) -> Result<Option<Value>, ValidationError> {
+        let id = Some(self.id);
+        let Value::Array(values) = value else {
+            return Err(ValidationError::new(id, "多选答案必须是选项 ID 数组"));
+        };
+        if values.is_empty() {
+            return Ok(None);
+        }
+        if values.len() < min_choices || values.len() > max_choices {
+            return Err(ValidationError::new(id, "所选数量不符合此题的上下限"));
+        }
+        let mut selected = BTreeSet::new();
+        for value in values {
+            let option_id = parse_option_id(value, self.id)?;
+            if !options.iter().any(|option| option.id == option_id) {
+                return Err(ValidationError::new(id, "选项不属于此版本的当前题目"));
+            }
+            if !selected.insert(option_id) {
+                return Err(ValidationError::new(id, "多选答案不能包含重复选项"));
+            }
+        }
+        Ok(Some(Value::Array(
+            selected
+                .into_iter()
+                .map(|option_id| Value::String(option_id.to_string()))
+                .collect(),
+        )))
     }
 }
 
