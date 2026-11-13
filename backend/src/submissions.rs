@@ -23,7 +23,7 @@ use uuid::{Uuid, Variant, Version};
 use crate::{
     AppState, auth,
     domain::{Answer, Document},
-    entities::{FillingMode, response, survey, user},
+    entities::{FillingMode, Outcome, response, survey, user},
     error::{AppError, AppResult, ErrorResponse},
     http::{ApiJson, ApiPath},
     repository,
@@ -44,6 +44,18 @@ pub(crate) struct PublicSurvey {
     pub privacy: PrivacyNotice,
 }
 
+/// 公开元信息只含填写前需要展示的字段，不返回题面、发布版本或任何答卷。
+#[derive(Serialize, ToSchema)]
+pub(crate) struct PublicSurveyMeta {
+    pub survey_id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub purpose: String,
+    pub mode: FillingMode,
+    pub deadline: Option<DateTime<Utc>>,
+    pub privacy: PrivacyNotice,
+}
+
 /// 填写前应展示这些提示，不将登录限次误称为完全匿名。
 #[derive(Serialize, ToSchema)]
 pub(crate) struct PrivacyNotice {
@@ -53,22 +65,24 @@ pub(crate) struct PrivacyNotice {
     pub public_link_notice: &'static str,
 }
 
-/// 一个逻辑提交只生成一次 `UUIDv4` 秘密；网络重试必须保留原秘密与输入。
+/// 一个逻辑提交只生成一次 `UUIDv4` 或 `UUIDv7` 秘密；网络重试必须保留原秘密与输入。
 /// 不实现 Debug，避免排错时顺手输出答案正文或提交秘密。
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SubmitRequest {
     pub version_id: Uuid,
-    /// 使用安全随机 UUIDv4，例如浏览器 crypto.randomUUID()；不要放进 URL 或日志。
+    /// 使用安全随机 UUIDv4 或时间有序 UUIDv7，例如浏览器 crypto.randomUUID()；不要放进 URL 或日志。
     pub idempotency_key: Uuid,
     pub answers: Vec<Answer>,
 }
 
-/// 新提交与重试都只返回这两个字段，不回传答案、账号或提交秘密。
+/// 新提交与重试都只返回状态、回执与流程终点，不回传答案、账号或提交秘密。
 #[derive(Serialize, ToSchema)]
 pub(crate) struct SubmissionReceipt {
     pub status: SubmissionStatus,
     pub receipt_id: Uuid,
+    /// `complete` 为正常完成；`screen_out` 为筛选结束，同样占用了本账号的填写次数。
+    pub outcome: Outcome,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -94,7 +108,12 @@ struct NormalizedPayload<'a> {
 pub(crate) fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(public_survey))
+        .routes(routes!(public_survey_meta))
         .routes(routes!(submit))
+        // 公开提交只接受合法的答卷大小；其余路由沿用全局 1 MiB 默认值。
+        .layer(axum::extract::DefaultBodyLimit::max(
+            crate::domain::MAX_SUBMISSION_BYTES,
+        ))
 }
 
 /// 读取当前可填写题面。
@@ -124,12 +143,37 @@ async fn public_survey(
     read_public_survey(&state, &headers, id).await.map(Json)
 }
 
+/// 读取公开元信息，供未登录页面展示标题、目的与隐私提示。
+///
+/// 不返回题面、发布版本或答卷，也不触发登录：`login_once` 的会话校验只发生在题面与提交接口。
+/// 已关闭、到期、下架或发布者禁用时返回冲突错误。
+#[utoipa::path(
+    get,
+    path = "/api/public/surveys/{id}/meta",
+    tag = "公开填写",
+    params(("id" = Uuid, Path, description = "问卷编号")),
+    responses(
+        (status = 200, description = "标题、说明、目的、模式与隐私提示", body = PublicSurveyMeta),
+        (status = 404, description = "问卷不存在或不可访问", body = ErrorResponse),
+        (status = 409, description = "回收不可用或发布者账号禁用", body = ErrorResponse),
+        (status = 400, description = "路径参数无效：invalid_path", body = ErrorResponse),
+        (status = 500, description = "内部错误，不暴露数据库细节", body = ErrorResponse)
+    )
+)]
+async fn public_survey_meta(
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+) -> AppResult<Json<PublicSurveyMeta>> {
+    read_public_survey_meta(&state, id).await.map(Json)
+}
+
 /// 提交完整答卷或重试同一次提交。
 ///
-/// 首次成功返回 201，合法重试返回 200 和原回执。相同作用域中改变版本或规范化答案返回
-/// `idempotency_conflict`。题目顺序及多选集合顺序不影响幂等性，但重复题目和选项仍会拒绝。
-/// 成功后的原载荷重试可跨关闭、下架、发布者禁用及版本切换；`login_once` 仍须验证填写者身份。
-/// 没有成功记录的旧版本提交返回 `version_changed`；未知版本和非法答案返回 `validation_failed`。
+/// 首次成功返回 201，合法重试返回 200 和原回执（含原始流程终点）。相同作用域中改变版本
+/// 或规范化答案返回 `idempotency_conflict`。题目顺序及多选集合顺序不影响幂等性，但重复题目
+/// 和选项仍会拒绝。成功后的原载荷重试可跨关闭、下架、发布者禁用及版本切换；`login_once`
+/// 仍须验证填写者身份。没有成功记录的旧版本提交返回 `version_changed`；未知版本和非法答案返回
+/// `validation_failed`。`screen_out` 与 `complete` 都是正式记录，共享 `login_once` 的唯一约束。
 #[utoipa::path(
     post,
     path = "/api/public/surveys/{id}/responses",
@@ -138,7 +182,7 @@ async fn public_survey(
     request_body = SubmitRequest,
     security((), ("cookieAuth" = [])),
     responses(
-        (status = 201, description = "答卷及幂等记录已原子提交", body = SubmissionReceipt),
+        (status = 201, description = "答卷、三态与幂等记录已原子提交", body = SubmissionReceipt),
         (status = 200, description = "相同规范化载荷的成功重试，返回原回执", body = SubmissionReceipt),
         (status = 400, description = "路径参数或 JSON 结构无效：invalid_path、invalid_json", body = ErrorResponse),
         (status = 401, description = "登录限次模式的会话无效或账号禁用", body = ErrorResponse),
@@ -146,7 +190,7 @@ async fn public_survey(
         (status = 404, description = "问卷不存在或不可访问", body = ErrorResponse),
         (status = 409, description = "idempotency_conflict、version_changed、already_submitted 或回收不可用", body = ErrorResponse),
         (status = 413, description = "请求体超过限制", body = ErrorResponse),
-        (status = 422, description = "非 UUIDv4 秘密、未知版本或答案校验失败；题目错误含 question_id", body = ErrorResponse),
+        (status = 422, description = "非 UUIDv4/UUIDv7 秘密、未知版本或答案校验失败；题目错误含 question_id", body = ErrorResponse),
         (status = 429, description = "提交频率超限", body = ErrorResponse),
         (status = 500, description = "内部错误；未成功提交时不会占用填写次数", body = ErrorResponse)
     )
@@ -167,6 +211,46 @@ async fn read_public_survey(
     headers: &HeaderMap,
     id: Uuid,
 ) -> AppResult<PublicSurvey> {
+    let (survey, version) = load_public_survey(state, id).await?;
+    let mode = survey.mode.unwrap_or(FillingMode::Anonymous);
+    // anonymous 与尚未设置的模式完全不解释 Cookie；只有 login_once 才要求有效会话。
+    if mode == FillingMode::LoginOnce {
+        let respondent_id = auth::authenticate(headers, &state.db).await?.id;
+        ensure_not_submitted(&state.db, id, respondent_id).await?;
+    }
+    Ok(PublicSurvey {
+        survey_id: id,
+        version_id: version.id,
+        version_number: version.number,
+        mode,
+        deadline: survey.deadline,
+        document: version.prepared.document_arc(),
+        privacy: privacy_notice(mode),
+    })
+}
+
+/// 元信息读取与题面读取共用同一套回收资格检查，但从不解释 Cookie。
+async fn read_public_survey_meta(state: &AppState, id: Uuid) -> AppResult<PublicSurveyMeta> {
+    let (survey, version) = load_public_survey(state, id).await?;
+    let mode = survey.mode.unwrap_or(FillingMode::Anonymous);
+    // 标题、说明与目的来自不可变的当前发布版本，不是仍可编辑的草稿。
+    let document = version.prepared.document();
+    Ok(PublicSurveyMeta {
+        survey_id: id,
+        title: document.title.clone(),
+        description: document.description.clone(),
+        purpose: document.purpose.clone(),
+        mode,
+        deadline: survey.deadline,
+        privacy: privacy_notice(mode),
+    })
+}
+
+/// 只读的公开可见性检查：发布者未禁用、回收可用且当前版本存在。
+async fn load_public_survey(
+    state: &AppState,
+    id: Uuid,
+) -> AppResult<(repository::SurveyMetaRow, Arc<repository::PublishedVersion>)> {
     // 元数据投影不包含 1 MiB 草稿；题面来自不可变的发布版本。
     let survey = survey::Entity::find_by_id(id)
         .select_only()
@@ -175,14 +259,6 @@ async fn read_public_survey(
         .one(&state.db)
         .await?
         .ok_or_else(AppError::not_found)?;
-    // anonymous 与尚未设置的模式完全不解释 Cookie；只有 login_once 才要求有效会话。
-    let (mode, respondent_id) = match survey.mode.unwrap_or(FillingMode::Anonymous) {
-        FillingMode::LoginOnce => (
-            FillingMode::LoginOnce,
-            Some(auth::authenticate(headers, &state.db).await?.id),
-        ),
-        FillingMode::Anonymous => (FillingMode::Anonymous, None),
-    };
     let publisher_disabled = user::Entity::find_by_id(survey.owner_id)
         .select_only()
         .column(user::Column::Disabled)
@@ -202,24 +278,13 @@ async fn read_public_survey(
         survey.taken_down,
         Utc::now(),
     )?;
-    if let Some(respondent_id) = respondent_id {
-        ensure_not_submitted(&state.db, id, respondent_id).await?;
-    }
     let version_id = survey
         .current_version_id
         .ok_or_else(|| AppError::internal("collecting survey has no version"))?;
-    let version = repository::load_version(&state.db, id, version_id)
+    let version = repository::load_version(&state.db, &state.versions, id, version_id)
         .await?
         .ok_or_else(|| AppError::internal("current version is missing"))?;
-    Ok(PublicSurvey {
-        survey_id: id,
-        version_id,
-        version_number: version.number,
-        mode,
-        deadline: survey.deadline,
-        document: version.prepared.document_arc(),
-        privacy: privacy_notice(mode),
-    })
+    Ok((survey, version))
 }
 
 async fn submit_response(
@@ -240,13 +305,14 @@ async fn submit_response(
         .column(response::Column::Id)
         .column(response::Column::VersionId)
         .column(response::Column::PayloadHash)
+        .column(response::Column::Outcome)
         .filter(response::Column::SurveyId.eq(id))
         .filter(response::Column::Scope.eq(&scope))
         .filter(response::Column::KeyHash.eq(&key_hash))
-        .into_tuple::<(Uuid, Uuid, String)>()
+        .into_tuple::<(Uuid, Uuid, String, Outcome)>()
         .one(&locked.tx)
         .await?;
-    if let Some((_, original_version, _)) = &previous
+    if let Some((_, original_version, _, _)) = &previous
         && *original_version != request.version_id
     {
         return Err(idempotency_conflict());
@@ -260,7 +326,7 @@ async fn submit_response(
             ensure_not_submitted(&locked.tx, id, respondent_id).await?;
         }
     }
-    let published = repository::load_version(&locked.tx, id, request.version_id)
+    let published = repository::load_version(&locked.tx, &state.versions, id, request.version_id)
         .await?
         .ok_or_else(|| AppError::validation("version_id 不属于本问卷的已发布版本"))?;
     if previous.is_none() && locked.survey.current_version_id != Some(request.version_id) {
@@ -273,9 +339,11 @@ async fn submit_response(
     // 历史版本不可变：旧版本重试仍按旧规则规范化；有逻辑时从入口重建路径，
     // 只有已校验且适用的答案进入下游条件，客户端不能指定可信历史或可见题目。
     // 加载版本时已编译规则与流程，提交校验直接复用同一份编译结果。
-    let answers = published.prepared.validate_answers(request.answers)?;
-    let payload_hash = submission_payload_hash(request.version_id, &answers)?;
-    if let Some((receipt_id, _, original_hash)) = previous {
+    // 一次求值同时得到规范化答案、三态与终点：筛选结束与正常完成都落库。
+    let evaluated = published.prepared.evaluate_submission(request.answers)?;
+    let outcome = Outcome::from(evaluated.outcome);
+    let payload_hash = submission_payload_hash(request.version_id, &evaluated.answers)?;
+    if let Some((receipt_id, _, original_hash, original_outcome)) = previous {
         if original_hash != payload_hash {
             return Err(idempotency_conflict());
         }
@@ -285,15 +353,18 @@ async fn submit_response(
             SubmissionReceipt {
                 status: SubmissionStatus::Submitted,
                 receipt_id,
+                outcome: original_outcome,
             },
         ));
     }
 
-    let receipt_id = Uuid::new_v4();
-    // 一条记录同时存完整答案与幂等指纹；数据库还约束同问卷账号唯一，跨版本同样限次。
+    let receipt_id = Uuid::now_v7();
+    // 一条记录同时存完整答案、三态、终点与幂等指纹；数据库还约束同问卷账号唯一，
+    // 跨版本同样限次，筛选结束与正常完成共享这条唯一约束。
     // 不使用 upsert：失败不得覆盖答案、占用次数或修改已有成功记录。
     let answers_json = serde_json::Value::Object(
-        answers
+        evaluated
+            .answers
             .into_iter()
             .map(|(question_id, value)| (question_id.to_string(), value))
             .collect(),
@@ -307,6 +378,8 @@ async fn submit_response(
         key_hash: Set(key_hash),
         payload_hash: Set(payload_hash),
         answers: Set(answers_json),
+        outcome: Set(outcome),
+        question_states: Set(serde_json::to_value(evaluated.question_states)?),
         submitted_at: Set(submitted_at),
     })
     .exec_without_returning(&locked.tx)
@@ -317,6 +390,7 @@ async fn submit_response(
         SubmissionReceipt {
             status: SubmissionStatus::Submitted,
             receipt_id,
+            outcome,
         },
     ))
 }
@@ -395,14 +469,15 @@ async fn ensure_not_submitted(
     Ok(())
 }
 
-/// 幂等秘密必须是浏览器安全随机生成的 UUIDv4（RFC 4122 变体）。
+/// 幂等秘密必须是浏览器安全随机生成的 UUIDv4 或时间有序 UUIDv7（RFC 4122 变体）。
 ///
-/// 随机版本与变体是「同一逻辑提交只生成一次」的前提；顺序 UUID 或自定义变体
-/// 会让不同客户端猜中同一作用域记录。
+/// 随机或时间有序版本都能保证「同一逻辑提交只生成一次」的熵；其它版本或自定义
+/// 变体会让不同客户端猜中同一作用域记录。
 pub(crate) fn validate_idempotency_key(key: Uuid) -> AppResult<()> {
-    if key.get_version() != Some(Version::Random) || key.get_variant() != Variant::RFC4122 {
+    let supported = matches!(key.get_version(), Some(Version::Random | Version::SortRand));
+    if !supported || key.get_variant() != Variant::RFC4122 {
         return Err(AppError::validation(
-            "idempotency_key 必须是安全随机生成的 UUIDv4",
+            "idempotency_key 必须是 UUIDv4 或 UUIDv7",
         ));
     }
     Ok(())

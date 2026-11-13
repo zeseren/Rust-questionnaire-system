@@ -858,20 +858,22 @@ a:hover {
   max-width: 375px;
   margin: 0 auto;
 }
-.report-filter {
+.report-filter,
+.admin-filter {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 14px;
   margin-bottom: 22px;
 }
-.report-filter .field {
+.report-filter .field,
+.admin-filter .field {
   flex: 1;
   min-width: 150px;
 }
 .report-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   padding-bottom: 20px;
   margin-bottom: 20px;
   border-bottom: 1px solid var(--border-hairline);
@@ -1148,7 +1150,8 @@ tbody tr:hover {
   .main-content {
     padding-bottom: 40px;
   }
-  .report-filter .field {
+  .report-filter .field,
+  .admin-filter .field {
     min-width: 140px;
   }
 }

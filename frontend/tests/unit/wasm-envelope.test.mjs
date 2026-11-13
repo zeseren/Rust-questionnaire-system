@@ -155,4 +155,6 @@ test('FlowSession 快照、改答、非法回退与最终答案重建遵循契�
 
   const evaluated = session.evaluateAnswers([{ question_id: Q_NAME, value: '张三' }])
   assert.equal(evaluated.answers[Q_NAME], '张三')
+  // 成功重建携带结束分支：完整答卷与筛选结束共用同一回执契约。
+  assert.equal(evaluated.outcome, 'complete')
 })

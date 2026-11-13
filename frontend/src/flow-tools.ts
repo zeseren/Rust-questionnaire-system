@@ -1,6 +1,7 @@
 //! 流程编辑器的拓扑工具：插入节点并回接所有指向原后继的出口。
 //! 只做结构改写，不校验语义；语义由 wasm 引擎在编译/求值时报错并定位。
 import type { FlowDefinition, FlowNode } from './types.ts'
+import { newId } from './uuid.ts'
 
 /** 在 index 后插入新节点，回接前驱所有指向原后继的出口，返回新节点身份。 */
 export function insertFlowNode(
@@ -8,7 +9,7 @@ export function insertFlowNode(
   index: number,
   type: FlowNode['type'],
 ): string {
-  const id = crypto.randomUUID()
+  const id = newId()
   const target = flow.nodes[index + 1]?.id ?? ''
   const node: FlowNode =
     type === 'page'

@@ -33,6 +33,7 @@ type Envelope<T> = { ok: T } | { error: EnvelopeError }
 /** wasm 侧导出的最小形状；bundler 胶水与 node 手装实例共用同一份类型。 */
 interface WasmEngine {
   parse_logic_text(source: string, questions_json: string): string
+  inspect_logic_text(source: string, questions_json: string): string
   format_logic_text(logic_json: string, questions_json: string): string
   compile_document_logic(logic_json: string, questions_json: string): string
   compile_expression(raw_json: string, questions_json: string): string
@@ -53,6 +54,8 @@ interface WasmGlue extends WasmEngine, Record<string, WebAssembly.ImportValue> {
 
 // 顶层 await：模块求值结束即引擎就绪，导入方总能直接调用下面的导出。
 const engine = await loadEngine()
+/** `loadEngine()` 已完成；导入失败时本模块整体拒绝求值，调用方据此展示真实状态。 */
+export const wasmReady: boolean = true
 
 async function loadEngine(): Promise<WasmEngine> {
   // node --test 没有打包器：bundler 胶水的 `.wasm` 静态导入会直接失败，改为读文件手动实例化。
@@ -136,6 +139,52 @@ export interface CompiledDocumentLogic {
 /** 解析文本 DSL；失败信封额外携带行列号，因此语法/语义错误抛 `LogicTextError`。 */
 export function parseLogicText(source: string, questions: readonly Question[]): DocumentLogic {
   return unwrap<DocumentLogic>(engine.parse_logic_text(source, encode(questions)))
+}
+
+/** 文本 DSL 工作台的绑定类别；与 Rust `LogicTextBinding.category` 一致。 */
+export type LogicTextBindingCategory = 'question' | 'option' | 'variable' | 'node'
+
+/** 已扫描到的合法绑定；`id` 是非零 UUID 文本。 */
+export interface LogicTextBinding {
+  readonly category: LogicTextBindingCategory
+  readonly alias: string
+  readonly id: string
+}
+
+/**
+ * 文本巡检结果：绑定速查与可选诊断来自同一次解析。
+ *
+ * 语法错误保留在 `error` 中而不是抛异常，右侧速查栏仍能展示已识别的绑定；
+ * 只有题目参数本身非法才会抛出领域错误。
+ */
+export interface LogicTextInspection {
+  readonly bindings: readonly LogicTextBinding[]
+  readonly error: LogicError | LogicTextError | null
+  readonly line: number | null
+  readonly column: number | null
+}
+
+interface InspectionEnvelope {
+  bindings: LogicTextBinding[]
+  error: EnvelopeError | null
+  line: number | null
+  column: number | null
+}
+
+/** 一次调用同时取回绑定列表与诊断，避免前端重复扫描 `bind` 语句。 */
+export function inspectLogicText(
+  source: string,
+  questions: readonly Question[],
+): LogicTextInspection {
+  const inspection = unwrap<InspectionEnvelope>(
+    engine.inspect_logic_text(source, encode(questions)),
+  )
+  return {
+    bindings: inspection.bindings,
+    error: inspection.error ? revive(inspection.error) : null,
+    line: inspection.line,
+    column: inspection.column,
+  }
 }
 
 /** 把规则 JSON 格式化回文本 DSL；输出与后端逐字节一致。 */

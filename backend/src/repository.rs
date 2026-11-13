@@ -9,6 +9,7 @@ use sea_orm::{
     FromQueryResult, QueryFilter, QuerySelect, Set,
     sea_query::{Expr, LockType, SimpleExpr, extension::postgres::PgExpr},
 };
+use std::sync::{Arc, Mutex, PoisonError};
 use uuid::Uuid;
 
 use crate::{
@@ -76,11 +77,50 @@ pub(crate) fn survey_meta_columns() -> [survey::Column; 10] {
     ]
 }
 
-/// 按版本行编译出的发布版本；每次请求独立加载，不跨请求共享。
+/// 按版本行编译出的发布版本；发布后不可变，可安全跨请求共享。
 pub(crate) struct PublishedVersion {
     pub id: Uuid,
     pub number: i32,
     pub prepared: PreparedDocument,
+}
+
+/// 已发布版本不可变；进程内有界 LRU 缓存编译结果，避免每个请求重复解析题面 JSONB。
+///
+/// 只缓存最多 256 条；键是（问卷 UUID，版本 UUID），命中后移到队尾，超限淘汰最久未用条目。
+/// 键包含问卷身份，缓存命中不会绕过「版本必须属于该问卷」的归属校验。
+type CachedVersionEntry = ((Uuid, Uuid), Arc<PublishedVersion>);
+
+pub(crate) struct VersionCache {
+    entries: Mutex<Vec<CachedVersionEntry>>,
+}
+
+impl VersionCache {
+    const CAPACITY: usize = 256;
+
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: Mutex::new(Vec::with_capacity(Self::CAPACITY)),
+        }
+    }
+
+    fn get(&self, key: (Uuid, Uuid)) -> Option<Arc<PublishedVersion>> {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        let index = entries.iter().position(|(cached, _)| *cached == key)?;
+        let entry = entries.remove(index);
+        let version = Arc::clone(&entry.1);
+        entries.push(entry);
+        Some(version)
+    }
+
+    fn put(&self, key: (Uuid, Uuid), version: Arc<PublishedVersion>) {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(index) = entries.iter().position(|(cached, _)| *cached == key) {
+            entries.remove(index);
+        } else if entries.len() >= Self::CAPACITY {
+            entries.remove(0);
+        }
+        entries.push((key, version));
+    }
 }
 
 /// 只投影编译所需的版本列；不搬运整行元数据。
@@ -91,12 +131,19 @@ struct VersionRow {
     document: serde_json::Value,
 }
 
-/// 按问卷归属加载并编译发布版本；不存在或不属于该问卷时返回 `None`。
+/// 按问卷归属加载并编译发布版本；缓存命中不访问数据库。
+///
+/// 不存在或不属于该问卷时返回 `None`。
 pub(crate) async fn load_version(
     db: &impl ConnectionTrait,
+    cache: &VersionCache,
     survey_id: Uuid,
     version_id: Uuid,
-) -> AppResult<Option<PublishedVersion>> {
+) -> AppResult<Option<Arc<PublishedVersion>>> {
+    let key = (survey_id, version_id);
+    if let Some(version) = cache.get(key) {
+        return Ok(Some(version));
+    }
     let Some(row) = version::Entity::find_by_id(version_id)
         .filter(version::Column::SurveyId.eq(survey_id))
         .select_only()
@@ -111,11 +158,13 @@ pub(crate) async fn load_version(
     else {
         return Ok(None);
     };
-    Ok(Some(PublishedVersion {
+    let version = Arc::new(PublishedVersion {
         id: row.id,
         number: row.number,
         prepared: PreparedDocument::new(serde_json::from_value(row.document)?)?,
-    }))
+    });
+    cache.put(key, Arc::clone(&version));
+    Ok(Some(version))
 }
 
 /// 只读取已保存草稿的单列投影；响应构造不再搬回整行元数据。

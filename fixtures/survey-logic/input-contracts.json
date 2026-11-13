@@ -17,8 +17,8 @@
     {
       "name": "大写连字符",
       "raw": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
-      "configuration_valid": false,
-      "option_valid": false
+      "configuration_valid": true,
+      "option_valid": true
     },
     {
       "name": "无连字符",

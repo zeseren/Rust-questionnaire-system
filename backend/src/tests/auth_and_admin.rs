@@ -5,12 +5,12 @@ use chrono::{Duration, Utc};
 use uuid::Uuid;
 
 use crate::{
-    admin::{SurveyItem, SurveyRow, reason, require_admin},
+    admin::{AdminSurveyFilters, AuditFilters, SurveyItem, SurveyRow, reason, require_admin},
     auth::{
         AuthUser, UserProfile, hash_password, hash_secret, hash_secret_bytes, new_session_token,
         normalize_username, session_cookie, session_token, validate_password, verify_password,
     },
-    entities::{SurveyStatus, UserRole},
+    entities::{AuditAction, SurveyStatus, UserRole},
     tests::support::{error_json, user_model},
 };
 
@@ -277,6 +277,36 @@ async fn 治理原因必须是一到五百个可显示字符() {
         assert_eq!(body["error"]["code"], "validation_failed");
         assert_eq!(body["error"]["message"], 期望);
     }
+}
+
+#[test]
+fn 治理列表筛选接受标题状态下架与审计条件() {
+    let 筛选: AdminSurveyFilters = serde_json::from_str(
+        r#"{"title":"甲","status":"closed","taken_down":true,"page":2,"page_size":50}"#,
+    )
+    .expect("治理问卷筛选必须解析");
+    assert_eq!(筛选.title.as_deref(), Some("甲"));
+    assert_eq!(筛选.status, Some(SurveyStatus::Closed));
+    assert_eq!(筛选.taken_down, Some(true));
+    assert_eq!(筛选.pagination.page, Some(2));
+    assert_eq!(筛选.pagination.page_size, Some(50));
+
+    let 省略: AdminSurveyFilters = serde_json::from_str("{}").expect("全部筛选项可省略");
+    assert_eq!(省略.title, None);
+    assert_eq!(省略.status, None);
+    assert_eq!(省略.taken_down, None);
+    assert!(serde_json::from_str::<AdminSurveyFilters>(r#"{"status":"deleted"}"#).is_err());
+
+    let 管理员 = Uuid::new_v4();
+    let 目标 = Uuid::new_v4();
+    let 审计: AuditFilters = serde_json::from_str(&format!(
+        r#"{{"action":"take_down","actor_id":"{管理员}","target_id":"{目标}"}}"#
+    ))
+    .expect("审计筛选必须解析");
+    assert_eq!(审计.action, Some(AuditAction::TakedownSurvey));
+    assert_eq!(审计.actor_id, Some(管理员));
+    assert_eq!(审计.target_id, Some(目标));
+    assert!(serde_json::from_str::<AuditFilters>(r#"{"action":"launch_missile"}"#).is_err());
 }
 
 #[test]

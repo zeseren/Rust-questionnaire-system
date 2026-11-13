@@ -24,7 +24,10 @@ pub use crate::logic_document::{
     CompiledDocumentLogic, ComputedVariable, DocumentLogic, DocumentLogicValues, QuestionRule,
     RuleValues,
 };
-pub use crate::logic_text::{LogicTextError, format_logic_text, parse_logic_text};
+pub use crate::logic_text::{
+    LogicTextBinding, LogicTextError, LogicTextInspection, format_logic_text, inspect_logic_text,
+    parse_logic_text,
+};
 
 /// 每份问卷最多允许的题目数。
 pub const MAX_QUESTIONS: usize = 100;
@@ -85,26 +88,27 @@ pub struct Question {
 
 impl<'de> Deserialize<'de> for Question {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use serde::de::Error;
+        // 公共字段按目标类型直接读取，剩余字段原样交给严格的题型枚举。
+        // 不用 `Value::Object`：那会把每道题的选项数组先整体物化成 `serde_json::Value`，
+        // 再二次反序列化为强类型，产生一次多余的全量堆分配。
+        #[derive(Deserialize)]
+        struct Wire {
+            #[serde(deserialize_with = "crate::identity::deserialize")]
+            id: Uuid,
+            title: String,
+            required: bool,
+            // 题型枚举自带 `deny_unknown_fields`，拼错的配置项仍会被拒绝而不是丢弃；
+            // 这里不能用 `deny_unknown_fields`，Serde 不允许它与 `flatten` 同时出现。
+            #[serde(flatten)]
+            kind: QuestionKind,
+        }
 
-        let Value::Object(mut fields) = Value::deserialize(deserializer)? else {
-            return Err(D::Error::custom("题目必须是 JSON 对象"));
-        };
-        // 不用 flatten：Serde 的 flatten 与 deny_unknown_fields 不能同时生效。
-        // 先取出公共字段，其余字段全部交给严格的 QuestionKind，拼错的配置项会被拒绝而不是丢弃。
-        let mut common = |name: &'static str| {
-            fields
-                .remove(name)
-                .ok_or_else(|| D::Error::missing_field(name))
-        };
-        let id = common("id")?;
-        let title = common("title")?;
-        let required = common("required")?;
+        let wire = Wire::deserialize(deserializer)?;
         Ok(Self {
-            id: crate::identity::deserialize(id).map_err(D::Error::custom)?,
-            title: String::deserialize(title).map_err(D::Error::custom)?,
-            required: bool::deserialize(required).map_err(D::Error::custom)?,
-            kind: QuestionKind::deserialize(Value::Object(fields)).map_err(D::Error::custom)?,
+            id: wire.id,
+            title: wire.title,
+            required: wire.required,
+            kind: wire.kind,
         })
     }
 }
@@ -360,28 +364,6 @@ impl Document {
 
     fn validate_publish_compiled(&self) -> Result<Option<CompiledDocumentLogic>, ValidationError> {
         let logic = self.validate_compiled()?;
-        // 筛选结果的保存与账号限次策略尚未确定，暂不发布包含筛选结束的流程。
-        if self
-            .logic
-            .as_ref()
-            .and_then(|logic| logic.flow.as_ref())
-            .is_some_and(|flow| {
-                flow.nodes.iter().any(|node| {
-                    matches!(
-                        node,
-                        FlowNode::End {
-                            outcome: FlowOutcome::ScreenOut,
-                            ..
-                        }
-                    )
-                })
-            })
-        {
-            return Err(ValidationError::new(
-                None,
-                "筛选结束的保存与限次策略尚未开放，请使用普通完成节点后再发布",
-            ));
-        }
         if self.title.trim().is_empty() {
             return Err(ValidationError::new(None, "发布前请填写问卷标题"));
         }
@@ -446,19 +428,19 @@ impl Document {
         Ok(logic)
     }
 
-    /// 为复制出的问卷重新生成所有题目和选项的随机 UUID。
+    /// 为复制出的问卷重新生成所有题目和选项的 UUIDv7，并按映射重写规则引用。
     ///
     /// 除身份外，内容、规则和显示顺序均保持不变；普通保存和排序不要调用。
     pub fn renew_ids(&mut self) {
         let mut question_ids = BTreeMap::new();
         let mut option_ids = BTreeMap::new();
         for question in &mut self.questions {
-            let new_id = Uuid::new_v4();
+            let new_id = Uuid::now_v7();
             question_ids.insert(question.id, new_id);
             question.id = new_id;
             if let Some(options) = question.kind.options_mut() {
                 for option in options {
-                    let new_id = Uuid::new_v4();
+                    let new_id = Uuid::now_v7();
                     option_ids.insert(option.id, new_id);
                     option.id = new_id;
                 }
@@ -579,12 +561,26 @@ impl PreparedDocument {
     ///
     /// # Errors
     /// 已存答案存在未知/重复题目、不适用答案、类型或范围错误、缺失必填项，
-    /// 或路径未到达 complete 时返回领域错误。
+    /// 或路径未到达结束节点时返回领域错误；筛选结束不再是错误。
     pub fn evaluate_stored_states(
         &self,
         answers: &BTreeMap<Uuid, Value>,
     ) -> Result<StoredStates, LogicError> {
         self.plan.evaluate_stored_states(&self.document, answers)
+    }
+
+    /// 校验并重建一次提交：一次返回规范化答案、三态与终点结果。
+    ///
+    /// # Errors
+    /// 未知/重复题目、不适用答案、类型或范围错误、缺失必填项，
+    /// 或路径未到达任何结束节点时返回可定位的校验错误。
+    pub fn evaluate_submission(
+        &self,
+        answers: Vec<Answer>,
+    ) -> Result<EvaluatedResponse, ValidationError> {
+        self.plan
+            .evaluate_answers(&self.document, answers)
+            .map_err(|error| ValidationError::new(error.question_id, error.to_string()))
     }
 }
 
@@ -866,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn 单选答案必须是本题选项的小写_uuid() {
+    fn 单选答案必须是本题选项的标准_uuid() {
         let 题 = 题目(
             1,
             QuestionKind::SingleChoice {
@@ -880,6 +876,12 @@ mod tests {
                 .unwrap(),
             Some(Value::String(id(101).to_string()))
         );
+        assert_eq!(
+            题.normalize_answer(Some(&json!(id(102).to_string().to_uppercase())))
+                .unwrap(),
+            Some(Value::String(id(102).to_string())),
+            "大写十六进制归一为小写身份"
+        );
 
         for (值, 消息) in [
             (json!(101), "选项 ID 必须是合法的 UUID 字符串"),
@@ -890,7 +892,7 @@ mod tests {
             ),
             (
                 json!("00000000-0000-4000-8000-00000000010A"),
-                "选项 ID 必须是合法的 UUID 字符串",
+                "选项不属于此版本的当前题目",
             ),
             (json!(id(999).to_string()), "选项不属于此版本的当前题目"),
         ] {

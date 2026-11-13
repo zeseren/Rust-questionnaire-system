@@ -8,7 +8,7 @@ import { api, message, query } from '../api'
 import { dateTime, statusNames } from '../format'
 import { useResource } from '../resource'
 import { useAuth, useNotice } from '../stores'
-import type { AdminSurvey, AdminUser, Audit, SurveyDocument } from '../types'
+import type { AdminSurvey, AdminUser, Audit, Status, SurveyDocument } from '../types'
 import ErrorNotice from '../components/ErrorNotice.vue'
 import LoadingState from '../components/LoadingState.vue'
 import Pagination from '../components/Pagination.vue'
@@ -17,13 +17,65 @@ const auth = useAuth()
 const notice = useNotice()
 const tab = ref<'users' | 'surveys' | 'audits'>('users')
 const labels = { users: '用户管理', surveys: '问卷治理', audits: '操作审计' }
+const statuses: Status[] = ['unpublished', 'collecting', 'closed', 'archived']
 const page = ref(1)
+// 筛选输入与已应用的取值分离，只有点击「应用筛选」才重新请求。
+const surveyTitle = ref('')
+const surveyStatus = ref<Status | ''>('')
+const surveyTakenDown = ref<'' | 'true' | 'false'>('')
+const auditAction = ref('')
+const auditActor = ref('')
+const auditTarget = ref('')
+const applied = ref({
+  title: '',
+  status: '' as Status | '',
+  taken_down: '' as '' | 'true' | 'false',
+  action: '',
+  actor_id: '',
+  target_id: '',
+})
+function applyFilters() {
+  page.value = 1
+  applied.value = {
+    title: surveyTitle.value.trim(),
+    status: surveyStatus.value,
+    taken_down: surveyTakenDown.value,
+    action: auditAction.value,
+    actor_id: auditActor.value.trim(),
+    target_id: auditTarget.value.trim(),
+  }
+}
+function resetFilters() {
+  surveyTitle.value = ''
+  surveyStatus.value = ''
+  surveyTakenDown.value = ''
+  auditAction.value = ''
+  auditActor.value = ''
+  auditTarget.value = ''
+  applyFilters()
+}
 type AdminListResult =
   | { kind: 'users'; total: number; items: AdminUser[] }
   | { kind: 'surveys'; total: number; items: AdminSurvey[] }
   | { kind: 'audits'; total: number; items: Audit[] }
 const list = useResource<AdminListResult>(async () => {
-  const suffix = query({ page: page.value, page_size: 20 })
+  const suffix = query({
+    page: page.value,
+    page_size: 20,
+    ...(tab.value === 'surveys'
+      ? {
+          title: applied.value.title,
+          status: applied.value.status,
+          taken_down: applied.value.taken_down,
+        }
+      : tab.value === 'audits'
+        ? {
+            action: applied.value.action,
+            actor_id: applied.value.actor_id,
+            target_id: applied.value.target_id,
+          }
+        : {}),
+  })
   if (tab.value === 'users') {
     const result = await api<{ total: number; items: AdminUser[] }>(`/api/admin/users${suffix}`)
     return { kind: 'users' as const, total: result.total, items: result.items }
@@ -34,7 +86,7 @@ const list = useResource<AdminListResult>(async () => {
   }
   const result = await api<{ total: number; items: Audit[] }>(`/api/admin/audits${suffix}`)
   return { kind: 'audits' as const, total: result.total, items: result.items }
-}, [tab, page])
+}, [tab, page, applied])
 const users = computed(() => {
   const data = list.data.value
   return data?.kind === 'users' ? data.items : undefined
@@ -145,6 +197,52 @@ const actionNames: Record<string, string> = {
       </button>
     </div>
   </div>
+  <form v-if="tab !== 'users'" class="panel admin-filter" @submit.prevent="applyFilters">
+    <template v-if="tab === 'surveys'">
+      <label class="field">
+        标题关键词
+        <input v-model="surveyTitle" type="search" placeholder="按标题筛选" autocomplete="off" />
+      </label>
+      <label class="field">
+        回收状态
+        <select v-model="surveyStatus">
+          <option value="">全部状态</option>
+          <option v-for="status in statuses" :key="status" :value="status">
+            {{ statusNames[status] }}
+          </option>
+        </select>
+      </label>
+      <label class="field">
+        下架状态
+        <select v-model="surveyTakenDown">
+          <option value="">全部</option>
+          <option value="true">已下架</option>
+          <option value="false">未下架</option>
+        </select>
+      </label>
+    </template>
+    <template v-else>
+      <label class="field">
+        操作类型
+        <select v-model="auditAction">
+          <option value="">全部操作</option>
+          <option v-for="(label, action) in actionNames" :key="action" :value="action">
+            {{ label }}
+          </option>
+        </select>
+      </label>
+      <label class="field">
+        操作者账号 ID
+        <input v-model="auditActor" placeholder="留空表示全部" autocomplete="off" />
+      </label>
+      <label class="field">
+        目标 ID
+        <input v-model="auditTarget" placeholder="留空表示全部" autocomplete="off" />
+      </label>
+    </template>
+    <button type="button" class="text-button danger-text" @click="resetFilters">重置筛选</button>
+    <button class="button button-primary">应用筛选</button>
+  </form>
   <ErrorNotice :message="list.error.value" retry @retry="list.refresh" />
   <LoadingState v-if="list.loading.value" />
   <template v-if="list.data.value">

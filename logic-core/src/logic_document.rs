@@ -495,7 +495,7 @@ impl DocumentLogic {
         let variables: BTreeMap<_, _> = self
             .variables
             .iter()
-            .map(|variable| (variable.id, Uuid::new_v4()))
+            .map(|variable| (variable.id, Uuid::now_v7()))
             .collect();
         for variable in &mut self.variables {
             variable.id = variables[&variable.id];
@@ -556,7 +556,19 @@ pub(crate) fn rewrite(
             }
         }
     }
-    for key in ["expression", "left", "right", "value", "fallback"] {
+    for key in [
+        "expression",
+        "left",
+        "right",
+        "value",
+        "fallback",
+        "condition",
+        "then_branch",
+        "else_branch",
+        "text",
+        "substring",
+        "prefix",
+    ] {
         if let Some(value) = fields.get_mut(key) {
             rewrite(value, questions, options, variables);
         }
@@ -671,6 +683,10 @@ mod tests {
                 {"op": "coalesce", "value": {"op": "answer", "question_id": id(2).to_string()}, "fallback": {"op": "number", "value": "0"}},
                 {"op": "length", "value": {"op": "answer", "question_id": id(1).to_string()}},
                 {"op": "arithmetic", "operator": "add", "left": {"op": "answer", "question_id": id(1).to_string()}, "right": {"op": "variable", "variable_id": id(302).to_string()}},
+                {"op": "if", "condition": {"op": "answered", "question_id": id(1).to_string()}, "then_branch": {"op": "answer", "question_id": id(1).to_string()}, "else_branch": {"op": "answer", "question_id": id(2).to_string()}},
+                {"op": "negate", "value": {"op": "answer", "question_id": id(2).to_string()}},
+                {"op": "contains", "text": {"op": "variable", "variable_id": id(301).to_string()}, "substring": {"op": "answer", "question_id": id(1).to_string()}},
+                {"op": "starts_with", "text": {"op": "answer", "question_id": id(2).to_string()}, "prefix": {"op": "variable", "variable_id": id(302).to_string()}},
                 {"op": "answer", "question_id": id(999).to_string()},
             ],
         });
@@ -730,7 +746,47 @@ mod tests {
             "arithmetic 右侧变量引用"
         );
         assert_eq!(
-            items[12]["question_id"],
+            items[12]["condition"]["question_id"],
+            json!(id(11)),
+            "if 条件题目引用"
+        );
+        assert_eq!(
+            items[12]["then_branch"]["question_id"],
+            json!(id(11)),
+            "if 命中分支题目引用"
+        );
+        assert_eq!(
+            items[12]["else_branch"]["question_id"],
+            json!(id(12)),
+            "if 未命中分支题目引用"
+        );
+        assert_eq!(
+            items[13]["value"]["question_id"],
+            json!(id(12)),
+            "negate 参数题目引用"
+        );
+        assert_eq!(
+            items[14]["text"]["variable_id"],
+            json!(id(401)),
+            "contains 文本变量引用"
+        );
+        assert_eq!(
+            items[14]["substring"]["question_id"],
+            json!(id(11)),
+            "contains 子串题目引用"
+        );
+        assert_eq!(
+            items[15]["text"]["question_id"],
+            json!(id(12)),
+            "starts_with 文本题目引用"
+        );
+        assert_eq!(
+            items[15]["prefix"]["variable_id"],
+            json!(id(402)),
+            "starts_with 前缀变量引用"
+        );
+        assert_eq!(
+            items[16]["question_id"],
             json!(id(999)),
             "未映射题目身份保持原样"
         );

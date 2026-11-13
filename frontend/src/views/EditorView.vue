@@ -3,7 +3,16 @@
 <!-- [主提交通道在哪] 顶部固定栏最右侧「发布问卷 / 发布新版本」是全视图唯一主按钮，左侧紧邻次级「保存修改」。 -->
 <!-- 草稿修订号独立保存，回收设置的响应不能掩盖其他窗口的编辑冲突。 -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, shallowRef } from 'vue'
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  provide,
+  ref,
+  shallowRef,
+  watch,
+} from 'vue'
 import { onBeforeRouteLeave, RouterLink, useRoute, useRouter } from 'vue-router'
 import { api, ApiError, downloadBlob, message } from '../api'
 import { encode } from '../json'
@@ -49,10 +58,34 @@ const id = String(route.params.id)
 const survey = shallowRef<SurveyDetail | null>(null)
 const draft = ref<SurveyDocument | null>(null)
 const revision = ref(0)
-/** 最近一次服务端确认的草稿序列化结果；与当前草稿比较即可得到脏状态。 */
-const savedDraft = ref('')
-const dirty = computed(() => !!draft.value && encode(draft.value) !== savedDraft.value)
 const loading = ref(true)
+/** 最近一次服务端确认的草稿序列化结果；只在防抖比对与保存/加载同步点使用。 */
+const savedDraft = ref('')
+/** 深层变更标记：每次编辑只置一次位，不按键做整份文档序列化。 */
+const dirty = ref(false)
+let compareTimer: ReturnType<typeof setTimeout> | undefined
+/** 防抖比对同时负责“改了又改回去”的还原检测。 */
+function scheduleCompare() {
+  clearTimeout(compareTimer)
+  compareTimer = setTimeout(() => {
+    dirty.value = !!draft.value && encode(draft.value) !== savedDraft.value
+  }, 250)
+}
+/** 服务端确认后同步基线，避免加载或保存响应把页面标记成脏。 */
+function markSaved() {
+  clearTimeout(compareTimer)
+  compareTimer = undefined
+  dirty.value = false
+}
+watch(
+  draft,
+  () => {
+    if (loading.value || !draft.value) return
+    dirty.value = true
+    scheduleCompare()
+  },
+  { deep: true, flush: 'sync' },
+)
 const busy = ref(false)
 const error = ref('')
 const fieldError = ref<{ id: string; message: string } | null>(null)
@@ -107,6 +140,7 @@ function applySurveyDetail(result: SurveyDetail, resetDraft = true) {
   if (resetDraft) {
     draft.value = result.draft
     savedDraft.value = encode(result.draft)
+    markSaved()
   }
 }
 async function load() {
@@ -127,12 +161,28 @@ async function load() {
 async function reload() {
   if (!changed.value || window.confirm('重新加载将放弃当前未保存的修改，是否继续？')) await load()
 }
-async function save() {
-  if (textPending.value) {
-    error.value = '请先应用文本规则，或恢复当前规则文本，再保存草稿。'
-    return
+/** 文本草稿在保存前的取舍：应用、忽略或取消；返回是否继续保存。 */
+function resolveTextDraft(): boolean {
+  if (!textPending.value) return true
+  const apply = window.confirm(
+    '文本 DSL 有尚未应用的修改。\n\n确定：立即应用文本规则再保存；取消：忽略这段草稿，按当前可视化规则保存。',
+  )
+  if (apply) {
+    if (!logicEditor.value?.applyText()) {
+      workspace.value = 'logic'
+      error.value = '文本规则存在错误，请修正后再保存。'
+      return false
+    }
+    textPending.value = false
+    return true
   }
+  logicEditor.value?.discardText()
+  textPending.value = false
+  return true
+}
+async function save() {
   if (!draft.value || !survey.value || locked.value || !editorForm.value) return
+  if (!resolveTextDraft()) return
   if (!editorForm.value.checkValidity()) {
     const invalid = Array.from(editorForm.value.elements).find(
       (element): element is HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement =>
@@ -154,32 +204,47 @@ async function save() {
   error.value = ''
   conflict.value = false
   fieldError.value = null
+  // 回收设置的入参在草稿保存前固定，避免步骤间互相覆盖。
+  const collection = settingsDirty.value ? { mode: mode.value, deadline: deadline.value } : null
+  let draftRevision = revision.value
   try {
     // 草稿 PUT 必须先用旧修订号检测其他窗口的编辑冲突；回收设置的响应不参与这一步。
-    const collection = settingsDirty.value ? { mode: mode.value, deadline: deadline.value } : null
     if (dirty.value) {
-      applySurveyDetail(
-        await api<SurveyDetail>(`/api/surveys/${id}/draft`, 'PUT', {
-          revision: revision.value,
-          document: draft.value,
-        }),
-      )
-      // 草稿响应带回的是尚未保存的回收参数；先恢复用户刚选的值，等 PATCH 成功再确认。
-      if (collection) {
-        mode.value = collection.mode
-        deadline.value = collection.deadline
+      // 请求体在发出前定格：它同时是服务端已接受的基线，避免把等待期间的新输入误标为已保存。
+      const payload = encode(draft.value)
+      const result = await api<SurveyDetail>(`/api/surveys/${id}/draft`, 'PUT', {
+        revision: revision.value,
+        document: draft.value,
+      })
+      // 只确认草稿与修订号；模式与截止时间仍以用户当前输入为准，等 PATCH 成功再同步。
+      survey.value = result
+      revision.value = result.revision
+      draftRevision = result.revision
+      savedDraft.value = payload
+      markSaved()
+      // 保存期间继续输入的内容仍未落库，恢复脏标记并安排一次比对。
+      if (encode(draft.value) !== payload) {
+        dirty.value = true
+        scheduleCompare()
       }
     }
     if (collection) {
-      applySurveyDetail(
-        await api<SurveyDetail>(`/api/surveys/${id}/collection`, 'PATCH', {
-          mode: collection.mode,
-          deadline: toTimestamp(collection.deadline),
-        }),
-        false,
-      )
+      try {
+        applySurveyDetail(
+          await api<SurveyDetail>(`/api/surveys/${id}/collection`, 'PATCH', {
+            mode: collection.mode,
+            deadline: toTimestamp(collection.deadline),
+          }),
+          false,
+        )
+      } catch (reason) {
+        // 草稿已经落库：明确报告两步结果，保留回收设置输入供再次保存。
+        conflict.value = reason instanceof ApiError && reason.code === 'revision_conflict'
+        error.value = `草稿已保存（修订 ${draftRevision}），但回收设置保存失败：${message(reason)}`
+        return
+      }
     }
-    notice.show('草稿与回收设置已保存。')
+    notice.show(collection ? '草稿与回收设置已保存。' : '草稿已保存。')
   } catch (reason) {
     await handleError(reason)
   } finally {
@@ -287,7 +352,7 @@ async function locateQuestion(questionId: string) {
   document.getElementById(`question-${questionId}`)?.focus()
 }
 async function editRule(questionId: string) {
-  if (locked.value || textPending.value) return
+  if (locked.value) return
   workspace.value = 'logic'
   await nextTick()
   await logicEditor.value?.addRule(questionId)
@@ -336,7 +401,10 @@ onMounted(() => {
   load()
   window.addEventListener('beforeunload', leave)
 })
-onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
+onBeforeUnmount(() => {
+  clearTimeout(compareTimer)
+  window.removeEventListener('beforeunload', leave)
+})
 </script>
 <template>
   <LoadingState v-if="loading" />
@@ -379,7 +447,12 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
         >
           预览已保存草稿
         </RouterLink>
-        <button v-if="survey.share_url" type="button" class="text-button" @click="copyLink">
+        <button
+          v-if="survey.current_version_id && survey.status !== 'unpublished'"
+          type="button"
+          class="text-button"
+          @click="copyLink"
+        >
           <Icon name="copy" />
           复制链接
         </button>
@@ -413,7 +486,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           <Icon name="copy" />
           复制问卷
         </button>
-        <button class="button" :disabled="locked || !changed || textPending" @click="save">
+        <button class="button" :disabled="locked || !changed" @click="save">
           {{ busy ? '正在处理…' : '保存修改' }}
         </button>
         <button class="button button-primary" :disabled="locked || changed" @click="preparePublish">
@@ -477,7 +550,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
       </button>
     </nav>
     <div v-if="textPending" class="notice">
-      <div class="grow">有尚未应用的文本规则，应用后才能保存或发布。</div>
+      <div class="grow">有尚未应用的文本规则；保存时会询问应用或忽略这段草稿。</div>
       <button class="button" @click="workspace = 'logic'">回到文本规则</button>
     </div>
     <div
@@ -530,7 +603,6 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
               :total="draft.questions.length"
               :disabled="locked"
               :has-rule="!!draft.logic?.rules.some((rule) => rule.question_id === question.id)"
-              :rule-disabled="textPending"
               :error="fieldError?.id === question.id ? fieldError.message : undefined"
               @update:model-value="draft.questions[index] = $event"
               @move="move(index, $event)"
@@ -662,7 +734,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           <p class="hint">
             状态管理、导出与删除草稿常驻在本页顶部固定栏，无需回到本步骤；这里只调整回收参数。
           </p>
-          <div v-if="survey.share_url" class="share-box">
+          <div
+            v-if="survey.current_version_id && survey.status !== 'unpublished'"
+            class="share-box"
+          >
             <label class="field">
               填写链接
               <input :value="shareLink(id)" readonly @focus="selectInputText" />

@@ -6,7 +6,7 @@
 
 当前开发前提：项目尚无正式发布版本，不需要考虑历史答卷兼容。后续设计和实现可以直接调整当前模型、DSL 与数据结构，不为旧格式、历史答卷或旧版本增加兼容分支、迁移方案和回归负担。
 
-`questionnaire-api` 是动态问卷调查系统的 Rust HTTP JSON API，`frontend/` 是连接真实接口的 Vue 3 前端应用。后端 `share_url` 指向公开 JSON 接口（`/api/public/surveys/{id}`），前端填写页面路由为 `/s/:id`。
+`questionnaire-api` 是动态问卷调查系统的 Rust HTTP JSON API，`frontend/` 是连接真实接口的 Vue 3 前端应用。公开填写页面路由为 `/s/:id`（由前端 `shareLink` 拼接），公开读题面与元信息接口分别为 `/api/public/surveys/{id}` 与 `/api/public/surveys/{id}/meta`。
 
 业务范围：发布者使用六类题型（单选、多选、单行文本、多行文本、数字、评分）与 DSL 规则（计算变量、显隐、动态必填、自定义约束、前向页面分支）编纂问卷，发布不可变版本，按公开匿名或同账号跨版本限交一次模式收集答卷，查看分版本三态统计并导出 CSV；管理员治理用户与问卷并记录同事务审计日志。
 
@@ -24,11 +24,11 @@
 后端严格分层：HTTP 边界 → 业务用例 → 领域核心 / 数据访问 → PostgreSQL 18。
 
 - **组合根**：`main.rs` 仅调用 `questionnaire_api::run()`（`backend/src/lib.rs`）。`run()` 依次执行：加载 `.env` → 初始化 `tracing`（默认 `questionnaire_api=info`）→ `Config::from_env()` → 建立 SeaORM 连接池（最多 10 条连接）→ **每次启动自动执行 `migration::Migrator::up`** → 分发子命令（默认 `serve`，另有 `migrate`、`create-admin`）→ 绑定 `TcpListener` 并启动带 `ctrl_c` 优雅停机的 Axum 服务。
-- **共享状态与路由登记**：全局唯一的 `AppState { db: DatabaseConnection, config: Arc<Config>, limits: Arc<Limits> }`。各业务模块暴露 `pub(crate) fn router() -> OpenApiRouter<AppState>`，使用 `utoipa_axum::routes!` 从 handler 的 `#[utoipa::path]` 同步登记路由与 OpenAPI 文档。`lib.rs::router()` 合并五个业务模块与 `/health`，通过 `split_for_parts()` 生成并预序列化 `/api/openapi.json`（每次请求只克隆字节），并挂载 404/405、`DefaultBodyLimit::max(domain::MAX_SUBMISSION_BYTES)` 与 `security::guard`。
+- **共享状态与路由登记**：全局唯一的 `AppState { db: DatabaseConnection, config: Arc<Config>, limits: Arc<Limits>, version_cache: Arc<VersionCache> }`。各业务模块暴露 `pub(crate) fn router() -> OpenApiRouter<AppState>`，使用 `utoipa_axum::routes!` 从 handler 的 `#[utoipa::path]` 同步登记路由与 OpenAPI 文档。`lib.rs::router()` 合并五个业务模块与 `/health`，通过 `split_for_parts()` 生成并预序列化 `/api/openapi.json`（每次请求只克隆字节），并挂载 404/405、默认 1 MiB `DefaultBodyLimit`（创建/保存草稿路由单独放宽至 `8 MiB`，公开提交严格保持 `domain::MAX_SUBMISSION_BYTES`）与 `security::guard`。
 - **薄 Handler**：鉴权接口抽取顺序统一为 `State` → `AuthUser` → `ApiPath`/`ApiQuery`/`ApiJson`（公开/认证接口按需省略 `AuthUser`），随后调用同文件内的业务函数；跨模块的归属查询与行锁集中于 `repository.rs`。
 - **单一领域核心**：`logic-core/src/domain.rs` 聚合导出 `Document`、`Question`、`QuestionKind`、`Answer`、`validate_draft`（仅检查容量、长度与身份，不跑规则编译）、`validate_publish`、`validate_answers`、`renew_ids` 以及 DSL/流程接口；`backend/src/lib.rs` 通过 `pub use questionnaire_logic::domain;` 再导出。领域校验错误 `ValidationError { question_id: Option<Uuid>, message }` 映射为 HTTP 422。
-- **持久化与并发**：6 个 SeaORM 实体位于 `entities.rs`（`users`、`sessions`、`surveys`、`versions`、`responses`、`audits`），唯一建表 DDL 位于 `backend/src/schema.sql`（由 `migration.rs` 嵌入执行）。发布者写操作在事务内对目标问卷行加 `FOR UPDATE` 锁并校验归属；公开提交对问卷行加 `FOR SHARE` 锁以允许并发提交；只读列表、公开读题面、统计与导出直接通过连接池执行无锁查询。
-- **统一错误与安全**：`AppError { status, code, message, question_id, error_id }` 序列化为 `{"error":{"code":"...","message":"...","question_id":null}}`；内部 500 错误生成 16 位十六进制 `error_id`（连同错误详情写入日志，并在响应头附带 `X-Error-Id`），绝不向外泄露内部错误文本。Session 采用 32 字节随机十六进制 token（库内仅存 SHA-256 `id_hash`）；密码哈希使用 `spawn_blocking` + Argon2id；`security::guard` 强制校验非读请求的 `Origin == PUBLIC_ORIGIN` 与 `X-CSRF-Protection: 1`，并对登录、注册与公开提交执行固定窗口限流。
+- **持久化与并发**：6 个 SeaORM 实体位于 `entities.rs`（`users`、`sessions`、`surveys`、`versions`、`responses`、`audits`），唯一建表 DDL 位于 `backend/src/schema.sql`（由 `migration.rs` 嵌入执行）；业务主键与领域实体 ID 采用 UUIDv7（`Uuid::now_v7()`）。`responses` 持久化 `outcome`（`complete` / `screen_out`）与 `question_states` 三态 JSONB；发布者写操作在事务内对目标问卷行加 `FOR UPDATE` 锁并校验归属；公开提交对问卷行加 `FOR SHARE` 锁以允许并发提交；只读列表、公开读题面、统计与导出直接通过连接池执行无锁查询（已发布版本命中进程内有界 LRU `VersionCache`）。
+- **统一错误与安全**：`AppError { status, code, message, question_id, error_id }` 序列化为 `{"error":{"code":"...","message":"...","question_id":null}}`；内部 500 错误生成 16 位十六进制 `error_id`（连同错误详情写入日志，并在响应头附带 `X-Error-Id`），绝不向外泄露内部错误文本。Session 采用 32 字节随机十六进制 token（库内仅存 SHA-256 `id_hash`，并由后台周期任务清理过期会话）；密码哈希使用 `spawn_blocking` + Argon2id；`security::guard` 强制校验非读请求的 `Origin == PUBLIC_ORIGIN` 与 `X-CSRF-Protection: 1`，并对登录/注册按每日随机盐盲化 IP、公开提交按（盲化 IP, 问卷 ID）执行固定窗口限流（`TRUST_PROXY` 控制代理头解析，`ALLOW_INSECURE_HTTP` 控制非本机明文 HTTP 放行）。
 
 ## Key Directories & Module Table
 
@@ -39,7 +39,7 @@
 | `backend/src/security.rs`、`auth.rs` | 同源 CSRF 防护、固定窗口限流、安全响应头；`AuthUser`、Argon2id、Session 与 Cookie 处理 |
 | `backend/src/entities.rs`、`repository.rs`、`migration.rs` + `schema.sql` | SeaORM 实体定义、归属过滤与行锁助手、唯一权威 DDL |
 | `backend/src/surveys.rs`、`submissions.rs`、`reports.rs`、`admin.rs` | 发布者问卷生命周期、公开填写与幂等提交、分版本统计与 CSV 导出、管理员治理与审计 |
-| `logic-core/src/domain.rs`、`identity.rs` | 问卷文档模型、容量与题型校验；非零小写连字符 UUID 的严格反序列化边界 |
+| `logic-core/src/domain.rs`、`identity.rs` | 问卷文档模型、容量与题型校验；非零连字符 UUID（大小写归一）的严格反序列化边界 |
 | `logic-core/src/logic.rs`、`logic_document.rs`、`flow.rs` | 表达式类型检查与三值逻辑求值、计算变量拓扑排序与题目规则、前向流程状态机与路径重建 |
 | `logic-core/src/logic_text.rs`、`logic_text.pest` | 词法预算预检、pest Pratt 优先级解析、别名绑定与唯一 `format_logic_text` 实现 |
 | `logic-wasm/src/lib.rs`、`frontend/src/wasm/` | WASM JSON 字符串信封边界与前端入库五件套（`pkg/`）及 TS 包装（`index.ts`） |
@@ -99,9 +99,10 @@ pnpm run wasm:build                                           # 仅在改动 log
 | `logic-core` 单元 | `logic-core/src/*.rs` 内的 `#[cfg(test)]` 模块 | 各模块内部不变量：身份严格解析、表达式、变量拓扑排序、流程状态机与文本 DSL |
 | `logic-core` 契约集成 | `logic-core/tests/{domain,logic,flow,logic_text}.rs` | 领域校验、三值逻辑、前向流程与文本 DSL 的跨模块契约，并与 `fixtures/survey-logic/` 共读人工预期 |
 | `logic-wasm` 边界 | `logic-wasm/tests/smoke.rs` | JSON 字符串信封的成功/错误形状与错误分类穿透 |
-| `backend` 单元与 HTTP | `backend/src/tests/{config,error_and_http,security_and_router,auth_and_admin,surveys_and_submissions,reports}.rs` | 配置解析、错误信封与抽取器、CSRF/限流/路由、认证与治理、问卷生命周期与提交、报表聚合与导出 |
+| `backend` 单元与 HTTP | `backend/src/tests/{config,error_and_http,security_and_router,auth_and_admin,surveys_and_submissions,reports}.rs` | 配置解析、错误信封与抽取器、CSRF/盲化 IP 限流/路由、认证与治理、问卷生命周期与提交、报表聚合与分批 CSV 导出 |
+| `backend` 真实 DB | `backend/tests/pg_integration.rs` | 由 `TEST_DATABASE_URL` 门控的真实 PostgreSQL 18 迁移、字面标题筛选、`login_once` + `screen_out` 并发唯一约束与三态持久化测试 |
 | `frontend` 契约 | `frontend/tests/contract/` | 与 Rust 共读 `fixtures/survey-logic/`（`documents`、`expressions`、`flows`、`input-contracts`、`submissions`、`texts`），断言两端语义一致 |
-| `frontend` 单元 | `frontend/tests/unit/` | 17 个模块：`value-contract`、`numbers`、`json`、`format`、`logic-errors`、`answers`、`documents`、`condition-builder`、`flow-tools`、`editor-logic`、`survey-templates`、`logic-text-tools`、`api`、`resource`、`stores`、`router`、`wasm-envelope` |
+| `frontend` 单元 | `frontend/tests/unit/` | 18 个模块：`value-contract`、`numbers`、`json`、`format`、`logic-errors`、`answers`、`documents`、`condition-builder`、`flow-tools`、`editor-logic`、`survey-templates`、`logic-text-tools`、`api`、`resource`、`stores`、`router`、`wasm-envelope`、`uuid` |
 | `frontend` 集成 | `frontend/tests/integration/` | `editor-workflow`、`flow-inputs`：编辑器工具与 `FlowSession` 输入适配的跨模块流程 |
 | 共享测试基建 | `backend/src/tests/support.rs`、`frontend/tests/helpers/` | 后端无连接 DB/原始 HTTP 测试桩 `support.rs`（由 `mod.rs` 聚合）；前端 `fixtures.mjs` 夹具缓存、`documents.mjs` 固定身份构造器、`browser.mjs` 按需安装且 `t.after` 自动清理的浏览器环境桩 |
 

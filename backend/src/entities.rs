@@ -84,6 +84,30 @@ pub(crate) enum AuditAction {
     RestoreSurvey,
 }
 
+/// 一次正式提交的流程终点；筛选结束同样落库，但不计入有效完成样本。
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema, EnumIter, DeriveActiveEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "String(StringLen::None)",
+    rename_all = "snake_case"
+)]
+pub(crate) enum Outcome {
+    Complete,
+    ScreenOut,
+}
+
+impl From<crate::domain::FlowOutcome> for Outcome {
+    fn from(outcome: crate::domain::FlowOutcome) -> Self {
+        match outcome {
+            crate::domain::FlowOutcome::Complete => Self::Complete,
+            crate::domain::FlowOutcome::ScreenOut => Self::ScreenOut,
+        }
+    }
+}
+
 pub(crate) mod user {
     use super::UserRole;
     use sea_orm::entity::prelude::*;
@@ -166,6 +190,7 @@ pub(crate) mod version {
 }
 
 pub(crate) mod response {
+    use super::Outcome;
     use sea_orm::entity::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -181,6 +206,9 @@ pub(crate) mod response {
         pub payload_hash: String,
         #[sea_orm(column_type = "JsonBinary")]
         pub answers: Json,
+        pub outcome: Outcome,
+        #[sea_orm(column_type = "JsonBinary")]
+        pub question_states: Json,
         pub submitted_at: DateTimeUtc,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

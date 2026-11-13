@@ -7,7 +7,7 @@
 //! | `security_and_router` | CSRF、固定窗口限流、路由与统一响应头 |
 //! | `auth_and_admin` | 账号凭据、Cookie 解析与管理员治理校验 |
 //! | `surveys_and_submissions` | 状态机、回收资格与公开提交契约 |
-//! | `reports` | 时间范围、路径重建、统计聚合与 CSV 防护 |
+//! | `reports` | 时间范围、持久化三态、统计聚合与分批 CSV |
 //!
 //! 所有用例纯内存运行，不需要 PostgreSQL；需要协议层行为时用 `support::send_raw_http`
 //! 走真实的 TCP 与 `axum::serve`。

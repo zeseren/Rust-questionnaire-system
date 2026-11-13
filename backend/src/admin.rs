@@ -12,8 +12,9 @@ use crate::{
 use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, Select, Set, TransactionTrait, sea_query::LockType,
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, FromQueryResult, IntoActiveModel,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Select, Set, TransactionTrait,
+    sea_query::{Expr, LockType},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -119,7 +120,7 @@ async fn change_user(
             .await?;
     }
     audit::ActiveModel {
-        id: Set(Uuid::new_v4()),
+        id: Set(Uuid::now_v7()),
         actor_id: Set(actor.id),
         action: Set(if input.disabled {
             AuditAction::DisableUser
@@ -192,18 +193,57 @@ struct GovernanceDetail {
     published_document: Option<Document>,
 }
 
-#[utoipa::path(get, path="/api/admin/surveys", params(Pagination), responses((status=200,body=Page<SurveyItem>),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse)), security(("cookieAuth"=[])))]
+/// 治理列表筛选：标题按草稿字面子串匹配，状态按读取时刻的有效状态解释。
+#[derive(Debug, Deserialize)]
+pub(crate) struct AdminSurveyFilters {
+    pub(crate) title: Option<String>,
+    pub(crate) status: Option<SurveyStatus>,
+    pub(crate) taken_down: Option<bool>,
+    #[serde(flatten)]
+    pub(crate) pagination: Pagination,
+}
+
+fn survey_filter_condition(filters: &AdminSurveyFilters, now: DateTime<Utc>) -> Condition {
+    let mut condition = Condition::all();
+    if let Some(title) = &filters.title {
+        // strpos 是字面子串搜索：参数仍绑定，不拼接 SQL，也不存在 LIKE 通配符绕过。
+        condition = condition.add(Expr::cust_with_values(
+            "strpos(lower(\"surveys\".\"draft\" ->> 'title'), lower($1)) > 0",
+            [title.clone()],
+        ));
+    }
+    if let Some(status) = filters.status {
+        condition = condition.add(crate::surveys::effective_status_condition(status, now));
+    }
+    if let Some(taken_down) = filters.taken_down {
+        condition = condition.add(survey::Column::TakenDown.eq(taken_down));
+    }
+    condition
+}
+
+#[utoipa::path(get, path="/api/admin/surveys", params(
+    ("title" = Option<String>, Query, description = "草稿标题子串，不区分大小写"),
+    ("status" = Option<SurveyStatus>, Query, description = "业务状态，到期即视为 closed"),
+    ("taken_down" = Option<bool>, Query, description = "是否已被下架"),
+    ("page" = Option<u64>, Query, description = "页码，从 1 开始，默认 1"),
+    ("page_size" = Option<u64>, Query, description = "每页条数，默认 20，最大 100")
+), responses((status=200,body=Page<SurveyItem>),(status=400,body=ErrorResponse),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse),(status=422,body=ErrorResponse)), security(("cookieAuth"=[])))]
 async fn surveys(
     State(state): State<AppState>,
     actor: AuthUser,
-    ApiQuery(pagination): ApiQuery<Pagination>,
+    ApiQuery(filters): ApiQuery<AdminSurveyFilters>,
 ) -> AppResult<Json<Page<SurveyItem>>> {
     require_admin(&actor)?;
-    let bounds = pagination.bounds()?;
+    let bounds = filters.pagination.bounds()?;
     let now = Utc::now();
+    let condition = survey_filter_condition(&filters, now);
     // 列表只做只读查询，不为分页读取任何写锁。
-    let total = survey::Entity::find().count(&state.db).await?;
+    let total = survey::Entity::find()
+        .filter(condition.clone())
+        .count(&state.db)
+        .await?;
     let items = governance_query()
+        .filter(condition)
         .order_by_desc(survey::Column::CreatedAt)
         .order_by_desc(survey::Column::Id)
         .offset(bounds.offset)
@@ -275,7 +315,7 @@ async fn change_survey(
     .update_without_returning(&tx)
     .await?;
     audit::ActiveModel {
-        id: Set(Uuid::new_v4()),
+        id: Set(Uuid::now_v7()),
         actor_id: Set(actor.id),
         action: Set(if input.taken_down {
             AuditAction::TakedownSurvey
@@ -302,16 +342,46 @@ struct AuditItem {
     created_at: DateTime<Utc>,
 }
 
-#[utoipa::path(get, path="/api/admin/audits", params(Pagination), responses((status=200,body=Page<AuditItem>),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse)), security(("cookieAuth"=[])))]
+/// 审计列表筛选：动作与主体/目标精确匹配，省略即不筛选。
+#[derive(Debug, Deserialize)]
+pub(crate) struct AuditFilters {
+    pub(crate) action: Option<AuditAction>,
+    pub(crate) actor_id: Option<Uuid>,
+    pub(crate) target_id: Option<Uuid>,
+    #[serde(flatten)]
+    pub(crate) pagination: Pagination,
+}
+
+#[utoipa::path(get, path="/api/admin/audits", params(
+    ("action" = Option<AuditAction>, Query, description = "治理动作"),
+    ("actor_id" = Option<Uuid>, Query, description = "管理员账号 UUID"),
+    ("target_id" = Option<Uuid>, Query, description = "被治理的账号或问卷 UUID"),
+    ("page" = Option<u64>, Query, description = "页码，从 1 开始，默认 1"),
+    ("page_size" = Option<u64>, Query, description = "每页条数，默认 20，最大 100")
+), responses((status=200,body=Page<AuditItem>),(status=400,body=ErrorResponse),(status=401,body=ErrorResponse),(status=403,body=ErrorResponse),(status=422,body=ErrorResponse)), security(("cookieAuth"=[])))]
 async fn audits(
     State(state): State<AppState>,
     actor: AuthUser,
-    ApiQuery(pagination): ApiQuery<Pagination>,
+    ApiQuery(filters): ApiQuery<AuditFilters>,
 ) -> AppResult<Json<Page<AuditItem>>> {
     require_admin(&actor)?;
-    let bounds = pagination.bounds()?;
-    let total = audit::Entity::find().count(&state.db).await?;
+    let bounds = filters.pagination.bounds()?;
+    let mut filter = Condition::all();
+    if let Some(action) = filters.action {
+        filter = filter.add(audit::Column::Action.eq(action));
+    }
+    if let Some(actor_id) = filters.actor_id {
+        filter = filter.add(audit::Column::ActorId.eq(actor_id));
+    }
+    if let Some(target_id) = filters.target_id {
+        filter = filter.add(audit::Column::TargetId.eq(target_id));
+    }
+    let total = audit::Entity::find()
+        .filter(filter.clone())
+        .count(&state.db)
+        .await?;
     let items = audit::Entity::find()
+        .filter(filter)
         .order_by_desc(audit::Column::CreatedAt)
         .order_by_desc(audit::Column::Id)
         .offset(bounds.offset)

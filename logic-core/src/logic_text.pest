@@ -31,15 +31,17 @@ end = { kw_end ~ identifier ~ "=" ~ outcome ~ ";" }
 outcome = @{ ("complete" | "screen_out") ~ !identifier_continue }
 references = { "[" ~ (identifier ~ ("," ~ identifier)*)? ~ "]" }
 
-expression = { negation* ~ primary ~ (infix ~ negation* ~ primary)* }
-primary = _{ negative_number | number | string | boolean | call | identifier | group }
-negative_number = @{ "-" ~ number }
+expression = { prefix_operator* ~ primary ~ (infix ~ prefix_operator* ~ primary)* }
+primary = _{ number | string | boolean | if_expression | call | identifier | group }
+if_expression = { kw_if ~ expression ~ kw_then ~ expression ~ kw_else ~ expression }
 boolean = @{ ("true" | "false") ~ !identifier_continue }
 call = { identifier ~ "(" ~ (argument ~ ("," ~ argument)*)? ~ ")" }
 argument = _{ references | expression }
 group = { "(" ~ expression ~ ")" }
 infix = _{ logical_or | logical_and | equal | not_equal | less_equal | greater_equal | less | greater | add | subtract | multiply | divide }
+prefix_operator = _{ negation | unary_minus }
 negation = { "!" }
+unary_minus = @{ "-" ~ !">" }
 logical_or = { "||" }
 logical_and = { "&&" }
 equal = { "==" }
@@ -62,5 +64,7 @@ kw_entry = @{ "entry" ~ !identifier_continue }
 kw_page = @{ "page" ~ !identifier_continue }
 kw_branch = @{ "branch" ~ !identifier_continue }
 kw_when = @{ "when" ~ !identifier_continue }
+kw_if = @{ "if" ~ !identifier_continue }
+kw_then = @{ "then" ~ !identifier_continue }
 kw_else = @{ "else" ~ !identifier_continue }
 kw_end = @{ "end" ~ !identifier_continue }

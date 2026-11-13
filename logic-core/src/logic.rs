@@ -55,7 +55,7 @@ pub enum LogicErrorCode {
     UnknownCondition,
     /// 提交携带不适用题目的答案。
     InapplicableAnswer,
-    /// 筛选结束尚不接受持久化提交。
+    /// 保留的筛选分类；筛选结束现已按 `outcome = screen_out` 正常返回。
     ScreenedOut,
 }
 
@@ -232,6 +232,26 @@ enum Expression {
     Length {
         value: Box<Expression>,
     },
+    /// 三元条件：条件为真取 `then_branch`，为假取 `else_branch`，缺失时短路为缺失。
+    If {
+        condition: Box<Expression>,
+        then_branch: Box<Expression>,
+        else_branch: Box<Expression>,
+    },
+    /// 一元负号；仅允许数字操作数。
+    Negate {
+        value: Box<Expression>,
+    },
+    /// 文本子串判断。
+    Contains {
+        text: Box<Expression>,
+        substring: Box<Expression>,
+    },
+    /// 文本前缀判断。
+    StartsWith {
+        text: Box<Expression>,
+        prefix: Box<Expression>,
+    },
     Arithmetic {
         operator: Arithmetic,
         left: Box<Expression>,
@@ -285,6 +305,10 @@ enum NodeKind {
     Compare(Comparison, Box<Node>, Box<Node>),
     Coalesce(Box<Node>, Box<Node>),
     Length(Box<Node>),
+    If(Box<Node>, Box<Node>, Box<Node>),
+    Negate(Box<Node>),
+    Contains(Box<Node>, Box<Node>),
+    StartsWith(Box<Node>, Box<Node>),
     Arithmetic(Arithmetic, Box<Node>, Box<Node>),
 }
 
@@ -530,7 +554,19 @@ pub(crate) fn check_raw_budget(
     *count += 1;
     check_budget(depth, *count)?;
     if let Some(Value::Object(fields)) = raw {
-        for key in ["expression", "left", "right", "fallback", "value"] {
+        for key in [
+            "expression",
+            "left",
+            "right",
+            "fallback",
+            "value",
+            "condition",
+            "then_branch",
+            "else_branch",
+            "text",
+            "substring",
+            "prefix",
+        ] {
             if let Some(child @ Value::Object(_)) = fields.get(key) {
                 check_raw_budget(Some(child), depth + 1, count)?;
             }
@@ -671,7 +707,10 @@ fn compile_node(
             let left = child(*left, "left")?;
             let right = child(*right, "right")?;
             if left.value_type != right.value_type
-                || !matches!(left.value_type, Boolean | Number | Text)
+                || !matches!(
+                    left.value_type,
+                    Boolean | Number | Text | LogicValueType::Choice
+                )
                 || (!matches!(comparison, Comparison::Eq | Comparison::Ne)
                     && left.value_type != Number)
             {
@@ -694,6 +733,46 @@ fn compile_node(
                 return Err(mismatch());
             }
             (NodeKind::Length(value), Number)
+        }
+        Expression::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            let condition = child(*condition, "condition")?;
+            let then_branch = child(*then_branch, "then_branch")?;
+            let else_branch = child(*else_branch, "else_branch")?;
+            if condition.value_type != Boolean || then_branch.value_type != else_branch.value_type {
+                return Err(mismatch());
+            }
+            let value_type = then_branch.value_type;
+            (
+                NodeKind::If(condition, then_branch, else_branch),
+                value_type,
+            )
+        }
+        Expression::Negate { value } => {
+            let value = child(*value, "value")?;
+            if value.value_type != Number {
+                return Err(mismatch());
+            }
+            (NodeKind::Negate(value), Number)
+        }
+        Expression::Contains { text, substring } => {
+            let text = child(*text, "text")?;
+            let substring = child(*substring, "substring")?;
+            if text.value_type != Text || substring.value_type != Text {
+                return Err(mismatch());
+            }
+            (NodeKind::Contains(text, substring), Boolean)
+        }
+        Expression::StartsWith { text, prefix } => {
+            let text = child(*text, "text")?;
+            let prefix = child(*prefix, "prefix")?;
+            if text.value_type != Text || prefix.value_type != Text {
+                return Err(mismatch());
+            }
+            (NodeKind::StartsWith(text, prefix), Boolean)
         }
         Expression::Arithmetic {
             operator,
@@ -832,6 +911,19 @@ impl Node {
             }
             // coalesce 在首值缺失时才会读取回退值。
             NodeKind::Coalesce(_, fallback) => fallback.required_reads(bindings, variables),
+            // 条件必然读取；两个分支都可能执行，保守取并集以保证依赖支配性检查不遗漏。
+            NodeKind::If(condition, then_branch, else_branch) => {
+                let mut reads = condition.required_reads(bindings, variables);
+                reads.extend(then_branch.required_reads(bindings, variables));
+                reads.extend(else_branch.required_reads(bindings, variables));
+                reads
+            }
+            NodeKind::Negate(value) => value.required_reads(bindings, variables),
+            NodeKind::Contains(text, substring) | NodeKind::StartsWith(text, substring) => {
+                let mut reads = text.required_reads(bindings, variables);
+                reads.extend(substring.required_reads(bindings, variables));
+                reads
+            }
             NodeKind::Compare(_, left, right) | NodeKind::Arithmetic(_, left, right) => {
                 let mut reads = left.required_reads(bindings, variables);
                 reads.extend(right.required_reads(bindings, variables));
@@ -899,6 +991,7 @@ impl Node {
                     (Number(a), Number(b)) => a.total_cmp(b),
                     (Boolean(a), Boolean(b)) => a.cmp(b),
                     (LogicValue::Text(a), LogicValue::Text(b)) => a.cmp(b),
+                    (LogicValue::Choice(a), LogicValue::Choice(b)) => a.cmp(b),
                     _ => return Err(mismatch()),
                 };
                 Ok(Boolean(match comparison {
@@ -924,6 +1017,44 @@ impl Node {
                 let count = u32::try_from(count)
                     .map_err(|_| error(LogicErrorCode::LimitExceeded, &self.path, None))?;
                 Ok(Number(f64::from(count)))
+            }
+            NodeKind::If(condition, then_branch, else_branch) => {
+                match condition.evaluate(context)? {
+                    // 缺失条件直接短路，未命中分支不求值，也不读取其答案。
+                    Missing => Ok(Missing),
+                    Boolean(true) => then_branch.evaluate(context),
+                    Boolean(false) => else_branch.evaluate(context),
+                    _ => Err(mismatch()),
+                }
+            }
+            NodeKind::Negate(value) => match value.evaluate(context)? {
+                Missing => Ok(Missing),
+                Number(value) => {
+                    let value = -value;
+                    if !value.is_finite() {
+                        return Err(error(LogicErrorCode::ArithmeticError, &self.path, None));
+                    }
+                    Ok(Number(canonical_zero(value)))
+                }
+                _ => Err(mismatch()),
+            },
+            NodeKind::Contains(text, substring) => {
+                match (text.evaluate(context)?, substring.evaluate(context)?) {
+                    (Missing, _) | (_, Missing) => Ok(Missing),
+                    (LogicValue::Text(text), LogicValue::Text(substring)) => {
+                        Ok(Boolean(text.contains(&substring)))
+                    }
+                    _ => Err(mismatch()),
+                }
+            }
+            NodeKind::StartsWith(text, prefix) => {
+                match (text.evaluate(context)?, prefix.evaluate(context)?) {
+                    (Missing, _) | (_, Missing) => Ok(Missing),
+                    (LogicValue::Text(text), LogicValue::Text(prefix)) => {
+                        Ok(Boolean(text.starts_with(&prefix)))
+                    }
+                    _ => Err(mismatch()),
+                }
             }
             NodeKind::Arithmetic(operator, left, right) => {
                 let left = left.evaluate(context)?;

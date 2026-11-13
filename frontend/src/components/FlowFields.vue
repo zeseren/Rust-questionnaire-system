@@ -4,9 +4,10 @@
 <!-- 预览和填写共用同一会话；只有显式确认才交付当前有效答案。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, watch } from 'vue'
-import { FlowInputs } from '../flow-inputs'
+import { FlowInputs, transitionalNumber } from '../flow-inputs'
 import { LogicError } from '../logic'
-import type { Answer, FlowSnapshot, Question, SurveyDocument } from '../types'
+import { numberInput } from '../numbers'
+import type { Answer, FlowEvent, FlowSnapshot, Question, SurveyDocument } from '../types'
 import { isAnswered } from '../answers'
 import type { Inputs, InputValue } from '../answers'
 import { message } from '../api'
@@ -19,11 +20,19 @@ const props = withDefaults(
     preview?: boolean
     errors?: Record<string, string>
     hideFooter?: boolean
+    /** 上次未提交的填写进度（按版本暂存的事件序列）。 */
+    restore?: FlowEvent[]
   }>(),
-  { errors: () => ({}), hideFooter: false },
+  { errors: () => ({}), hideFooter: false, restore: () => [] },
 )
-const emit = defineEmits<{ submit: [answers: Answer[]]; change: [count: number] }>()
+const emit = defineEmits<{
+  submit: [answers: Answer[]]
+  change: [count: number]
+  reset: []
+}>()
 let inputs: FlowInputs | undefined
+/** 本次会话已成功应用的事件序列；按顺序回放即可恢复同一进度。 */
+let recorded: FlowEvent[] = []
 const snapshot = shallowRef<FlowSnapshot>()
 const values = ref<Inputs>({})
 const touched = ref<Set<string>>(new Set())
@@ -35,22 +44,43 @@ function refresh() {
   values.value = inputs?.values() ?? {}
   for (const id of snapshot.value?.cleared ?? []) touched.value.delete(id)
 }
-function initSession() {
+/** 回放暂存进度；与当前题面不兼容时保留已恢复的部分并从头继续。 */
+function replay(events: readonly FlowEvent[]) {
+  if (!inputs) return
+  const session = inputs
+  for (const event of events) {
+    try {
+      if (event.type === 'change') session.change(event.question_id, event.value as InputValue)
+      else session[event.type]()
+      recorded.push(event)
+    } catch {
+      break
+    }
+  }
+}
+function buildSession(restore: readonly FlowEvent[]) {
   inputs = undefined
+  recorded = []
   error.value = ''
   touched.value = new Set()
   attempted.value = false
   try {
     inputs = new FlowInputs(props.document)
+    replay(restore)
   } catch (reason) {
     error.value = message(reason, '流程无法加载')
   }
   refresh()
-  emit('change', 0)
+  emit('change', Object.values(values.value).filter(isAnswered).length)
+}
+function initSession() {
+  buildSession(props.restore)
 }
 function reset() {
   if (props.disabled) return
-  initSession()
+  // 清空重填不再回放暂存进度；父级收到 reset 后会同步删除本地草稿。
+  buildSession([])
+  emit('reset')
 }
 function confirmReset() {
   if (props.disabled) return
@@ -60,7 +90,27 @@ function confirmReset() {
   }
   reset()
 }
-watch(() => props.document, initSession, { immediate: true })
+function progress() {
+  emit('change', Object.values(values.value).filter(isAnswered).length)
+}
+/** 当前进度的事件序列副本，供填写页按版本暂存。 */
+function events(): FlowEvent[] {
+  return recorded.map((event) =>
+    event.type === 'change'
+      ? {
+          type: 'change',
+          question_id: event.question_id,
+          value: Array.isArray(event.value) ? [...event.value] : event.value,
+        }
+      : { ...event },
+  )
+}
+function commit(id: string) {
+  if (!inputs || props.disabled) return
+  inputs.commit(id)
+  refresh()
+}
+watch([() => props.document, () => props.restore], initSession, { immediate: true })
 const pageDocument = computed(() => {
   const current = props.document.logic?.flow?.nodes.find(
     (node) => node.id === snapshot.value?.current_node,
@@ -77,6 +127,9 @@ const pageDocument = computed(() => {
 const fieldErrors = computed<Record<string, string>>(() => {
   const result: Record<string, string> = {}
   for (const q of pageDocument.value.questions) {
+    const raw = values.value[q.id]
+    // 数字尚在过渡前缀时按“输入中”处理，不显示上一轮遗留的校验错误。
+    if (typeof raw === 'string' && transitionalNumber(numberInput(raw))) continue
     const code = snapshot.value?.errors[q.id]
     const text =
       props.errors[q.id] ||
@@ -97,13 +150,18 @@ function change(id: string, value: InputValue) {
   if (!inputs || props.disabled) return
   try {
     inputs.change(id, value)
+    recorded.push({
+      type: 'change',
+      question_id: id,
+      value: Array.isArray(value) ? [...value] : value,
+    })
     touched.value.add(id)
     error.value = ''
   } catch (reason) {
     error.value = message(reason, '修改失败')
   }
   refresh()
-  emit('change', Object.values(values.value).filter(isAnswered).length)
+  progress()
 }
 function answerLabel(question: Question) {
   const value = snapshot.value?.answers[question.id]
@@ -121,17 +179,19 @@ function navigate(direction: 'next' | 'previous') {
   attempted.value = direction === 'next'
   try {
     inputs[direction]()
+    recorded.push({ type: direction })
     attempted.value = false
     error.value = ''
   } catch (reason) {
     error.value = message(reason, '无法继续填写')
   }
   refresh()
+  progress()
   void focus()
 }
 function submissionAnswers(): Answer[] | undefined {
   if (!inputs || props.disabled || props.submitDisabled) return
-  if (snapshot.value?.outcome !== 'complete') {
+  if (!snapshot.value?.outcome) {
     navigate('next')
     return
   }
@@ -156,7 +216,7 @@ async function focusQuestion(id: string) {
   attempted.value = true
   await focus(id)
 }
-defineExpose({ submissionAnswers, focusQuestion, reset })
+defineExpose({ submissionAnswers, focusQuestion, reset, events })
 </script>
 <template>
   <div ref="root" tabindex="-1" class="flow-fields">
@@ -172,6 +232,7 @@ defineExpose({ submissionAnswers, focusQuestion, reset })
           :errors="fieldErrors"
           :disabled="disabled"
           @change="change"
+          @commit="commit"
         />
         <p v-if="!pageDocument.questions.length" class="notice mt">
           本页没有需要回答的问题，请继续。
@@ -183,7 +244,7 @@ defineExpose({ submissionAnswers, focusQuestion, reset })
           {{
             snapshot.outcome === 'complete'
               ? '可以返回核对或修改。确认提交后才会保存答卷。'
-              : '此筛选结果仅供预览，不会保存答卷。'
+              : '你的回答进入了筛选结束分支。确认提交后会生成回执，但不计入各题统计。'
           }}
         </p>
         <dl v-if="snapshot.outcome === 'complete'" class="flow-review">
@@ -237,13 +298,19 @@ defineExpose({ submissionAnswers, focusQuestion, reset })
             下一步
           </button>
           <button
-            v-else-if="snapshot.outcome === 'complete'"
+            v-else
             type="button"
             class="button button-primary"
             :disabled="disabled || submitDisabled"
             @click="confirm"
           >
-            {{ preview ? '确认预览结果' : '确认提交答卷' }}
+            {{
+              preview
+                ? '确认预览结果'
+                : snapshot.outcome === 'screen_out'
+                  ? '确认提交（筛选结束）'
+                  : '确认提交答卷'
+            }}
           </button>
         </div>
       </div>

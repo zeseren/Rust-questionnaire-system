@@ -114,6 +114,8 @@ function Initialize-EnvFile {
         'LISTEN_ADDR=127.0.0.1:3000',
         'PUBLIC_ORIGIN=http://localhost:5173',
         'COOKIE_SECURE=false',
+        'ALLOW_INSECURE_HTTP=false',
+        'TRUST_PROXY=false',
         'SESSION_TTL_SECONDS=86400',
         'AUTH_REQUESTS_PER_MINUTE=60',
         'SUBMISSIONS_PER_MINUTE=600',

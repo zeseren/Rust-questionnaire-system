@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use questionnaire_logic::domain::{
-    Answer, Document, FlowDefinition, FlowEvaluator, FlowEvent, FlowNode, FlowOutcome, FlowSession,
-    LogicErrorCode,
+    Answer, AnswerState, Document, FlowDefinition, FlowEvaluator, FlowEvent, FlowNode, FlowOutcome,
+    FlowSession, LogicErrorCode,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -22,7 +22,7 @@ fn document(name: &str) -> Document {
 }
 
 #[test]
-fn 配置路径与答案身份拒绝非规范_uuid且选项值仍规范化() {
+fn 配置路径与答案身份接受标准格式并拒绝非规范_uuid且选项值仍规范化() {
     let contracts: Value = serde_json::from_str(include_str!(
         "../../fixtures/survey-logic/input-contracts.json"
     ))
@@ -306,19 +306,32 @@ fn 已存答案违反流程契约时返回对应错误路径() {
     let mut skipped = BTreeMap::new();
     skipped.insert(id(1), json!(id(101).to_string()));
     skipped.insert(id(3), json!("文本"));
+
+    // 已存答案落在被跳过的题目上仍然拒绝，路径定位到答案集合。
+    let document = self::document("diamond");
+    let evaluator = FlowEvaluator::new(&document).unwrap();
+    let error = evaluator.evaluate_stored_states(&skipped).unwrap_err();
+    assert_eq!(error.path, "$.answers");
+
+    // 筛选结束不再是错误：三态重建成功，完整求值返回 screen_out。
     let mut screened = BTreeMap::new();
     screened.insert(id(1), json!(id(102).to_string()));
-
-    let cases = [
-        ("已存答案落在被跳过题目", "diamond", skipped, "$.answers"),
-        ("筛选结束不产生答卷", "priority", screened, "$.route"),
-    ];
-    for (name, document_name, stored, path) in cases {
-        let document = document(document_name);
-        let evaluator = FlowEvaluator::new(&document).unwrap();
-        let error = evaluator.evaluate_stored_states(&stored).unwrap_err();
-        assert_eq!(error.path, path, "{name}");
-    }
+    let priority = self::document("priority");
+    let evaluator = FlowEvaluator::new(&priority).unwrap();
+    let (answers, states) = evaluator.evaluate_stored_states(&screened).unwrap();
+    assert_eq!(answers, screened);
+    assert_eq!(states[&id(1)], AnswerState::Answered);
+    let evaluated = evaluator
+        .evaluate_answers(vec![Answer {
+            question_id: id(1),
+            value: json!(id(102).to_string()),
+        }])
+        .expect("筛选结束必须正常返回");
+    assert_eq!(evaluated.outcome, FlowOutcome::ScreenOut);
+    assert_eq!(
+        evaluated.path.last(),
+        Some(&Uuid::parse_str("00000000-0000-4000-8000-000000001007").unwrap())
+    );
 }
 
 #[test]

@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { FlowInputs } from '../../src/flow-inputs.ts'
+import { LogicError } from '../../src/logic.ts'
 import { readFlowDocument } from '../helpers/fixtures.mjs'
 import { numberQuestion, ratingQuestion, surveyDocument } from '../helpers/documents.mjs'
 
@@ -25,6 +26,50 @@ test('空串转成缺失值，非法数字原文透传给引擎', () => {
   form.change(question.id, 'abc')
   assert.equal(form.values()[question.id], 'abc')
   assert.equal(form.snapshot().errors[question.id], 'invalid_answer')
+})
+
+test('数字过渡前缀暂不判错，失焦结算后才显示校验结果', () => {
+  const question = numberQuestion({ required: false })
+  const form = new FlowInputs(surveyDocument([question]))
+  for (const prefix of ['-', '12.', '1e', '1e-', '.']) {
+    form.change(question.id, prefix)
+    assert.equal(form.values()[question.id], prefix, `${prefix}：界面保留原文`)
+    assert.equal(form.snapshot().errors[question.id], undefined, `${prefix}：击键中途不报错`)
+    assert.equal(
+      Object.hasOwn(form.snapshot().answers, question.id),
+      false,
+      `${prefix}：尚未成为正式答案`,
+    )
+  }
+  form.change(question.id, '12.')
+  form.commit(question.id)
+  assert.equal(form.snapshot().errors[question.id], 'invalid_answer')
+  // 完整数字继续正常写回原生数字，负评分可以从单独负号继续输入。
+  form.change(question.id, '-')
+  form.change(question.id, '-3')
+  assert.equal(form.snapshot().answers[question.id], -3)
+  assert.equal(form.snapshot().errors[question.id], undefined)
+})
+
+test('翻页前自动结算过渡前缀，残缺输入给出题目级错误', () => {
+  const question = numberQuestion({ required: false })
+  const form = new FlowInputs(surveyDocument([question]))
+  form.change(question.id, '12.')
+  assert.throws(
+    () => form.next(),
+    (error) => {
+      assert.ok(error instanceof LogicError)
+      assert.equal(error.code, 'invalid_answer')
+      assert.equal(error.question_id, question.id)
+      return true
+    },
+  )
+  assert.equal(form.snapshot().errors[question.id], 'invalid_answer')
+
+  form.change(question.id, '12.5')
+  form.next()
+  assert.equal(form.snapshot().outcome, 'complete')
+  assert.equal(form.submissionAnswers()[0].value, 12.5)
 })
 
 test('切换分支后镜像里的已跳过输入一并清理', () => {

@@ -1,7 +1,7 @@
 //! 请求闸门与路由装配：CSRF、固定窗口限流桶、开放文档、fallback 与统一响应头。
 
 use std::{
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -9,8 +9,9 @@ use axum::http::{StatusCode, header};
 use uuid::Uuid;
 
 use crate::{
+    AppState,
     security::{self, Window, admit_at},
-    tests::support::{error_json, raw_request, send_raw_http, test_state},
+    tests::support::{error_json, raw_request, send_raw_http, test_config, test_state},
 };
 
 const 同源: [(&str, &str); 2] = [
@@ -171,6 +172,101 @@ async fn 认证与提交使用互不干扰的限流桶() {
     }
 }
 
+/// 信任代理时按转发头区分客户端；认证桶对每个 IP 独立计数。
+#[tokio::test]
+async fn 信任代理时按转发头分桶() {
+    let mut config = test_config();
+    config.trust_proxy = true;
+    let state = AppState {
+        config: Arc::new(config),
+        ..test_state()
+    };
+    let 请求 = |转发: &str| {
+        raw_request(
+            "POST",
+            "/api/auth/login",
+            &[
+                ("origin", "http://localhost:3000"),
+                ("x-csrf-protection", "1"),
+                ("x-forwarded-for", 转发),
+            ],
+        )
+    };
+
+    for _ in 0..2 {
+        security::check(&state, &请求("203.0.113.7")).expect("同一客户端在配额内必须通过");
+    }
+    let error =
+        security::check(&state, &请求("203.0.113.7")).expect_err("同一客户端超出配额必须限流");
+    assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
+    security::check(&state, &请求("203.0.113.8")).expect("不同客户端必须使用各自的分桶");
+    security::check(
+        &state,
+        &raw_request(
+            "POST",
+            "/api/auth/login",
+            &[
+                ("origin", "http://localhost:3000"),
+                ("x-csrf-protection", "1"),
+                ("x-real-ip", "198.51.100.7"),
+            ],
+        ),
+    )
+    .expect("缺少 X-Forwarded-For 时回退到 X-Real-IP");
+    // 首个非空且合法的转发地址生效：前导空白与非法值都被跳过。
+    security::check(&state, &请求("not-an-ip, 203.0.113.9")).expect("首个有效转发地址决定分桶");
+    security::check(&state, &请求("not-an-ip, 203.0.113.9")).expect("同一有效转发地址共享分桶");
+    let error = security::check(&state, &请求("not-an-ip, 203.0.113.9"))
+        .expect_err("同一有效转发地址的第三次请求必须限流");
+    assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
+}
+
+/// 未信任代理时忽略转发头，所有请求落在一个哨兵桶，客户端无法伪造 IP 绕过。
+#[tokio::test]
+async fn 未信任代理时忽略转发头() {
+    let state = test_state();
+    let 请求 = |转发: &str| {
+        raw_request(
+            "POST",
+            "/api/auth/login",
+            &[
+                ("origin", "http://localhost:3000"),
+                ("x-csrf-protection", "1"),
+                ("x-forwarded-for", 转发),
+            ],
+        )
+    };
+    security::check(&state, &请求("203.0.113.1")).expect("第一次请求在配额内");
+    security::check(&state, &请求("203.0.113.2")).expect("伪造不同 IP 不产生新桶");
+    let error =
+        security::check(&state, &请求("203.0.113.3")).expect_err("共用哨兵桶的第 3 次请求必须限流");
+    assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn 提交桶按问卷独立计数() {
+    let state = test_state();
+    let 路径 = |id: Uuid| format!("/api/public/surveys/{id}/responses");
+    let 第一份 = 路径(Uuid::new_v4());
+    let 第二份 = 路径(Uuid::new_v4());
+    for _ in 0..3 {
+        security::check(&state, &raw_request("POST", &第一份, &同源)).expect("第一份问卷配额内");
+    }
+    for _ in 0..3 {
+        security::check(&state, &raw_request("POST", &第二份, &同源))
+            .expect("第二份问卷拥有独立配额");
+    }
+    assert_eq!(
+        error_json(
+            security::check(&state, &raw_request("POST", &第一份, &同源))
+                .expect_err("第一份问卷超出配额")
+        )
+        .await
+        .0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
 #[test]
 fn 普通写路径不进入任何限流桶() {
     let state = test_state();
@@ -247,6 +343,7 @@ async fn 开放文档包含完整路由表与_cookie_认证方案() {
         "/api/auth/me",
         "/api/auth/password",
         "/api/surveys",
+        "/api/surveys/counts",
         "/api/surveys/{id}",
         "/api/surveys/{id}/draft",
         "/api/surveys/{id}/preview",
@@ -258,9 +355,11 @@ async fn 开放文档包含完整路由表与_cookie_认证方案() {
         "/api/surveys/{id}/archive",
         "/api/surveys/{id}/versions",
         "/api/public/surveys/{id}",
+        "/api/public/surveys/{id}/meta",
         "/api/public/surveys/{id}/responses",
         "/api/surveys/{id}/responses",
         "/api/surveys/{id}/responses/{receipt_id}",
+        "/api/surveys/{id}/questions/{question_id}/responses",
         "/api/surveys/{id}/statistics",
         "/api/surveys/{id}/export.csv",
         "/api/admin/users",

@@ -293,6 +293,31 @@ async fn change_password(
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]))
 }
 
+/// 删除全部过期会话；由周期性后台任务调用，失败只记录日志。
+pub(crate) async fn purge_expired_sessions(db: &DatabaseConnection) -> AppResult<u64> {
+    let deleted = session::Entity::delete_many()
+        .filter(session::Column::ExpiresAt.lte(Utc::now()))
+        .exec(db)
+        .await?;
+    Ok(deleted.rows_affected)
+}
+
+/// 周期性清理过期会话；第一次 tick 立即返回，随后每 10 分钟执行一次。
+///
+/// 任务只随服务进程存活，由 `run` 在优雅停机后中止。
+pub(crate) async fn purge_expired_sessions_loop(db: DatabaseConnection) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+    interval.tick().await;
+    loop {
+        interval.tick().await;
+        match purge_expired_sessions(&db).await {
+            Ok(0) => {}
+            Ok(deleted) => tracing::info!(deleted, "expired sessions purged"),
+            Err(error) => tracing::warn!(%error, "expired session cleanup failed"),
+        }
+    }
+}
+
 /// 用同一条查询检查会话有效期与账号状态，既可传连接，也可传当前业务事务。
 pub(crate) async fn authenticate(
     headers: &HeaderMap,
@@ -336,7 +361,7 @@ async fn create_user(
     validate_password(&password)?;
     let password_hash = hash_password(password).await?;
     user::ActiveModel {
-        id: Set(Uuid::new_v4()),
+        id: Set(Uuid::now_v7()),
         username: Set(username),
         password_hash: Set(password_hash),
         role: Set(role),

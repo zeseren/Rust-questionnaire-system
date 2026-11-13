@@ -67,7 +67,7 @@ fn domain_envelope(output: &str) -> Value {
 }
 
 #[test]
-fn 七个导出函数成功时只返回_ok_信封() {
+fn 八个导出函数成功时只返回_ok_信封() {
     let texts = texts();
     let item = &texts["format_cases"][0];
     let questions = item["questions"].to_string();
@@ -135,6 +135,12 @@ fn 七个导出函数成功时只返回_ok_信封() {
         case["answers_json"].as_str().unwrap(),
     ));
     assert!(evaluated.is_object(), "{evaluated}");
+
+    // 8. 文本巡检：成功值携带绑定列表与可选诊断字段。
+    let inspected = ok_envelope(&logic_wasm::inspect_logic_text(&expected, &questions));
+    assert!(inspected["bindings"].is_array(), "{inspected}");
+    assert!(inspected.get("error").is_some(), "{inspected}");
+    assert!(inspected.get("error_offset").is_some(), "{inspected}");
 }
 
 fn expression_questions_id(expressions: &Value) -> &str {
@@ -172,6 +178,14 @@ fn 非法_json_与错误_dto_结构按参数名归类为边界语法错误() {
         (
             "questions_json",
             logic_wasm::parse_logic_text(&expected, syntax),
+        ),
+        (
+            "questions_json",
+            logic_wasm::inspect_logic_text(&expected, syntax),
+        ),
+        (
+            "questions_json",
+            logic_wasm::inspect_logic_text(&expected, wrong_questions),
         ),
         (
             "logic_json",
@@ -309,4 +323,34 @@ fn 领域错误字段原样穿透信封() {
     );
     assert!(error.get("line").is_none(), "领域错误不带行列：{error}");
     assert!(error.get("column").is_none(), "领域错误不带行列：{error}");
+}
+
+#[test]
+fn 巡检信封在语法错误后仍返回已扫描绑定() {
+    let texts = texts();
+    let item = &texts["format_cases"][0];
+    let questions = item["questions"].to_string();
+    let question_id = item["questions"][0]["id"].as_str().unwrap();
+    let source =
+        format!("dsl 1 semantics 1;\nbind question q = \"{question_id}\";\nlet broken = ;");
+    let inspection = ok_envelope(&logic_wasm::inspect_logic_text(&source, &questions));
+    let bindings = inspection["bindings"].as_array().expect("必须返回数组");
+    assert_eq!(bindings.len(), 1, "{inspection}");
+    assert_eq!(bindings[0]["category"], "question");
+    assert_eq!(bindings[0]["alias"], "q");
+    assert_eq!(bindings[0]["id"], question_id);
+    assert_eq!(
+        inspection["error"]["code"], "invalid_syntax",
+        "{inspection}"
+    );
+    assert!(
+        inspection["error_offset"].as_u64().is_some(),
+        "错误必须带字节偏移：{inspection}"
+    );
+    assert!(inspection["line"].as_u64().is_some_and(|line| line >= 1));
+    assert!(
+        inspection["column"]
+            .as_u64()
+            .is_some_and(|column| column >= 1)
+    );
 }

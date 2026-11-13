@@ -46,6 +46,10 @@ const ops = {
   compare: '比较',
   coalesce: '缺失时替代',
   length: '长度',
+  if: '条件选择',
+  negate: '取负',
+  contains: '包含子串',
+  starts_with: '前缀匹配',
   arithmetic: '算术',
 }
 const children = computed<readonly (readonly [string, string])[]>(() => {
@@ -53,9 +57,20 @@ const children = computed<readonly (readonly [string, string])[]>(() => {
     case 'not':
       return [['expression', '条件'] as const]
     case 'length':
+    case 'negate':
       return [['value', '值'] as const]
     case 'coalesce':
       return [['value', '值'] as const, ['fallback', '缺失时使用'] as const]
+    case 'if':
+      return [
+        ['condition', '条件'] as const,
+        ['then_branch', '条件成立时'] as const,
+        ['else_branch', '条件不成立时'] as const,
+      ]
+    case 'contains':
+      return [['text', '文本'] as const, ['substring', '包含的子串'] as const]
+    case 'starts_with':
+      return [['text', '文本'] as const, ['prefix', '前缀'] as const]
     case 'compare':
     case 'arithmetic':
       return [['left', '左值'] as const, ['right', '右值'] as const]
@@ -140,6 +155,19 @@ function switchOp(op: string) {
       break
     case 'coalesce':
       fields = { value: { op: 'answer', question_id }, fallback: number }
+      break
+    case 'if':
+      fields = { condition: literal, then_branch: number, else_branch: number }
+      break
+    case 'negate':
+      fields = { value: number }
+      break
+    case 'contains':
+    case 'starts_with':
+      fields = {
+        text: { op: 'answer', question_id },
+        [op === 'contains' ? 'substring' : 'prefix']: { op: 'text', value: '' },
+      }
       break
     default:
       fields = { value: { op: 'answer', question_id } }

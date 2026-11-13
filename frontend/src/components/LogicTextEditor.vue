@@ -7,9 +7,10 @@ import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch
 import type { DocumentLogic, Question } from '../types'
 import { downloadBlob, message } from '../api'
 import { encode } from '../json'
-import { LogicTextError } from '../logic'
-import { formatLogicText, parseLogicText } from '../wasm/index'
-import { textBindings, textErrorOffset } from '../logic-text-tools'
+import { LogicError, LogicTextError } from '../logic'
+import { formatLogicText, inspectLogicText, parseLogicText } from '../wasm/index'
+import type { LogicTextInspection } from '../wasm/index'
+import { textBindingLabel, textErrorOffset } from '../logic-text-tools'
 import Icon from './Icon.vue'
 const DslCodeEditor = defineAsyncComponent(() => import('./DslCodeEditor.vue'))
 const logic = defineModel<DocumentLogic>({ required: true })
@@ -19,7 +20,7 @@ const source = ref<{ focus: (offset: number) => void; insert: (text: string) => 
 const fileInput = ref<HTMLInputElement>()
 const text = ref(''),
   baseline = ref('')
-const validation = shallowRef<{ message: string; offset: number; path?: string } | null>(null)
+const inspection = shallowRef<LogicTextInspection | null>(null)
 const checked = ref(false)
 const importError = ref('')
 const query = ref('')
@@ -35,7 +36,12 @@ const questionSignature = computed(() =>
   ),
 )
 const pending = computed(() => text.value !== baseline.value)
-const bindings = computed(() => textBindings(text.value, props.questions))
+const bindings = computed(() =>
+  (inspection.value?.bindings ?? []).map((binding) => ({
+    ...binding,
+    label: textBindingLabel(binding, props.questions),
+  })),
+)
 const visibleBindings = computed(() =>
   bindings.value
     .filter((binding) =>
@@ -43,34 +49,56 @@ const visibleBindings = computed(() =>
     )
     .slice(0, 60),
 )
+/** 诊断统一换算成 UTF-16 偏移，DslCodeEditor 只消费偏移。 */
+const validation = computed(() => {
+  const error = inspection.value?.error
+  if (!error) return null
+  return {
+    message: message(error, '文本无法应用'),
+    offset:
+      error instanceof LogicTextError ? textErrorOffset(text.value, error.line, error.column) : 0,
+    path: error.path,
+  }
+})
 watch(pending, (value) => emit('pending', value), { immediate: true, flush: 'sync' })
-function check(): DocumentLogic | null {
+
+/** 巡检只解析一次：绑定与诊断同时取回，错误保留在结果里而不是抛出。 */
+function inspect() {
   if (timer) {
     clearTimeout(timer)
     timer = undefined
   }
   checked.value = true
   try {
-    const result = parseLogicText(text.value, props.questions)
-    validation.value = null
-    return result
+    inspection.value = inspectLogicText(text.value, props.questions)
   } catch (reason) {
-    validation.value = {
-      message: message(reason, '文本无法应用'),
-      offset:
-        reason instanceof LogicTextError
-          ? textErrorOffset(text.value, reason.line, reason.column)
-          : 0,
-      path: reason instanceof LogicTextError ? reason.path : undefined,
+    inspection.value = {
+      bindings: [],
+      error: reason instanceof LogicError ? reason : new LogicError('invalid_syntax', '$', null),
+      line: null,
+      column: null,
     }
+  }
+}
+
+/** 应用前的复核：巡检无错后再取一次解析结果，供写回可视化模型。 */
+function check(): DocumentLogic | null {
+  inspect()
+  if (inspection.value?.error) {
+    source.value?.focus(validation.value?.offset ?? 0)
+    return null
+  }
+  try {
+    return parseLogicText(text.value, props.questions)
+  } catch (reason) {
+    importError.value = message(reason, '文本无法应用')
     return null
   }
 }
 function scheduleCheck() {
   checked.value = false
-  validation.value = null
   clearTimeout(timer)
-  timer = setTimeout(check, 300)
+  timer = setTimeout(inspect, 300)
 }
 watch([text, questionSignature], scheduleCheck, { flush: 'sync' })
 function synchronize() {
@@ -81,7 +109,7 @@ function generate() {
     text.value = formatLogicText(logic.value, props.questions)
     synchronize()
     importError.value = ''
-    check()
+    inspect()
   } catch (reason) {
     importError.value = message(reason, '请先修复可视化配置，再生成文本。')
   }
@@ -91,16 +119,18 @@ function restore() {
     return
   generate()
 }
+/** 丢弃未应用的文本草稿，重新按当前规则生成；由父级在“忽略草稿并保存”时调用。 */
+function discard() {
+  generate()
+}
 function apply() {
-  if (props.disabled) return
+  if (props.disabled) return false
   const result = check()
-  if (!result) {
-    source.value?.focus(validation.value?.offset ?? 0)
-    return
-  }
+  if (!result) return false
   logic.value = result
   synchronize()
   importError.value = ''
+  return true
 }
 function format() {
   const parsed = check()
@@ -134,6 +164,7 @@ async function importText(event: Event) {
 function updateCursor(line: number, column: number) {
   cursor.value = { line, column }
 }
+defineExpose({ apply, discard })
 generate()
 onBeforeUnmount(() => {
   clearTimeout(timer)
@@ -265,7 +296,11 @@ onBeforeUnmount(() => {
             恢复当前规则文本
           </button>
           <p :class="pending ? 'accent' : 'hint'" role="status">
-            {{ pending ? '文本尚未应用，请应用后保存草稿。' : '文本已与当前规则同步。' }}
+            {{
+              pending
+                ? '文本尚未应用；切换工作区会保留草稿，保存时可选择应用或忽略。'
+                : '文本已与当前规则同步。'
+            }}
           </p>
         </div>
         <p id="dsl-editor-help" class="hint">

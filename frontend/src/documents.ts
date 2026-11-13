@@ -1,5 +1,6 @@
 //! 新题目与复制题目生成独立身份，调整顺序不改变已有身份。
 import { copy } from './json.ts'
+import { newId } from './uuid.ts'
 import { renewDocumentIds } from './wasm/index.ts'
 import type { FlowNode, Question, SurveyDocument } from './types.ts'
 type PageNode = Extract<FlowNode, { type: 'page' }>
@@ -15,10 +16,10 @@ type QuestionOf<T extends Question['type']> = Question extends infer Q
     : never
   : never
 export function newQuestion<T extends Question['type']>(type: T): QuestionOf<T> {
-  const base = { id: crypto.randomUUID(), title: '', required: true }
+  const base = { id: newId(), title: '', required: true }
   const options = () => [
-    { id: crypto.randomUUID(), label: '选项 1' },
-    { id: crypto.randomUUID(), label: '选项 2' },
+    { id: newId(), label: '选项 1' },
+    { id: newId(), label: '选项 2' },
   ]
   let question: Question
   switch (type) {
@@ -50,10 +51,10 @@ export function newQuestion<T extends Question['type']>(type: T): QuestionOf<T> 
 }
 export function duplicateQuestion(question: Question, document: SurveyDocument) {
   const duplicated = copy(question)
-  duplicated.id = crypto.randomUUID()
+  duplicated.id = newId()
   if ('options' in duplicated)
     duplicated.options.forEach((option) => {
-      option.id = crypto.randomUUID()
+      option.id = newId()
     })
   duplicateQuestionRule(document, question, duplicated)
   return duplicated

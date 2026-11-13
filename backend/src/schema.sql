@@ -55,6 +55,8 @@ CREATE TABLE responses (
     key_hash text NOT NULL,
     payload_hash text NOT NULL,
     answers jsonb NOT NULL CHECK (jsonb_typeof(answers) = 'object'),
+    outcome text NOT NULL CHECK (outcome IN ('complete', 'screen_out')),
+    question_states jsonb NOT NULL CHECK (jsonb_typeof(question_states) = 'object'),
     submitted_at timestamptz NOT NULL,
     FOREIGN KEY (survey_id, version_id) REFERENCES versions(survey_id, id),
     UNIQUE (survey_id, scope, key_hash),
@@ -65,6 +67,7 @@ CREATE TABLE responses (
 CREATE UNIQUE INDEX responses_once_per_account ON responses(survey_id, respondent_id)
     WHERE respondent_id IS NOT NULL;
 CREATE INDEX responses_version_time ON responses(survey_id, version_id, submitted_at, id);
+CREATE INDEX responses_version_outcome_time ON responses(survey_id, version_id, outcome, submitted_at, id);
 
 CREATE TABLE audits (
     id uuid PRIMARY KEY,

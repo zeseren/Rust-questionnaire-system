@@ -791,6 +791,253 @@
           "question_id": null
         }
       }
+    },
+    {
+      "name": "三元条件只求值命中的分支",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "if",
+          "condition": {
+            "op": "answered",
+            "question_id": "00000000-0000-4000-8000-000000000004"
+          },
+          "then_branch": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000004"
+          },
+          "else_branch": {
+            "op": "number",
+            "value": "0"
+          }
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":3}",
+      "expected": {
+        "value": {
+          "type": "number",
+          "value": 3
+        }
+      }
+    },
+    {
+      "name": "缺失条件短路三元且不读取分支",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "if",
+          "condition": {
+            "op": "selected",
+            "question_id": "00000000-0000-4000-8000-000000000001",
+            "option_id": "00000000-0000-4000-8000-000000000101"
+          },
+          "then_branch": {
+            "op": "number",
+            "value": "1"
+          },
+          "else_branch": {
+            "op": "number",
+            "value": "0"
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "value": {
+          "type": "missing"
+        }
+      }
+    },
+    {
+      "name": "三元分支静态类型必须一致",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "if",
+          "condition": {
+            "op": "boolean",
+            "value": true
+          },
+          "then_branch": {
+            "op": "number",
+            "value": "1"
+          },
+          "else_branch": {
+            "op": "text",
+            "value": "甲"
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "type_mismatch",
+          "path": "$.expression",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "一元负号保留有限数值语义",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "negate",
+          "value": {
+            "op": "number",
+            "value": "2.5"
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "value": {
+          "type": "number",
+          "value": -2.5
+        }
+      }
+    },
+    {
+      "name": "负号作用于缺失答案仍为缺失",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "negate",
+          "value": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000004"
+          }
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":null}",
+      "expected": {
+        "value": {
+          "type": "missing"
+        }
+      }
+    },
+    {
+      "name": "单选身份支持相等比较",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "eq",
+          "left": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000001"
+          },
+          "right": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000001\":\"00000000-0000-4000-8000-000000000101\"}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "单选身份不允许大小排序",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "gt",
+          "left": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000001"
+          },
+          "right": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "error": {
+          "code": "type_mismatch",
+          "path": "$.expression",
+          "question_id": null
+        }
+      }
+    },
+    {
+      "name": "文本包含与前缀判断支持缺失值",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "all",
+          "expressions": [
+            {
+              "op": "contains",
+              "text": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000003"
+              },
+              "substring": {
+                "op": "text",
+                "value": "反馈"
+              }
+            },
+            {
+              "op": "starts_with",
+              "text": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000003"
+              },
+              "prefix": {
+                "op": "text",
+                "value": " 反"
+              }
+            }
+          ]
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000003\":\" 反馈 \"}",
+      "expected": {
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      }
+    },
+    {
+      "name": "文本包含缺失返回未知",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "contains",
+          "text": {
+            "op": "answer",
+            "question_id": "00000000-0000-4000-8000-000000000003"
+          },
+          "substring": {
+            "op": "text",
+            "value": "反馈"
+          }
+        }
+      },
+      "answers_json": "{}",
+      "expected": {
+        "value": {
+          "type": "missing"
+        }
+      }
     }
   ]
 }

@@ -35,6 +35,8 @@ fn 只设置数据库时采用开发默认值() {
     );
     assert_eq!(config.public_origin, "http://localhost:3000");
     assert!(!config.cookie_secure, "本机开发默认允许非 Secure Cookie");
+    assert!(!config.allow_insecure_http, "默认拒绝非本机明文 HTTP");
+    assert!(!config.trust_proxy, "默认只信 TCP 对端地址");
     assert_eq!(config.session_ttl_seconds, 86_400);
     assert_eq!(config.auth_requests_per_minute, 60);
     assert_eq!(config.submissions_per_minute, 600);
@@ -111,6 +113,29 @@ fn 非本机的_http_来源被拒绝而本机地址允许() {
             来源
         );
     }
+
+    // 显式允许内网明文时才能以非本机 http 启动；该开关必须逐次声明。
+    let 内网 = 配置(&[
+        ("PUBLIC_ORIGIN", "http://192.168.1.10:3000"),
+        ("ALLOW_INSECURE_HTTP", "true"),
+    ])
+    .expect("显式允许非本机明文 HTTP");
+    assert!(内网.allow_insecure_http);
+    assert_eq!(内网.public_origin, "http://192.168.1.10:3000");
+
+    assert_eq!(
+        拒绝原因(&[("ALLOW_INSECURE_HTTP", "yes")]),
+        "ALLOW_INSECURE_HTTP 必须为 true 或 false"
+    );
+    assert_eq!(
+        拒绝原因(&[("TRUST_PROXY", "on")]),
+        "TRUST_PROXY 必须为 true 或 false"
+    );
+    assert!(
+        配置(&[("TRUST_PROXY", "true")])
+            .expect("布尔开关可显式开启")
+            .trust_proxy
+    );
 }
 
 #[test]

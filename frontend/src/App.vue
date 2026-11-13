@@ -1,9 +1,9 @@
 <!-- [入口在哪] 应用外壳进入工作台/问卷/归档/设置；standalone 路由使用公共顶栏 -->
-<!-- [用户在第 1 步后悔了怎么删/退] 公共顶栏常驻“返回工作台”，工作台顶栏与移动导航常驻退出登录；会话过期弹窗底栏左侧提供“退出并稍后处理” -->
+<!-- [用户在第 1 步后悔了怎么删/退] 已登录用户在公共顶栏可返回工作台，工作台顶栏与移动导航常驻退出登录；会话过期弹窗底栏左侧提供“退出并稍后处理” -->
 <!-- [主提交通道在哪] 各视图页头右侧与固定底栏右侧的唯一主按钮；重新登录弹窗由表单主按钮提交 -->
 <!-- 纸本与松烟墨布局共用浅深主题；会话过期时保留当前页面与未保存输入。 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useAppearance, useAuth, useNotice, type Theme } from './stores'
 import { message } from './api'
@@ -19,8 +19,17 @@ const notice = useNotice()
 const mobileOpen = ref(false)
 const mobileDialog = ref<HTMLDialogElement>()
 const standalone = computed(() => Boolean(route.meta.standalone))
-// 填写页与已登录用户都可在公共顶栏随时返回工作台，避免被困在独立流程中。
-const showWorkspaceExit = computed(() => route.path.startsWith('/s/') || Boolean(auth.user))
+/** 引擎状态来自真实加载结果；按需动态导入，登录页不为侧边栏提前拉取 wasm。 */
+const wasmReady = ref(false)
+onMounted(async () => {
+  try {
+    wasmReady.value = (await import('./wasm/index')).wasmReady
+  } catch {
+    wasmReady.value = false
+  }
+})
+// 公共顶栏只在已登录时提供返回工作台；匿名受访者在 /s/:id 不会被引向登录页。
+const showWorkspaceExit = computed(() => Boolean(auth.user))
 const links = computed(() => [
   { to: '/', label: '工作台', icon: 'home' },
   { to: '/surveys', label: '我的问卷', icon: 'forms' },
@@ -98,9 +107,9 @@ watch(() => route.fullPath, closeMobile)
       <div class="sidebar-card">
         <div class="sidebar-card-title">
           <span>规则引擎状态</span>
-          <span class="dot-live">WASM 已就绪</span>
+          <span class="dot-live">{{ wasmReady ? 'WASM 已就绪' : 'WASM 未就绪' }}</span>
         </div>
-        <p>前后端共享同一套 Rust 领域编译器，支持三值逻辑、精确大整数与确定性路径重建。</p>
+        <p>前后端共享同一套 Rust 领域编译器，支持三值逻辑、有限数值计算与确定性路径重建。</p>
       </div>
       <div class="sidebar-bottom">
         <div class="appearance-label">外观</div>

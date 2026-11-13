@@ -2,7 +2,7 @@
 
 use questionnaire_logic::domain::{
     Document, DocumentLogic, LogicErrorCode, LogicTextError, Question, format_logic_text,
-    parse_logic_text,
+    inspect_logic_text, parse_logic_text,
 };
 use serde_json::{Value, json};
 
@@ -121,6 +121,9 @@ fn 内置函数检查参数元数与引用种类() {
         "coalesce(1, 2, 3)",
         "answer()",
         "length([])",
+        "contains(1)",
+        "contains(1, 2, 3)",
+        "starts_with(1)",
     ] {
         let error = parse_program(&format!("{prefix}{expression};"), &[]).unwrap_err();
         assert_eq!(
@@ -174,6 +177,85 @@ fn 文本与表达式预算允许边界并拒绝长链和混合嵌套超限() {
             .error
             .code,
         LogicErrorCode::LimitExceeded
+    );
+}
+
+#[test]
+fn 一元负号与三元条件解析为统一表达式节点() {
+    let document = document();
+    let prefix = concat!(
+        "dsl 1 semantics 1;\n",
+        "bind question amount = \"00000000-0000-4000-8000-000000000002\";\n",
+        "bind variable v = \"00000000-0000-4000-8000-000000002001\";\n",
+        "let v: number = ",
+    );
+
+    // 前缀负号与数字之间允许空白，并与 `!` 使用同一预算入口。
+    let logic = parse_program(&format!("{prefix}- 5;"), &document.questions).unwrap();
+    assert_eq!(
+        logic.variables[0].expression,
+        json!({"op": "negate", "value": {"op": "number", "value": "5"}})
+    );
+
+    // `-answer(...)` 解析为负号作用于答案，而不是二元减法。
+    let logic = parse_program(&format!("{prefix}-answer(amount);"), &document.questions).unwrap();
+    assert_eq!(
+        logic.variables[0].expression,
+        json!({
+            "op": "negate",
+            "value": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+            }
+        })
+    );
+
+    let logic = parse_program(
+        &format!("{prefix}if answer(amount) > 0 then -1 else 1;"),
+        &document.questions,
+    )
+    .unwrap();
+    assert_eq!(
+        logic.variables[0].expression,
+        json!({
+            "op": "if",
+            "condition": {
+                "op": "compare",
+                "comparison": "gt",
+                "left": {
+                    "op": "answer",
+                    "question_id": "00000000-0000-4000-8000-000000000002"
+                },
+                "right": {"op": "number", "value": "0"}
+            },
+            "then_branch": {"op": "negate", "value": {"op": "number", "value": "1"}},
+            "else_branch": {"op": "number", "value": "1"}
+        })
+    );
+}
+
+#[test]
+fn 巡检接口在语法错误后仍返回已扫描绑定() {
+    let document = document();
+    let source = concat!(
+        "dsl 1 semantics 1;\n",
+        "bind question choose = \"00000000-0000-4000-8000-000000000001\";\n",
+        "bind option yes = \"00000000-0000-4000-8000-000000000101\";\n",
+        "let broken = ;",
+    );
+    let inspection = inspect_logic_text(source, &document.questions);
+    assert_eq!(inspection.bindings.len(), 2, "报错不能清空速查栏");
+    assert_eq!(inspection.bindings[0].category, "question");
+    assert_eq!(inspection.bindings[0].alias, "choose");
+    assert_eq!(inspection.bindings[1].category, "option");
+    let error = inspection.error.as_ref().expect("必须返回诊断");
+    assert_eq!(error.error.code, LogicErrorCode::InvalidSyntax);
+    assert_eq!(inspection.line, Some(error.line));
+    assert_eq!(inspection.column, Some(error.column));
+    assert!(
+        inspection
+            .error_offset
+            .is_some_and(|offset| offset <= source.len())
     );
 }
 

@@ -12,11 +12,13 @@ import FlowEditor from './FlowEditor.vue'
 import LogicTextEditor from './LogicTextEditor.vue'
 import SearchSelect from './SearchSelect.vue'
 import Icon from './Icon.vue'
+import { newId } from '../uuid'
 const logic = defineModel<DocumentLogic | null | undefined>({ required: true })
 const props = defineProps<{ questions: Question[]; disabled?: boolean }>()
 const emit = defineEmits<{ pending: [value: boolean] }>()
 const textMode = ref(false)
 const textPending = ref(false)
+const textEditor = ref<InstanceType<typeof LogicTextEditor>>()
 const section = ref<'rules' | 'variables' | 'flow'>('rules')
 function pending(value: boolean) {
   textPending.value = value
@@ -67,7 +69,7 @@ function disable() {
   }
 }
 async function addRule(questionId = availableQuestions.value[0]?.id) {
-  if (!questionId || props.disabled || textPending.value) return
+  if (!questionId || props.disabled) return
   const current = logic.value ?? enable()
   const existing = current.rules.find((rule) => rule.question_id === questionId)
   if (!existing)
@@ -82,7 +84,7 @@ function addVariable() {
   if (props.disabled) return
   const current = logic.value ?? enable()
   current.variables.push({
-    id: crypto.randomUUID(),
+    id: newId(),
     value_type: 'boolean',
     expression: { op: 'boolean', value: true },
   })
@@ -110,7 +112,20 @@ async function locate() {
   await nextTick()
   document.getElementById(target)?.focus()
 }
-defineExpose({ addRule, locate })
+/** 切到文本模式：没有未应用草稿时按当前可视化规则重新生成，避免文本过期。 */
+function openText() {
+  textMode.value = true
+  if (!textPending.value) textEditor.value?.discard()
+}
+defineExpose({ addRule, locate, applyText, discardText })
+/** 保存前应用文本草稿；失败时编辑器已聚焦到错误位置。 */
+function applyText(): boolean {
+  return textEditor.value?.apply() ?? false
+}
+/** 保存前忽略文本草稿：重新按当前可视化规则生成文本。 */
+function discardText() {
+  textEditor.value?.discard()
+}
 </script>
 <template>
   <section id="logic-editor" class="logic-workbench" tabindex="-1">
@@ -130,22 +145,10 @@ defineExpose({ addRule, locate })
           移除全部逻辑
         </button>
         <div class="view-control" role="group" aria-label="规则编辑方式">
-          <button
-            type="button"
-            class="button"
-            :disabled="textPending"
-            :aria-pressed="!textMode"
-            @click="textMode = false"
-          >
+          <button type="button" class="button" :aria-pressed="!textMode" @click="textMode = false">
             可视化配置
           </button>
-          <button
-            type="button"
-            class="button"
-            :disabled="!!diagnostic && !textMode"
-            :aria-pressed="textMode"
-            @click="textMode = true"
-          >
+          <button type="button" class="button" :aria-pressed="textMode" @click="openText">
             文本 DSL
           </button>
         </div>
@@ -175,14 +178,20 @@ defineExpose({ addRule, locate })
       </button>
     </div>
     <template v-else>
-      <LogicTextEditor
-        v-if="textMode"
-        v-model="logic"
-        :questions="questions"
-        :disabled="disabled"
-        @pending="pending"
-      />
-      <div v-else class="panel logic-visual">
+      <p v-if="textPending && !textMode" class="notice">
+        文本 DSL 有尚未应用的修改。切回「文本 DSL」可应用或恢复；保存时会询问如何处理这段草稿。
+      </p>
+      <div v-show="textMode">
+        <LogicTextEditor
+          v-if="logic"
+          ref="textEditor"
+          v-model="logic"
+          :questions="questions"
+          :disabled="disabled"
+          @pending="pending"
+        />
+      </div>
+      <div v-show="!textMode" class="panel logic-visual">
         <div class="logic-status" :class="{ 'has-issue': diagnostic }" role="status">
           <span class="status-dot"></span>
           <div class="grow">

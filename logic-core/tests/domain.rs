@@ -437,17 +437,27 @@ fn 发布态校验逐项拦截未完成内容() {
         assert_eq!(error.message, expected_message, "{name}");
     }
 
-    // 筛选结束没有持久化语义，即使其余内容完整也不能发布。
+    // 筛选结束与正常完成同样可以发布；落库分类由提交求值的 outcome 决定。
     let flows: Value =
         serde_json::from_str(include_str!("../../fixtures/survey-logic/flows.json")).unwrap();
     let screened: Document =
         serde_json::from_value(flows["documents"]["priority"].clone()).unwrap();
+    let question_id = screened.questions[0].id;
+    let option_id = screened.questions[0].kind.options().unwrap()[1].id;
     screened.validate_draft().unwrap();
-    let error = screened.validate_publish().unwrap_err();
-    assert_eq!(error.question_id, None);
+    screened
+        .validate_publish()
+        .expect("包含筛选结束的流程必须可以发布");
+    let prepared = screened.prepare_publish().expect("筛选流程必须可编译");
+    let response = prepared
+        .evaluate_submission(vec![Answer {
+            question_id,
+            value: json!(option_id.to_string()),
+        }])
+        .expect("筛选结束必须返回正常结果");
     assert_eq!(
-        error.message,
-        "筛选结束的保存与限次策略尚未开放，请使用普通完成节点后再发布"
+        response.outcome,
+        questionnaire_logic::domain::FlowOutcome::ScreenOut
     );
 }
 

@@ -9,7 +9,7 @@ import { api, message, query } from '../api'
 import { useResource } from '../resource'
 import { dateTime, shareLink, statusNames } from '../format'
 import { useNotice } from '../stores'
-import type { Page, Status, SurveyDetail, SurveySummary } from '../types'
+import type { Page, Status, SurveyCounts, SurveyDetail, SurveySummary } from '../types'
 import Icon from '../components/Icon.vue'
 import Modal from '../components/Modal.vue'
 import ErrorNotice from '../components/ErrorNotice.vue'
@@ -47,23 +47,7 @@ const list = useResource(
     ),
   [page, filter, keyword],
 )
-const counts = useResource(async () => {
-  const totals: Record<Status, number> = {
-    unpublished: 0,
-    collecting: 0,
-    closed: 0,
-    archived: 0,
-  }
-  await Promise.all(
-    statuses.map(async (status) => {
-      const result = await api<Page<SurveySummary>>(
-        `/api/surveys${query({ status, page_size: 1 })}`,
-      )
-      totals[status] = result.total
-    }),
-  )
-  return totals
-})
+const counts = useResource(() => api<SurveyCounts>('/api/surveys/counts'), [])
 const total = computed(() =>
   counts.data.value
     ? Object.values(counts.data.value).reduce((sum, value) => sum + value, 0)

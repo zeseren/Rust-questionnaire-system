@@ -14,6 +14,11 @@ pub struct Config {
     pub public_origin: String,
     /// HTTPS 部署必须为 true；仅本机 HTTP 开发允许 false。
     pub cookie_secure: bool,
+    /// 允许非本机 `http://` 启动（例如内网联调）；默认拒绝，开启后记录告警。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub allow_insecure_http: bool,
+    /// 信任反向代理写入的 `X-Forwarded-For` / `X-Real-IP`；默认只信 TCP 对端地址。
+    pub trust_proxy: bool,
     /// 登录会话有效期（秒）。
     pub session_ttl_seconds: i64,
     /// 整个单实例每分钟允许的注册/登录请求数。
@@ -58,6 +63,12 @@ impl Config {
         let cookie_secure: bool = value(&lookup, "COOKIE_SECURE", "false")?
             .parse()
             .context("COOKIE_SECURE 必须为 true 或 false")?;
+        let allow_insecure_http: bool = value(&lookup, "ALLOW_INSECURE_HTTP", "false")?
+            .parse()
+            .context("ALLOW_INSECURE_HTTP 必须为 true 或 false")?;
+        let trust_proxy: bool = value(&lookup, "TRUST_PROXY", "false")?
+            .parse()
+            .context("TRUST_PROXY 必须为 true 或 false")?;
         if origin.scheme() == "https" && !cookie_secure {
             bail!("HTTPS 部署要求 COOKIE_SECURE=true");
         }
@@ -67,7 +78,14 @@ impl Config {
         if origin.scheme() == "http"
             && !matches!(origin.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
         {
-            bail!("非本机部署必须使用 HTTPS");
+            if !allow_insecure_http {
+                bail!("非本机部署必须使用 HTTPS");
+            }
+            // 内网明文会让会话 Cookie 可能被同网段截获；显式开启仍留下审计线索。
+            tracing::warn!(
+                public_origin = %public_origin,
+                "ALLOW_INSECURE_HTTP 已开启：非本机站点使用明文 HTTP"
+            );
         }
         let config = Self {
             database_url,
@@ -76,6 +94,8 @@ impl Config {
                 .context("LISTEN_ADDR 必须是 IP:端口")?,
             public_origin,
             cookie_secure,
+            allow_insecure_http,
+            trust_proxy,
             session_ttl_seconds: value(&lookup, "SESSION_TTL_SECONDS", "86400")?
                 .parse()
                 .context("SESSION_TTL_SECONDS 必须是整数秒")?,

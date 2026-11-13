@@ -46,13 +46,13 @@ pub struct FlowBranch {
     pub target: Uuid,
 }
 
-/// 结束仅代表流程结果，不能自动保存答卷或消耗账号额度。
+/// 结束仅代表流程结果，不自动保存；调用方按 `outcome` 决定落库分类。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FlowOutcome {
-    /// 等待用户确认提交。
+    /// 正常完成，计入有效完成样本。
     Complete,
-    /// 筛选结束，暂不产生持久化副作用。
+    /// 筛选结束；按 `screen_out` 持久化，不计入有效完成样本分母。
     ScreenOut,
 }
 
@@ -136,7 +136,7 @@ impl FlowDefinition {
         let nodes: BTreeMap<_, _> = self
             .nodes
             .iter()
-            .map(|node| (node.id(), Uuid::new_v4()))
+            .map(|node| (node.id(), Uuid::now_v7()))
             .collect();
         let remap = |id: &mut Uuid| {
             if let Some(next) = nodes.get(id) {
@@ -516,7 +516,7 @@ pub struct FlowSnapshot<'a> {
 }
 
 /// 某题在最终有效路径上的适用性；跳过与可选未答不可混用。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AnswerState {
     /// 适用且已有有效答案。
@@ -527,7 +527,7 @@ pub enum AnswerState {
     Skipped,
 }
 
-/// 已到达 complete 的重建结果，不表示数据库已经保存答卷。
+/// 最终答案的重建结果，不表示数据库已经保存答卷。
 #[derive(Debug, Serialize)]
 pub struct EvaluatedResponse {
     /// 用于存储与幂等比较的规范化答案。
@@ -536,6 +536,8 @@ pub struct EvaluatedResponse {
     pub question_states: BTreeMap<Uuid, AnswerState>,
     /// 从最终答案重建的路径，不是实际访问轨迹。
     pub path: Vec<Uuid>,
+    /// 路径终点：正常完成或筛选结束；筛选结束同样可以持久化为正式记录。
+    pub outcome: FlowOutcome,
 }
 
 /// 已存储答案的重建结果：规范化答案与题目适用性（跳过路径分配）。
@@ -586,7 +588,8 @@ impl FlowEvaluator {
     /// 从入口重建最终答卷，不接受客户端历史或预先计算的可见题目。
     ///
     /// # Errors
-    /// 重复/未知题目、不适用答案、校验失败、未决条件或筛选结束均拒绝。
+    /// 重复/未知题目、不适用答案、校验失败或未决条件均拒绝；
+    /// 到达筛选结束时返回 `Ok`，由调用方按 `outcome` 落库。
     pub fn evaluate_answers(&self, answers: Vec<Answer>) -> Result<EvaluatedResponse, LogicError> {
         self.plan.evaluate_answers(&self.document, answers)
     }
@@ -651,13 +654,16 @@ impl CompiledPlan {
     }
 
     /// 从已存储答案重算规则并返回规范化答案与题目适用性，跳过路径构建。
+    ///
+    /// 报告重建只消费答案与三态，不区分正常完成与筛选结束；`outcome` 由
+    /// 提交入口 [`Self::evaluate_answers`] 单独返回，避免破坏只读报表的元组契约。
     pub(crate) fn evaluate_stored_states(
         &self,
         document: &Document,
         answers: &BTreeMap<Uuid, Value>,
     ) -> Result<StoredStates, LogicError> {
         let projection = self.project(document, answers);
-        let visible = self.check_projection(document, &projection, answers)?;
+        let (visible, _) = self.check_projection(document, &projection, answers)?;
         let states = Self::question_states(&document.questions, &projection, &visible);
         Ok((projection.answers, states))
     }
@@ -689,7 +695,7 @@ impl CompiledPlan {
         inputs: &BTreeMap<Uuid, Value>,
     ) -> Result<EvaluatedResponse, LogicError> {
         let projection = self.project(document, inputs);
-        let visible = self.check_projection(document, &projection, inputs)?;
+        let (visible, outcome) = self.check_projection(document, &projection, inputs)?;
         let question_states = Self::question_states(&document.questions, &projection, &visible);
         Ok(EvaluatedResponse {
             answers: projection.answers,
@@ -699,16 +705,17 @@ impl CompiledPlan {
                 .iter()
                 .map(|index| self.flow.id(*index))
                 .collect(),
+            outcome,
         })
     }
 
-    /// 校验投影，错误顺序与提交路径完全一致；返回可见题目集合。
+    /// 校验投影，错误顺序与提交路径完全一致；返回可见题目集合与终点结果。
     fn check_projection(
         &self,
         document: &Document,
         projection: &Projection,
         inputs: &BTreeMap<Uuid, Value>,
-    ) -> Result<BTreeSet<Uuid>, LogicError> {
+    ) -> Result<(BTreeSet<Uuid>, FlowOutcome), LogicError> {
         for question in &document.questions {
             if let Some(code) = projection.errors.get(&question.id) {
                 return Err(error(*code, "$.answers", Some(question.id)));
@@ -727,18 +734,11 @@ impl CompiledPlan {
                 ));
             }
         }
-        match projection.path.last().map(|index| &self.flow.nodes[*index]) {
-            Some(Node::End {
-                outcome: FlowOutcome::Complete,
-                ..
-            }) => {}
-            Some(Node::End {
-                outcome: FlowOutcome::ScreenOut,
-                ..
-            }) => return Err(error(LogicErrorCode::ScreenedOut, "$.route", None)),
+        let outcome = match projection.path.last().map(|index| &self.flow.nodes[*index]) {
+            Some(Node::End { outcome, .. }) => *outcome,
             _ => return Err(error(LogicErrorCode::UnknownCondition, "$.route", None)),
-        }
-        Ok(visible)
+        };
+        Ok((visible, outcome))
     }
 
     fn question_states(
@@ -956,7 +956,7 @@ impl FlowSession {
     /// 复用已绑定的求值器重建最终答卷，不读取或修改会话的输入与历史。
     ///
     /// # Errors
-    /// 与独立求值器相同，拒绝无效答案、不适用答案、未决条件或筛选结束。
+    /// 与独立求值器相同，拒绝无效答案、不适用答案与未决条件；筛选结束正常返回。
     pub fn evaluate_answers(&self, answers: Vec<Answer>) -> Result<EvaluatedResponse, LogicError> {
         self.evaluator.evaluate_answers(answers)
     }

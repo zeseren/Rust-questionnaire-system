@@ -44,7 +44,15 @@ pub(crate) struct AppState {
     pub db: DatabaseConnection,
     pub config: Arc<Config>,
     pub limits: Arc<Limits>,
+    /// 已发布版本不可变，进程内缓存编译结果，避免每个请求重复解析题面 JSONB。
+    pub versions: Arc<repository::VersionCache>,
 }
+
+/// 草稿保存与创建允许的请求体上限；发布态题面最大 1 MiB，留足编辑期余量。
+pub(crate) const MAX_DRAFT_BYTES: usize = 8 * 1024 * 1024;
+
+/// 其余接口的默认请求体上限；公开提交另有 `MAX_SUBMISSION_BYTES`。
+const DEFAULT_BODY_LIMIT: usize = 1024 * 1024;
 
 /// 从环境变量启动服务，或执行 migrate / create-admin 子命令。
 ///
@@ -101,14 +109,21 @@ pub async fn run() -> anyhow::Result<()> {
         db,
         config: Arc::new(config),
         limits: Arc::new(Limits::new()),
+        versions: Arc::new(repository::VersionCache::new()),
     };
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .context("无法监听 HTTP 地址")?;
+    // 过期会话清理随服务生命周期运行；优雅停机返回后立即中止，不额外阻塞退出。
+    let cleanup = tokio::spawn(auth::purge_expired_sessions_loop(state.db.clone()));
     tracing::info!(address = %listen, "server ready");
-    axum::serve(listener, router(state.clone()))
-        .with_graceful_shutdown(shutdown())
-        .await?;
+    axum::serve(
+        listener,
+        router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await?;
+    cleanup.abort();
     state.db.close().await?;
     Ok(())
 }
@@ -148,7 +163,7 @@ fn router(state: AppState) -> Router {
                 "不支持此请求方法",
             )
         })
-        .layer(DefaultBodyLimit::max(crate::domain::MAX_SUBMISSION_BYTES))
+        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             security::guard,

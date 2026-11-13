@@ -1,15 +1,24 @@
-<!-- [入口在哪] 公开填写链接 /s/:id；上方是问卷题面与说明，流程题逐页展示。 -->
+<!-- [入口在哪] 公开填写链接 /s/:id；先展示免登录的问卷说明与隐私提示，再按模式加载题面。 -->
 <!-- [用户在第 1 步后悔了怎么删/退] 底部固定栏左侧常驻「清空重填」；不可关闭的重新登录弹窗也提供「先返回首页」。 -->
 <!-- [主提交通道在哪] 底部固定栏右侧唯一主按钮：「下一步/提交答卷/重试原提交/加载最新题面重填」。 -->
-<!-- 提交结果未知时冻结原载荷与幂等标识，重试不会悄悄创建第二次提交。 -->
+<!-- 提交结果未知时冻结原载荷与幂等标识，重试不会悄悄创建第二次提交；未提交的填写进度按版本暂存在本地。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { onBeforeRouteLeave, RouterLink, useRoute } from 'vue-router'
 import { api, ApiError, message } from '../api'
 import { buildAnswers, isAnswered, type Inputs } from '../answers'
 import { dateTime, shareLink } from '../format'
+import { decode } from '../json'
 import { useAuth } from '../stores'
-import type { Answer, PublicSurvey, Receipt, Submission } from '../types'
+import { newId } from '../uuid'
+import type {
+  Answer,
+  FlowEvent,
+  PublicSurvey,
+  PublicSurveyMeta,
+  Receipt,
+  Submission,
+} from '../types'
 import SurveyFields from '../components/SurveyFields.vue'
 import FlowFields from '../components/FlowFields.vue'
 import AuthForm from '../components/AuthForm.vue'
@@ -20,10 +29,18 @@ import LoadingState from '../components/LoadingState.vue'
 const route = useRoute()
 const auth = useAuth()
 const id = String(route.params.id)
+const STORAGE_PREFIX = 'wenxu:fill-draft:'
+/** 本地暂存按问卷与发布版本隔离，换版本后不会把旧输入带到新题面。 */
+interface FillDraft {
+  values?: Inputs
+  events?: FlowEvent[]
+}
+const meta = shallowRef<PublicSurveyMeta | null>(null)
 const survey = shallowRef<PublicSurvey | null>(null)
 const receipt = shallowRef<Receipt | null>(null)
 const receiptPanel = ref<HTMLElement | null>(null)
 const values = ref<Inputs>({})
+const flowDraft = ref<FlowEvent[]>([])
 const errors = ref<Record<string, string>>({})
 const error = ref('')
 const loading = ref(true)
@@ -31,28 +48,109 @@ const busy = ref(false)
 const loginNeeded = ref(false)
 const uncertain = ref(false)
 const versionChanged = ref(false)
+const restored = ref(false)
 const pending = shallowRef<Submission | null>(null)
 const flowFields = ref<InstanceType<typeof FlowFields>>()
 const flowAnswered = ref(0)
+/** 「登录限次」但当前没有会话：先展示上下文与登录引导，不直接撞 401。 */
+const loginRequired = computed(() => meta.value?.mode === 'login_once' && !auth.user)
+const draftKey = computed(() =>
+  survey.value ? `${STORAGE_PREFIX}${id}:${survey.value.version_id}` : '',
+)
 function flowChanged(count: number) {
   flowAnswered.value = count
   errors.value = {}
+  scheduleSave()
 }
 const answered = computed(() =>
   survey.value?.document.logic
     ? flowAnswered.value
     : Object.values(values.value).filter(isAnswered).length,
 )
+function readDraft(key: string): FillDraft | null {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const draft = decode<FillDraft | null>(raw)
+    if (!draft || typeof draft !== 'object') return null
+    return draft
+  } catch {
+    return null
+  }
+}
+/** 立即写入当前进度；提交成功后回执已存在，不再改写本地暂存。 */
+function writeDraft() {
+  if (!draftKey.value || receipt.value) return
+  const draft: FillDraft = {}
+  if (survey.value?.document.logic) draft.events = flowFields.value?.events() ?? []
+  else draft.values = values.value
+  try {
+    localStorage.setItem(draftKey.value, JSON.stringify(draft))
+  } catch {
+    // 隐私模式等存储不可用时静默跳过，填写本身不受影响。
+  }
+}
+let saveTimer: ReturnType<typeof setTimeout> | undefined
+function scheduleSave() {
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(writeDraft, 400)
+}
+function clearDraft() {
+  clearTimeout(saveTimer)
+  saveTimer = undefined
+  if (!draftKey.value) return
+  try {
+    localStorage.removeItem(draftKey.value)
+  } catch {}
+}
+/** 流程页「清空重填」：同时丢弃已回放的进度，避免下次初始化又被恢复。 */
+function resetFlowDraft() {
+  flowDraft.value = []
+  clearDraft()
+}
+function applyStoredDraft(result: PublicSurvey) {
+  values.value = {}
+  flowDraft.value = []
+  restored.value = false
+  const draft = readDraft(`${STORAGE_PREFIX}${id}:${result.version_id}`)
+  if (!draft) return
+  if (result.document.logic) {
+    if (!Array.isArray(draft.events) || !draft.events.length) return
+    flowDraft.value = draft.events
+  } else {
+    if (!draft.values || typeof draft.values !== 'object') return
+    values.value = draft.values
+  }
+  restored.value = true
+}
 async function load() {
   loading.value = true
   error.value = ''
+  loginNeeded.value = false
+  survey.value = null
+  receipt.value = null
   try {
-    survey.value = await api<PublicSurvey>(`/api/public/surveys/${id}`)
+    meta.value = await api<PublicSurveyMeta>(`/api/public/surveys/${id}/meta`)
+  } catch (reason) {
+    error.value = message(reason)
+    loading.value = false
+    return
+  }
+  loading.value = false
+  if (!loginRequired.value) await loadSurvey()
+}
+async function loadSurvey() {
+  loading.value = true
+  error.value = ''
+  try {
+    const result = await api<PublicSurvey>(`/api/public/surveys/${id}`)
+    survey.value = result
     versionChanged.value = false
     pending.value = null
-    values.value = {}
+    receipt.value = null
     errors.value = {}
     flowAnswered.value = 0
+    applyStoredDraft(result)
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) loginNeeded.value = true
     else error.value = message(reason)
@@ -68,11 +166,13 @@ function resetFill() {
   errors.value = {}
   flowAnswered.value = 0
   flowFields.value?.reset()
+  restored.value = false
+  clearDraft()
 }
 async function loginSuccess() {
   loginNeeded.value = false
   error.value = ''
-  if (!survey.value) await load()
+  if (!survey.value) await loadSurvey()
 }
 async function focusError() {
   const first = survey.value?.document.questions.find((question) => errors.value[question.id])
@@ -102,7 +202,8 @@ async function submit(flowAnswers?: Answer[]) {
     }
     pending.value = {
       version_id: survey.value.version_id,
-      idempotency_key: crypto.randomUUID(),
+      // UUIDv7 同样满足后端对幂等秘密的版本校验。
+      idempotency_key: newId(),
       answers: result.answers.map((answer) => ({
         ...answer,
         value: Array.isArray(answer.value) ? [...answer.value] : answer.value,
@@ -122,6 +223,8 @@ async function submit(flowAnswers?: Answer[]) {
     receipt.value = result
     pending.value = null
     uncertain.value = false
+    restored.value = false
+    clearDraft()
     window.scrollTo({ top: 0 })
     await nextTick()
     receiptPanel.value?.focus()
@@ -148,48 +251,91 @@ async function submit(flowAnswers?: Answer[]) {
   }
 }
 function leave(event: BeforeUnloadEvent) {
+  writeDraft()
   if (!receipt.value && (answered.value > 0 || uncertain.value)) {
     event.preventDefault()
     event.returnValue = ''
   }
 }
-onBeforeRouteLeave(
-  () =>
+onBeforeRouteLeave(() => {
+  writeDraft()
+  return (
     !!receipt.value ||
     (!answered.value && !uncertain.value) ||
-    window.confirm('离开后当前回答不会保存。确定离开吗？'),
-)
+    window.confirm('离开后可在同一版本继续填写，是否离开？')
+  )
+})
 onMounted(() => {
   load()
   window.addEventListener('beforeunload', leave)
 })
-onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
+onBeforeUnmount(() => {
+  clearTimeout(saveTimer)
+  window.removeEventListener('beforeunload', leave)
+})
 </script>
 <template>
   <div class="public-container">
     <LoadingState v-if="loading" />
     <section
-      v-else-if="receipt && survey"
+      v-else-if="receipt && meta"
       ref="receiptPanel"
       class="panel receipt-panel"
       tabindex="-1"
       role="status"
       aria-live="polite"
     >
-      <span class="success-mark"><Icon name="check" /></span>
-      <h1>回答已收到</h1>
-      <p class="plain-text subtle mt">{{ survey.document.thank_you || '感谢你的认真回答。' }}</p>
-      <code class="receipt">回执编号：{{ receipt.receipt_id }}</code>
-      <p class="hint mt">你的回答已成功提交，可以关闭此页面。</p>
-      <div class="actions mt">
+      <template v-if="receipt.outcome === 'screen_out'">
+        <span class="success-mark"><Icon name="info" /></span>
+        <h1>本次填写已结束</h1>
+        <p class="plain-text subtle mt">
+          根据你的回答，这份问卷进入了筛选结束分支。回执已记录，但这份回答不会计入答卷统计。
+        </p>
+        <code class="receipt">回执编号：{{ receipt.receipt_id }}</code>
+        <p class="hint mt">无需其他操作，可以关闭此页面。</p>
+      </template>
+      <template v-else>
+        <span class="success-mark"><Icon name="check" /></span>
+        <h1>回答已收到</h1>
+        <p class="plain-text subtle mt">
+          {{ survey?.document.thank_you || '感谢你的认真回答。' }}
+        </p>
+        <code class="receipt">回执编号：{{ receipt.receipt_id }}</code>
+        <p class="hint mt">你的回答已成功提交，可以关闭此页面。</p>
+      </template>
+      <div v-if="auth.user" class="actions mt">
         <RouterLink class="button" to="/">返回工作台</RouterLink>
       </div>
+      <p v-else class="hint mt">可以关闭此页面。</p>
     </section>
     <template v-else>
-      <ErrorNotice :message="error" :retry="!survey && !loginNeeded" @retry="load" />
-      <div v-if="!survey && loginNeeded" class="panel">
-        <h1>请先登录</h1>
-        <p class="subtle mt mb">这份问卷需要登录后填写，每个账号限交一次。</p>
+      <ErrorNotice :message="error" :retry="!survey && !loginRequired" @retry="load" />
+      <section v-if="meta" class="panel public-survey-header">
+        <p class="eyebrow">
+          {{ meta.mode === 'anonymous' ? '匿名填写' : '登录限次' }} · 填写前须知
+        </p>
+        <h1>{{ meta.title }}</h1>
+        <p class="plain-text subtle">{{ meta.description }}</p>
+        <div class="mt">
+          <strong class="hint">数据收集目的</strong>
+          <p class="plain-text subtle">{{ meta.purpose }}</p>
+        </div>
+        <p v-if="meta.deadline" class="hint mt">
+          截止时间：{{ dateTime(meta.deadline) }}（北京时间）
+        </p>
+        <p class="hint mt">{{ meta.privacy.mode_notice }}</p>
+        <details class="privacy-details">
+          <summary>数据可见范围与填写须知</summary>
+          <p class="hint">{{ meta.privacy.data_visibility }}</p>
+          <p class="hint">{{ meta.privacy.sensitive_data_notice }}</p>
+          <p class="hint">{{ meta.privacy.public_link_notice }}</p>
+        </details>
+      </section>
+      <div v-if="loginRequired" class="panel">
+        <h2>请先登录后填写</h2>
+        <p class="subtle mt mb">
+          这份问卷采用「登录限次」模式：需要登录，每个账号跨版本仅限一次，不属于完全匿名。登录后会自动加载题面。
+        </p>
         <AuthForm @success="loginSuccess" />
         <p class="auth-switch">
           还没有账号？
@@ -198,30 +344,11 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           </RouterLink>
         </p>
       </div>
-      <form v-if="survey" novalidate @submit.prevent="submit()">
-        <section class="panel public-survey-header">
-          <p class="eyebrow">
-            {{ survey.mode === 'anonymous' ? '匿名填写' : '登录限次' }} · V{{
-              survey.version_number
-            }}
-          </p>
-          <h1>{{ survey.document.title }}</h1>
-          <p class="plain-text subtle">{{ survey.document.description }}</p>
-          <div class="mt">
-            <strong class="hint">数据收集目的</strong>
-            <p class="plain-text subtle">{{ survey.document.purpose }}</p>
-          </div>
-          <p v-if="survey.deadline" class="hint mt">
-            截止时间：{{ dateTime(survey.deadline) }}（北京时间）
-          </p>
-          <p class="hint mt">{{ survey.privacy.mode_notice }}</p>
-          <details class="privacy-details">
-            <summary>数据可见范围与填写须知</summary>
-            <p class="hint">{{ survey.privacy.data_visibility }}</p>
-            <p class="hint">{{ survey.privacy.sensitive_data_notice }}</p>
-            <p class="hint">{{ survey.privacy.public_link_notice }}</p>
-          </details>
-        </section>
+      <form v-else-if="survey" novalidate @submit.prevent="submit()">
+        <div v-if="restored" class="notice mt">
+          <div class="grow">已恢复上次未提交的填写进度，可继续填写或清空重试。</div>
+          <button type="button" class="text-button" @click="resetFill">清空重填</button>
+        </div>
         <div v-if="versionChanged" class="notice mt">
           <div>
             问卷已经更新，当前输入已保留供核对。
@@ -238,11 +365,13 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           v-if="survey.document.logic"
           ref="flowFields"
           :document="survey.document"
+          :restore="flowDraft"
           :errors="errors"
           :disabled="busy || uncertain || versionChanged"
           :submit-disabled="loginNeeded"
           :hide-footer="uncertain || versionChanged"
           @change="flowChanged"
+          @reset="resetFlowDraft"
           @submit="submit"
         />
         <SurveyFields
@@ -251,6 +380,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           :document="survey.document"
           :errors="errors"
           :disabled="busy || uncertain || versionChanged"
+          @change="scheduleSave()"
         />
         <div
           v-if="!survey.document.logic || uncertain || versionChanged"
@@ -298,9 +428,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', leave))
           </div>
         </div>
       </form>
+      <LoadingState v-else-if="!error" />
     </template>
   </div>
-  <Modal v-if="loginNeeded && survey" title="请重新登录后继续" :dismissible="false">
+  <Modal v-if="loginNeeded && meta" title="请重新登录后继续" :dismissible="false">
     <p class="subtle mb">当前回答仍然保留。请登录后重试提交。</p>
     <ErrorNotice :message="error" />
     <AuthForm :initial-username="auth.user?.username" @success="loginSuccess" />

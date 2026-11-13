@@ -2,15 +2,23 @@
 //!
 //! 草稿与发布版本分别保存；修改草稿不会影响填写者已经读取的题面。
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{
+    Json,
+    extract::{DefaultBodyLimit, State},
+    http::StatusCode,
+};
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseTransaction, EntityTrait, FromQueryResult,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseTransaction, EntityTrait,
+    FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
+    TransactionTrait, sea_query::Expr,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
+use utoipa_axum::{
+    router::{OpenApiRouter, UtoipaMethodRouterExt},
+    routes,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -92,8 +100,6 @@ pub(crate) struct SurveyDetail {
     pub draft: Document,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// 发布后提供的同源资源链接；链接永远指向问卷，而不是某个历史版本。
-    pub share_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -159,10 +165,12 @@ struct VersionListRow {
 }
 
 pub(crate) fn router() -> OpenApiRouter<AppState> {
+    // 只有创建/保存草稿接受最大 8 MiB；其余管理接口沿用全局 1 MiB 默认值。
+    let draft_limit = DefaultBodyLimit::max(crate::MAX_DRAFT_BYTES);
     OpenApiRouter::new()
-        .routes(routes!(list, create))
+        .routes(routes!(list, create).layer(draft_limit))
         .routes(routes!(detail, delete))
-        .routes(routes!(save_draft))
+        .routes(routes!(save_draft).layer(draft_limit))
         .routes(routes!(preview))
         .routes(routes!(copy))
         .routes(routes!(publish))
@@ -171,6 +179,16 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(resume))
         .routes(routes!(archive))
         .routes(routes!(versions))
+        .routes(routes!(counts))
+}
+
+/// 首页聚合：按读取时刻的有效状态统计本人问卷数量，单条 SQL 完成。
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct SurveyCounts {
+    pub unpublished: u64,
+    pub collecting: u64,
+    pub closed: u64,
+    pub archived: u64,
 }
 
 /// 创建本人未发布问卷
@@ -182,7 +200,7 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
         (status = 401, description = "未登录或账号不可用", body = ErrorResponse),
         (status = 403, description = "请求来源未通过 CSRF 检查", body = ErrorResponse),
         (status = 400, description = "JSON 格式或字段类型错误", body = ErrorResponse),
-        (status = 413, description = "请求体超过 1 MiB", body = ErrorResponse),
+        (status = 413, description = "请求体超过 8 MiB", body = ErrorResponse),
         (status = 422, description = "输入或草稿基础约束不合法", body = ErrorResponse),
         (status = 500, description = "服务端错误", body = ErrorResponse)
     )
@@ -221,6 +239,53 @@ async fn list(
     ApiQuery(filters): ApiQuery<SurveyFilters>,
 ) -> AppResult<Json<Page<SurveySummary>>> {
     Ok(Json(list_surveys(&state, user.id, filters).await?))
+}
+
+/// 按业务状态聚合本人问卷数量
+///
+/// 到期即视为 closed：`collecting` 且已过截止时间的问卷计入 closed，其余状态按原值计数。
+#[utoipa::path(
+    get, path = "/api/surveys/counts", tag = "问卷管理", security(("cookieAuth" = [])),
+    responses(
+        (status = 200, description = "四种有效状态的问卷数量", body = SurveyCounts),
+        (status = 401, description = "未登录或账号不可用", body = ErrorResponse),
+        (status = 500, description = "服务端错误", body = ErrorResponse)
+    )
+)]
+async fn counts(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<SurveyCounts>> {
+    Ok(Json(count_surveys(&state, user.id).await?))
+}
+
+// 单条聚合避免为首页发出四次 COUNT；`$2` 是读取时刻，与 `SurveyStatus::effective` 口径一致。
+const COUNTS_SQL: &str = r#"SELECT
+    count(*) FILTER (WHERE "status" = 'unpublished') AS unpublished,
+    count(*) FILTER (WHERE "status" = 'collecting' AND ("deadline" IS NULL OR "deadline" > $2)) AS collecting,
+    count(*) FILTER (WHERE "status" = 'closed' OR ("status" = 'collecting' AND "deadline" <= $2)) AS closed,
+    count(*) FILTER (WHERE "status" = 'archived') AS archived
+FROM "surveys"
+WHERE "owner_id" = $1"#;
+
+async fn count_surveys(state: &AppState, owner_id: Uuid) -> AppResult<SurveyCounts> {
+    let statement = Statement::from_sql_and_values(
+        state.db.get_database_backend(),
+        COUNTS_SQL,
+        [owner_id.into(), Utc::now().into()],
+    );
+    let row = state
+        .db
+        .query_one_raw(statement)
+        .await?
+        .ok_or_else(|| AppError::internal("问卷计数聚合没有返回行"))?;
+    let count = |name: &str| -> AppResult<u64> {
+        let value: i64 = row.try_get("", name)?;
+        u64::try_from(value).map_err(|_| AppError::internal("问卷计数为负数"))
+    };
+    Ok(SurveyCounts {
+        unpublished: count("unpublished")?,
+        collecting: count("collecting")?,
+        closed: count("closed")?,
+        archived: count("archived")?,
+    })
 }
 
 /// 查看本人问卷的管理详情和草稿
@@ -263,7 +328,7 @@ async fn detail(
         (status = 404, description = "资源不存在或不属于当前用户", body = ErrorResponse),
         (status = 409, description = "修订冲突或问卷已归档", body = ErrorResponse),
         (status = 400, description = "路径或 JSON 格式错误", body = ErrorResponse),
-        (status = 413, description = "请求体超过 1 MiB", body = ErrorResponse),
+        (status = 413, description = "请求体超过 8 MiB", body = ErrorResponse),
         (status = 422, description = "输入或草稿基础约束不合法", body = ErrorResponse),
         (status = 500, description = "服务端错误", body = ErrorResponse)
     )
@@ -545,7 +610,7 @@ async fn insert_draft(
     document: &Document,
     now: DateTime<Utc>,
 ) -> AppResult<SurveyMetaRow> {
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     survey::Entity::insert(survey::ActiveModel {
         id: Set(id),
         owner_id: Set(owner_id),
@@ -576,6 +641,31 @@ async fn insert_draft(
     })
 }
 
+/// 业务状态筛选：到期即视为 closed，与 DTO 的 `effective` 口径一致。
+///
+/// 本人列表与管理员列表共用同一条件，避免两处筛选语义漂移。
+pub(crate) fn effective_status_condition(status: SurveyStatus, now: DateTime<Utc>) -> Condition {
+    match status {
+        SurveyStatus::Collecting => Condition::all()
+            .add(survey::Column::Status.eq(SurveyStatus::Collecting))
+            .add(
+                Condition::any()
+                    .add(survey::Column::Deadline.is_null())
+                    .add(survey::Column::Deadline.gt(now)),
+            ),
+        SurveyStatus::Closed => Condition::any()
+            .add(survey::Column::Status.eq(SurveyStatus::Closed))
+            .add(
+                Condition::all()
+                    .add(survey::Column::Status.eq(SurveyStatus::Collecting))
+                    .add(survey::Column::Deadline.lte(now)),
+            ),
+        SurveyStatus::Unpublished | SurveyStatus::Archived => {
+            Condition::all().add(survey::Column::Status.eq(status))
+        }
+    }
+}
+
 async fn list_surveys(
     state: &AppState,
     owner_id: Uuid,
@@ -592,26 +682,7 @@ async fn list_surveys(
         ));
     }
     if let Some(status) = filters.status {
-        let condition = match status {
-            SurveyStatus::Collecting => Condition::all()
-                .add(survey::Column::Status.eq(SurveyStatus::Collecting))
-                .add(
-                    Condition::any()
-                        .add(survey::Column::Deadline.is_null())
-                        .add(survey::Column::Deadline.gt(now)),
-                ),
-            SurveyStatus::Closed => Condition::any()
-                .add(survey::Column::Status.eq(SurveyStatus::Closed))
-                .add(
-                    Condition::all()
-                        .add(survey::Column::Status.eq(SurveyStatus::Collecting))
-                        .add(survey::Column::Deadline.lte(now)),
-                ),
-            SurveyStatus::Unpublished | SurveyStatus::Archived => {
-                Condition::all().add(survey::Column::Status.eq(status))
-            }
-        };
-        query = query.filter(condition);
+        query = query.filter(effective_status_condition(status, now));
     }
     let total = query.clone().count(&state.db).await?;
     let rows = query
@@ -698,7 +769,7 @@ async fn copy_survey(state: &AppState, owner_id: Uuid, id: Uuid) -> AppResult<Su
         let version_id = source
             .current_version_id
             .ok_or_else(|| AppError::internal("归档问卷缺少发布版本"))?;
-        repository::load_version(&tx, id, version_id)
+        repository::load_version(&tx, &state.versions, id, version_id)
             .await?
             .ok_or_else(|| AppError::internal("归档问卷缺少发布版本"))?
             .prepared
@@ -789,7 +860,7 @@ async fn publish_survey(
     let number = previous_number
         .checked_add(1)
         .ok_or_else(|| AppError::internal("发布版本号溢出"))?;
-    let version_id = Uuid::new_v4();
+    let version_id = Uuid::now_v7();
     // 只首次发布进入回收中。后续发布沿用刚刚物化的 closed/collecting 状态。
     let status = if first_publish {
         SurveyStatus::Collecting
@@ -1051,8 +1122,5 @@ pub(crate) fn survey_detail(
         draft,
         created_at: meta.created_at,
         updated_at: meta.updated_at,
-        share_url: meta
-            .current_version_id
-            .map(|_| format!("/api/public/surveys/{}", meta.id)),
     }
 }

@@ -220,8 +220,16 @@ async function openReceipt(receipt: string) {
         <section class="panel">
           <div class="report-summary">
             <div class="metric">
-              <span class="hint">回收答卷</span>
+              <span class="hint">总收卷</span>
               <strong class="metric-value">{{ statistics.data.value.total_count }}</strong>
+            </div>
+            <div class="metric">
+              <span class="hint">完整答卷</span>
+              <strong class="metric-value">{{ statistics.data.value.complete_count }}</strong>
+            </div>
+            <div class="metric">
+              <span class="hint">甄别结束</span>
+              <strong class="metric-value">{{ statistics.data.value.screen_out_count }}</strong>
             </div>
             <div class="metric">
               <span class="hint">统计版本</span>
@@ -232,6 +240,9 @@ async function openReceipt(receipt: string) {
               <strong class="metric-value">{{ statistics.data.value.questions.length }}</strong>
             </div>
           </div>
+          <p class="hint">
+            总收卷 = 完整答卷 + 甄别结束；题目的分布、均值与文本回答仅统计完整答卷。
+          </p>
           <h2>回收趋势</h2>
           <p class="hint mt">按北京时间自然日统计，未列出的日期回收数为 0。</p>
           <div
@@ -262,6 +273,8 @@ async function openReceipt(receipt: string) {
           :key="`${statistics.data.value.version_id}-${question.question_id}`"
           :question="question"
           :index="index"
+          :survey-id="id"
+          :selection="selection"
           @receipt="openReceipt"
         />
       </template>
@@ -271,14 +284,15 @@ async function openReceipt(receipt: string) {
       <LoadingState v-if="responses.loading.value" />
       <template v-if="responses.data.value">
         <p class="hint mb">
-          V{{ responses.data.value.version_number }} · {{ responses.data.value.total }} 份答卷 ·
-          时间包含开始、不包含结束
+          V{{ responses.data.value.version_number }} ·
+          {{ responses.data.value.total }} 份回执（含甄别结束） · 时间包含开始、不包含结束
         </p>
         <div v-if="responses.data.value.items.length" class="table-container">
           <table>
             <thead>
               <tr>
                 <th>回执编号</th>
+                <th>状态</th>
                 <th>提交时间（北京时间）</th>
                 <th>操作</th>
               </tr>
@@ -287,6 +301,9 @@ async function openReceipt(receipt: string) {
               <tr v-for="response in responses.data.value.items" :key="response.receipt_id">
                 <td>
                   <code>{{ response.receipt_id }}</code>
+                </td>
+                <td>
+                  {{ response.outcome === 'screen_out' ? '甄别结束' : '完整答卷' }}
                 </td>
                 <td>{{ dateTime(response.submitted_at) }}</td>
                 <td>
@@ -318,7 +335,8 @@ async function openReceipt(receipt: string) {
     <ErrorNotice :message="detailError" />
     <template v-if="detail">
       <p class="eyebrow">
-        V{{ detail.version_number }} · {{ dateTime(detail.submitted_at) }}（北京时间）
+        V{{ detail.version_number }} · {{ dateTime(detail.submitted_at) }}（北京时间） ·
+        {{ detail.outcome === 'screen_out' ? '甄别结束（不生成正式答卷）' : '完整答卷' }}
       </p>
       <h2>{{ detail.document.title }}</h2>
       <code class="receipt">回执：{{ detail.receipt_id }}</code>

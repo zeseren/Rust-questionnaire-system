@@ -1,5 +1,6 @@
 //! 模板每次生成新的配置身份，条件与流程始终引用本次生成的题目。
 import { newQuestion } from './documents.ts'
+import { newId } from './uuid.ts'
 import type { DocumentLogic, Question, SurveyDocument } from './types.ts'
 
 export const surveyTemplates = [
@@ -37,7 +38,7 @@ function question<T extends Question['type']>(type: T, title: string) {
 }
 function choice(title: string, labels: string[]) {
   const result = question('single_choice', title)
-  result.options = labels.map((label) => ({ id: crypto.randomUUID(), label }))
+  result.options = labels.map((label) => ({ id: newId(), label }))
   return result
 }
 
@@ -68,7 +69,7 @@ export function createSurveyTemplate(template: SurveyTemplateId | null): SurveyD
       required: false,
     }
     const recommend = choice('你愿意将我们的服务推荐给朋友吗？', ['愿意', '暂时不会'])
-    const lowScore = crypto.randomUUID()
+    const lowScore = newId()
     document.description = '用一分钟分享你的感受，帮助我们把服务做得更好。'
     document.purpose = '了解服务满意度及改进建议，仅用于服务质量分析。'
     document.questions = [score, reason, recommend]
@@ -97,12 +98,12 @@ export function createSurveyTemplate(template: SurveyTemplateId | null): SurveyD
     document.description = '无论是否使用过，都欢迎分享你的体验与期待。'
     document.purpose = '收集产品使用反馈及需求，用于产品改进和规划。'
     document.questions = [used, experience, expectation, interest]
-    const entry = crypto.randomUUID()
-    const branch = crypto.randomUUID()
-    const returning = crypto.randomUUID()
-    const newcomer = crypto.randomUUID()
-    const join = crypto.randomUUID()
-    const end = crypto.randomUUID()
+    const entry = newId()
+    const branch = newId()
+    const returning = newId()
+    const newcomer = newId()
+    const join = newId()
+    const end = newId()
     logic.flow = {
       entry,
       nodes: [

@@ -1,6 +1,7 @@
 //! 答卷、统计和 CSV 导出。
 //!
-//! 常规读取使用 SeaORM；统计和导出只读取一次答卷结果，避免同一响应内的数据快照漂移。
+//! 常规读取使用 SeaORM；统计与导出直接读取持久化的 `outcome` 与 `question_states`，
+//! 不再按规则重算整表。分页只读取所需列，导出按 `(submitted_at, id)` 键集分批读取并在有界批次内编码。
 
 use std::{
     borrow::Cow,
@@ -11,15 +12,15 @@ use std::{
 
 use axum::{
     Json,
+    body::Body,
     extract::State,
     http::{HeaderValue, header},
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use chrono::{DateTime, FixedOffset, NaiveDate, SecondsFormat, Utc};
 use sea_orm::{
-    ConnectionTrait, FromQueryResult,
-    entity::{ColumnTrait, EntityTrait},
-    query::{PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Select},
+    ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, Select, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,8 +31,8 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::AuthUser,
-    domain::{AnswerState, Choice, Document, PreparedDocument, Question, QuestionKind},
-    entities::{response, version},
+    domain::{AnswerState, Choice, Document, Question, QuestionKind},
+    entities::{Outcome, response, version},
     error::{AppError, AppResult, ErrorResponse},
     http::{ApiPath, ApiQuery, Page, Pagination},
     repository,
@@ -41,21 +42,40 @@ use crate::{
 const SHANGHAI_OFFSET: FixedOffset =
     FixedOffset::east_opt(8 * 60 * 60).expect("UTC+08:00 是合法时区偏移");
 const TIMEZONE: &str = "Asia/Shanghai (+08:00)";
+/// 导出每批读取的行数；批次之间用 `(submitted_at, id)` 键集推进。
+const EXPORT_BATCH_ROWS: u64 = 500;
+/// CSV 固定前缀列；题目列按发布版本追加。
+const CSV_HEADER: [&str; 5] = [
+    "receipt_id",
+    "outcome",
+    "version_id",
+    "version_number",
+    "submitted_at (Asia/Shanghai +08:00)",
+];
 
 /// 所有报表一次只读取一个发布版本；省略版本时选择当前发布版本。
 #[derive(Debug, Deserialize, ToSchema, IntoParams)]
 pub(crate) struct ReportFilter {
     pub(crate) version_id: Option<Uuid>,
-    /// RFC3339 开始时间，包含该时刻；必须携带 Z 或时区偏移，精度最多 6 位小数（微秒）。
+    /// RFC3339 开始时间，包含该时刻；必须携带 Z 或时区偏移。
     #[schema(format = DateTime)]
     pub(crate) from: Option<String>,
-    /// RFC3339 结束时间，不包含该时刻；必须晚于开始时间，精度最多 6 位小数（微秒）。
+    /// RFC3339 结束时间，不包含该时刻；必须晚于开始时间。
     #[schema(format = DateTime)]
     pub(crate) to: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
 struct ResponseListQuery {
+    #[serde(flatten)]
+    filter: ReportFilter,
+    #[serde(flatten)]
+    pagination: Pagination,
+}
+
+/// 文本答案分页：版本、时间范围与分页共用报表筛选口径。
+#[derive(Debug, Deserialize)]
+struct QuestionResponsesQuery {
     #[serde(flatten)]
     filter: ReportFilter,
     #[serde(flatten)]
@@ -78,6 +98,8 @@ pub(crate) struct ReportSelection {
 struct ResponseSummary {
     receipt_id: Uuid,
     submitted_at: DateTime<FixedOffset>,
+    /// `complete` 为正常完成；`screen_out` 为筛选结束，同样计入总数但不计入各题分母。
+    outcome: Outcome,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -100,15 +122,17 @@ struct ResponseDetail {
     document: Arc<Document>,
     /// 题目 UUID 到规范化答案；未回答的可选题没有对应键。
     answers: BTreeMap<Uuid, Value>,
-    /// 每题区分已答、适用未答和规则跳过；按此答卷的历史版本重算。
+    /// 每题区分已答、适用未答和规则跳过；提交时持久化，读取时不重算。
     question_states: BTreeMap<Uuid, AnswerState>,
+    /// 该答卷的流程终点。
+    outcome: Outcome,
 }
 
 #[derive(Serialize, ToSchema)]
-struct DailyCount {
+pub(crate) struct DailyCount {
     /// Asia/Shanghai 自然日；没有提交的日期省略，等价于该日数量为 0。
-    date: NaiveDate,
-    count: u64,
+    pub(crate) date: NaiveDate,
+    pub(crate) count: u64,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -135,6 +159,8 @@ pub(crate) struct TextResponse {
 }
 
 /// 六种题型按实际类型返回对应统计，不使用无意义的通用空字段。
+///
+/// 文本答案正文不随统计返回，改用按题目分页的文本答案接口读取。
 #[derive(Serialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum QuestionStatisticsData {
@@ -146,12 +172,8 @@ pub(crate) enum QuestionStatisticsData {
         /// 多选占比分母仍是回答本题的答卷数，合计可以超过 100%。
         proportion_note: &'static str,
     },
-    Text {
-        answers: Vec<TextResponse>,
-    },
-    Textarea {
-        answers: Vec<TextResponse>,
-    },
+    Text {},
+    Textarea {},
     Number {
         /// 排除缺失值，合法 0 参与；无有效回答时为 null。
         mean: Option<f64>,
@@ -172,13 +194,13 @@ pub(crate) enum QuestionStatisticsData {
 pub(crate) struct QuestionStatistics {
     pub(crate) question_id: Uuid,
     pub(crate) title: String,
-    /// 真正回答本题的答卷数，不包括缺失值。
+    /// 真正回答本题的完成答卷数，不包括缺失值。
     pub(crate) answered_count: u64,
-    /// 进入有效路径且可见的答卷数，等于已答加适用未答。
+    /// 进入有效路径且可见的完成答卷数，等于已答加适用未答。
     pub(crate) applicable_count: u64,
-    /// 适用但没有回答的答卷数。
+    /// 适用但没有回答的完成答卷数。
     pub(crate) unanswered_count: u64,
-    /// 被分支或显示规则跳过的答卷数。
+    /// 被分支或显示规则跳过的完成答卷数。
     pub(crate) skipped_count: u64,
     #[serde(flatten)]
     pub(crate) statistics: QuestionStatisticsData,
@@ -188,7 +210,13 @@ pub(crate) struct QuestionStatistics {
 struct StatisticsResponse {
     #[serde(flatten)]
     selection: ReportSelection,
+    /// 本次筛选下的全部正式提交数，等于完成数加筛选结束数。
     total_count: u64,
+    /// `outcome = complete` 的样本数；各题统计与分母只使用这些样本。
+    complete_count: u64,
+    /// `outcome = screen_out` 的样本数；计入总数与趋势，不计入各题统计。
+    screen_out_count: u64,
+    /// 按上海自然日统计全部正式提交（含筛选结束）。
     trend: Vec<DailyCount>,
     questions: Vec<QuestionStatistics>,
 }
@@ -197,6 +225,7 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_responses))
         .routes(routes!(response_detail))
+        .routes(routes!(question_responses))
         .routes(routes!(statistics))
         .routes(routes!(export_csv))
 }
@@ -204,7 +233,8 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
 /// 分页查看本人问卷答卷
 ///
 /// 按提交时间升序、回执 UUID 升序稳定排列；总数与分页分别查询。
-/// 管理员也只能读取自己拥有的问卷；省略 `version_id` 且问卷未发布时返回 409。
+/// 每行带 `outcome`（`complete` / `screen_out`）。管理员也只能读取自己拥有的问卷；
+/// 省略 `version_id` 且问卷未发布时返回 409。
 #[utoipa::path(
     get, path = "/api/surveys/{id}/responses", tag = "答卷与报表",
     params(
@@ -237,7 +267,11 @@ async fn list_responses(
     let total = responses.clone().count(&state.db).await?;
     let rows = responses
         .select_only()
-        .columns([response::Column::Id, response::Column::SubmittedAt])
+        .columns([
+            response::Column::Id,
+            response::Column::SubmittedAt,
+            response::Column::Outcome,
+        ])
         .order_by_asc(response::Column::SubmittedAt)
         .order_by_asc(response::Column::Id)
         .offset(bounds.offset)
@@ -252,6 +286,7 @@ async fn list_responses(
                 .map(|row| ResponseSummary {
                     receipt_id: row.id,
                     submitted_at: row.submitted_at.with_timezone(&SHANGHAI_OFFSET),
+                    outcome: row.outcome,
                 })
                 .collect(),
             total,
@@ -263,6 +298,7 @@ async fn list_responses(
 /// 查看本人问卷的一份答卷及原始版本题面
 ///
 /// 不受当前发布版本、关闭或归档状态影响；不暴露填写者账号和幂等秘密。
+/// 三态读取提交时持久化的结果，因此历史答卷与当时的规则判定一致。
 #[utoipa::path(
     get, path = "/api/surveys/{id}/responses/{receipt_id}", tag = "答卷与报表",
     params(
@@ -293,48 +329,140 @@ async fn response_detail(
             response::Column::VersionId,
             response::Column::SubmittedAt,
             response::Column::Answers,
+            response::Column::QuestionStates,
+            response::Column::Outcome,
         ])
         .into_model::<ResponseContent>()
         .one(&state.db)
         .await?
         .ok_or_else(AppError::not_found)?;
-    // 版本不可变；按答卷绑定的版本加载并编译题面后再重建规则状态。
-    let version = repository::load_version(&state.db, id, row.version_id)
+    // 版本不可变；按答卷绑定的版本加载题面，答案与三态直接使用提交时的持久化结果。
+    let version = repository::load_version(&state.db, &state.versions, id, row.version_id)
         .await?
         .ok_or_else(AppError::not_found)?;
-    let row = snapshot_row(
-        &version.prepared,
-        row.id,
-        row.submitted_at,
-        serde_json::from_value(row.answers)?,
-    )?;
-    let answers = row.answers;
-    let question_states = row
-        .question_states
-        .unwrap_or_else(|| plain_question_states(version.prepared.document(), &answers));
     Ok(Json(ResponseDetail {
-        receipt_id: row.receipt_id,
+        receipt_id: row.id,
         version_id: version.id,
         version_number: version.number,
         submitted_at: row.submitted_at.with_timezone(&SHANGHAI_OFFSET),
         timezone: TIMEZONE,
         document: version.prepared.document_arc(),
-        answers,
-        question_states,
+        answers: serde_json::from_value(row.answers)?,
+        question_states: serde_json::from_value(row.question_states)?,
+        outcome: row.outcome,
     }))
+}
+
+/// 分页读取某道文本题的答案正文
+///
+/// 只返回 `outcome = complete` 的答卷；`version_id` 省略时使用当前发布版本。
+/// 题目必须属于该版本且为 `text` / `textarea`，否则返回 404 或 422。
+/// 文本过滤与分页都在 PostgreSQL 完成，不会把整表答卷读入内存。
+#[utoipa::path(
+    get, path = "/api/surveys/{id}/questions/{question_id}/responses", tag = "答卷与报表",
+    params(
+        ("id" = Uuid, Path, description = "本人问卷 UUID"),
+        ("question_id" = Uuid, Path, description = "文本题目 UUID"),
+        ReportFilter,
+        Pagination
+    ),
+    responses(
+        (status = 200, description = "按提交时间升序的文本答案分页", body = Page<TextResponse>),
+        (status = 400, description = "路径或查询参数格式错误", body = ErrorResponse),
+        (status = 401, description = "未登录或账号不可用", body = ErrorResponse),
+        (status = 404, description = "问卷、版本或题目不可访问", body = ErrorResponse),
+        (status = 409, description = "问卷尚无发布版本，code=not_published", body = ErrorResponse),
+        (status = 422, description = "题目不是文本题、分页或时间区间无效", body = ErrorResponse),
+        (status = 500, description = "服务内部错误", body = ErrorResponse)
+    ),
+    security(("cookieAuth" = []))
+)]
+async fn question_responses(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath((id, question_id)): ApiPath<(Uuid, Uuid)>,
+    ApiQuery(query): ApiQuery<QuestionResponsesQuery>,
+) -> AppResult<Json<Page<TextResponse>>> {
+    let bounds = query.pagination.bounds()?;
+    let range = TimeRange::parse(&query.filter)?;
+    let survey = repository::owned_survey_meta(&state.db, user.id, id).await?;
+    let version_id = resolve_version_id(survey.current_version_id, query.filter.version_id)?;
+    let version = repository::load_version(&state.db, &state.versions, id, version_id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
+    let is_text = version
+        .prepared
+        .document()
+        .questions
+        .iter()
+        .find(|question| question.id == question_id)
+        .map(|question| {
+            matches!(
+                &question.kind,
+                QuestionKind::Text { .. } | QuestionKind::Textarea { .. }
+            )
+        })
+        .ok_or_else(AppError::not_found)?;
+    if !is_text {
+        return Err(AppError::validation(
+            "该题目不是文本题，不能按文本答案分页读取",
+        ));
+    }
+    // JSONB 存在性过滤与分页都交给 PostgreSQL；只投影当前页需要的三列。
+    let question_key = question_id.to_string();
+    let responses = filtered_responses(id, version_id, &range)
+        .filter(response::Column::Outcome.eq(Outcome::Complete))
+        .filter(Expr::cust_with_values(
+            "\"responses\".\"answers\" ? $1",
+            [question_key.clone()],
+        ));
+    let total = responses.clone().count(&state.db).await?;
+    let rows = responses
+        .select_only()
+        .columns([
+            response::Column::Id,
+            response::Column::SubmittedAt,
+            response::Column::Answers,
+        ])
+        .order_by_asc(response::Column::SubmittedAt)
+        .order_by_asc(response::Column::Id)
+        .offset(bounds.offset)
+        .limit(bounds.limit)
+        .into_model::<TextRow>()
+        .all(&state.db)
+        .await?;
+    let items = rows
+        .into_iter()
+        .map(|row| -> AppResult<TextResponse> {
+            let Value::Object(mut answers) = row.answers else {
+                return Err(invalid_stored_answer());
+            };
+            let Some(Value::String(value)) = answers.remove(&question_key) else {
+                return Err(invalid_stored_answer());
+            };
+            Ok(TextResponse {
+                receipt_id: row.id,
+                submitted_at: row.submitted_at.with_timezone(&SHANGHAI_OFFSET),
+                value,
+            })
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    Ok(Json(Page::new(items, total, bounds)))
 }
 
 /// 统计本人问卷选定版本
 ///
-/// 总数、趋势、分布和分母均由一次 SELECT 的固定结果计算；不会混合版本。
+/// 总数、完成数、筛选结束数、趋势与各题分布都由一次固定结果计算，不会混合版本。
+/// `total_count = complete_count + screen_out_count`；趋势按全部正式提交的上海自然日分组。
+/// 各题分布、均值与三态计数只统计 `outcome = complete` 的样本，页面必须清晰标明该口径。
 /// 选择题占比以该题有效回答数为分母，多选占比之和可超过 100%。
 /// 缺失不参与数值统计，合法 0 参与；零分母的占比和均值返回 null。
-/// 适用数等于已答加适用未答；适用数加规则跳过数等于本次答卷总数。
+/// 适用数等于已答加适用未答；适用数加规则跳过数等于完成样本数。
 #[utoipa::path(
     get, path = "/api/surveys/{id}/statistics", tag = "答卷与报表",
     params(("id" = Uuid, Path, description = "本人问卷 UUID"), ReportFilter),
     responses(
-        (status = 200, description = "一致快照统计，趋势按上海自然日分组", body = StatisticsResponse),
+        (status = 200, description = "完成样本统计；趋势含筛选结束", body = StatisticsResponse),
         (status = 400, description = "路径或查询参数格式错误", body = ErrorResponse),
         (status = 401, description = "未登录或账号不可用", body = ErrorResponse),
         (status = 404, description = "问卷或版本不可访问", body = ErrorResponse),
@@ -355,19 +483,21 @@ async fn statistics(
     let LoadedReport {
         version_id,
         version_number,
-        prepared,
+        document,
         stored,
     } = loaded;
-    // JSONB 解码、规则重建与逐题汇总都在同一个阻塞任务内完成，避免两次线程切换。
+    // JSONB 解码与逐题汇总都在同一个阻塞任务内完成，避免两次线程切换。
     let summary = tokio::task::spawn_blocking(move || {
-        let rows = snapshot_rows(&prepared, stored)?;
-        summarize_report(&prepared, &rows)
+        let rows = decode_rows(stored)?;
+        summarize_report(&document, &rows)
     })
     .await
     .map_err(|error| AppError::internal(error))??;
     Ok(Json(StatisticsResponse {
         selection: range.selection(version_id, version_number),
         total_count: summary.total_count,
+        complete_count: summary.complete_count,
+        screen_out_count: summary.screen_out_count,
         trend: summary.trend,
         questions: summary.questions,
     }))
@@ -375,11 +505,10 @@ async fn statistics(
 
 /// 导出本人问卷选定版本的 UTF-8 CSV
 ///
-/// 每次下载重新认证并校验归属；一次 SELECT 固定导出行，按提交时间和回执升序。
-/// 表头包含版本、提交时间（Asia/Shanghai +08:00）、题目 UUID 和标题。
-/// 多选是一个字段内的 JSON 数组，缺失留空；带规则的版本在每题后增加状态列，区分适用未答与规则跳过。
-/// 无规则历史版本的列与值格式保持不变；所有字段统一防护公式注入，再按 CSV 规则转义。
-/// 为保持电子表格安全，以等号、加减号或 @ 开头的单元格会加单引号，含前导空白/控制字符的绕过同样处理。
+/// 每次下载重新认证并校验归属；按 `(submitted_at, id)` 键集每 500 行批量读取，逐批编码后按序拼装响应体。
+/// 表头固定为回执、流程终点、版本、提交时间（Asia/Shanghai +08:00），随后是题目 UUID 与标题；
+/// 带规则的版本在每题后增加状态列。多选是一个字段内的 JSON 数组，缺失留空。
+/// 所有字段统一防护公式注入，再按 CSV 规则转义；导出不把整表答卷读入内存。
 #[utoipa::path(
     get, path = "/api/surveys/{id}/export.csv", tag = "答卷与报表",
     params(("id" = Uuid, Path, description = "本人问卷 UUID"), ReportFilter),
@@ -403,21 +532,37 @@ async fn export_csv(
     ApiQuery(filter): ApiQuery<ReportFilter>,
 ) -> AppResult<Response> {
     let range = TimeRange::parse(&filter)?;
-    let loaded = load_report(&state, user.id, id, filter.version_id, &range).await?;
-    let LoadedReport {
-        version_id,
-        version_number,
-        prepared,
-        stored,
-    } = loaded;
-    // 行解码、规则状态重建与 CSV 编码都在同一个阻塞任务内完成，避免两次线程切换。
-    let bytes = tokio::task::spawn_blocking(move || {
-        let rows = snapshot_rows(&prepared, stored)?;
-        encode_csv(prepared.document(), version_id, version_number, &rows)
-    })
-    .await
-    .map_err(|error| AppError::internal(error))??;
-    let mut response = bytes.into_response();
+    let survey = repository::owned_survey_meta(&state.db, user.id, id).await?;
+    let version_id = resolve_version_id(survey.current_version_id, filter.version_id)?;
+    let version = repository::load_version(&state.db, &state.versions, id, version_id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
+    let document = version.prepared.document_arc();
+    let version_number = version.number;
+    // 表头只编码一次，随后按 `(submitted_at, id)` 键集每 500 行读取一批；
+    // 批次有界，既不会把整表答案一次性读入，也不会重复解析版本题面。
+    let mut bytes = encode_csv_header(&document)?;
+    let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
+    loop {
+        let stored =
+            fetch_export_batch(&state.db, id, version_id, &range, cursor, EXPORT_BATCH_ROWS)
+                .await?;
+        let Some(last) = stored.last() else { break };
+        cursor = Some((last.submitted_at, last.id));
+        let batch_is_partial = (stored.len() as u64) < EXPORT_BATCH_ROWS;
+        let document = Arc::clone(&document);
+        let batch = tokio::task::spawn_blocking(move || {
+            let rows = decode_rows(stored)?;
+            encode_csv_rows(&document, version_id, version_number, &rows)
+        })
+        .await
+        .map_err(|error| AppError::internal(error))??;
+        bytes.extend_from_slice(&batch);
+        if batch_is_partial {
+            break;
+        }
+    }
+    let mut response = Response::new(Body::from(bytes));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/csv; charset=utf-8"),
@@ -441,22 +586,9 @@ pub(crate) struct TimeRange {
 impl TimeRange {
     pub(crate) fn parse(filter: &ReportFilter) -> AppResult<Self> {
         fn timestamp(value: &str) -> AppResult<DateTime<Utc>> {
-            let time = DateTime::parse_from_rfc3339(value)
-                .map_err(|_| AppError::validation("时间必须是包含时区的 RFC3339 格式"))?;
-            // PostgreSQL 只保存微秒；也检查原文，避免 chrono 先截断超过纳秒的非零尾数。
-            let sub_microsecond = value.split_once('.').is_some_and(|(_, fraction)| {
-                fraction
-                    .bytes()
-                    .take_while(u8::is_ascii_digit)
-                    .skip(6)
-                    .any(|digit| digit != b'0')
-            });
-            if !time.timestamp_subsec_nanos().is_multiple_of(1000) || sub_microsecond {
-                return Err(AppError::validation(
-                    "时间精度最多为 6 位小数（微秒），不能静默截断",
-                ));
-            }
-            Ok(time.with_timezone(&Utc))
+            DateTime::parse_from_rfc3339(value)
+                .map(|time| time.with_timezone(&Utc))
+                .map_err(|_| AppError::validation("时间必须是包含时区的 RFC3339 格式"))
         }
         let from = filter.from.as_deref().map(timestamp).transpose()?;
         let to = filter.to.as_deref().map(timestamp).transpose()?;
@@ -508,11 +640,11 @@ async fn selected_version_meta(
         .ok_or_else(AppError::not_found)
 }
 
-/// 统计与导出共用的单次读取结果：版本标识、已编译题面和原始答卷行。
+/// 统计共用的单次读取结果：版本标识、不可变题面和原始答卷行。
 struct LoadedReport {
     version_id: Uuid,
     version_number: i32,
-    prepared: PreparedDocument,
+    document: Arc<Document>,
     stored: Vec<StoredResponseRow>,
 }
 
@@ -526,7 +658,7 @@ async fn load_report(
     let survey = repository::owned_survey_meta(&state.db, owner_id, survey_id).await?;
     let version_id = resolve_version_id(survey.current_version_id, version_id)?;
     // 校验版本归属并编译题面；答卷随后按同一版本读取，解码与汇总交给阻塞线程。
-    let version = repository::load_version(&state.db, survey_id, version_id)
+    let version = repository::load_version(&state.db, &state.versions, survey_id, version_id)
         .await?
         .ok_or_else(AppError::not_found)?;
     let stored = filtered_responses(survey_id, version_id, range)
@@ -535,6 +667,8 @@ async fn load_report(
             response::Column::Id,
             response::Column::SubmittedAt,
             response::Column::Answers,
+            response::Column::QuestionStates,
+            response::Column::Outcome,
         ])
         .order_by_asc(response::Column::SubmittedAt)
         .order_by_asc(response::Column::Id)
@@ -544,7 +678,7 @@ async fn load_report(
     Ok(LoadedReport {
         version_id,
         version_number: version.number,
-        prepared: version.prepared,
+        document: version.prepared.document_arc(),
         stored,
     })
 }
@@ -553,6 +687,7 @@ async fn load_report(
 struct ResponseHead {
     id: Uuid,
     submitted_at: DateTime<Utc>,
+    outcome: Outcome,
 }
 
 #[derive(FromQueryResult)]
@@ -561,6 +696,25 @@ struct ResponseContent {
     version_id: Uuid,
     submitted_at: DateTime<Utc>,
     answers: Value,
+    question_states: Value,
+    outcome: Outcome,
+}
+
+#[derive(FromQueryResult)]
+struct TextRow {
+    id: Uuid,
+    submitted_at: DateTime<Utc>,
+    answers: Value,
+}
+
+/// 导出与统计共用的持久化行投影；不携带填写者身份或幂等哈希。
+#[derive(FromQueryResult)]
+struct StoredResponseRow {
+    id: Uuid,
+    submitted_at: DateTime<Utc>,
+    answers: Value,
+    question_states: Value,
+    outcome: Outcome,
 }
 
 fn filtered_responses(
@@ -580,95 +734,85 @@ fn filtered_responses(
     query
 }
 
-#[derive(FromQueryResult)]
-struct StoredResponseRow {
-    id: Uuid,
-    submitted_at: DateTime<Utc>,
-    answers: Value,
+/// 键集分页读取导出行：时间与回执同时比较，避免同一微秒内的记录被跳过或重复。
+async fn fetch_export_batch(
+    db: &impl ConnectionTrait,
+    survey_id: Uuid,
+    version_id: Uuid,
+    range: &TimeRange,
+    after: Option<(DateTime<Utc>, Uuid)>,
+    limit: u64,
+) -> AppResult<Vec<StoredResponseRow>> {
+    let mut query = filtered_responses(survey_id, version_id, range)
+        .select_only()
+        .columns([
+            response::Column::Id,
+            response::Column::SubmittedAt,
+            response::Column::Answers,
+            response::Column::QuestionStates,
+            response::Column::Outcome,
+        ]);
+    if let Some((submitted_at, id)) = after {
+        query = query.filter(
+            Condition::any()
+                .add(response::Column::SubmittedAt.gt(submitted_at))
+                .add(
+                    Condition::all()
+                        .add(response::Column::SubmittedAt.eq(submitted_at))
+                        .add(response::Column::Id.gt(id)),
+                ),
+        );
+    }
+    Ok(query
+        .order_by_asc(response::Column::SubmittedAt)
+        .order_by_asc(response::Column::Id)
+        .limit(limit)
+        .into_model::<StoredResponseRow>()
+        .all(db)
+        .await?)
 }
 
-// 适用性只来自历史版本重建；不按当前草稿推断，也不从答案是否缺失猜测跳题。
+/// 已解码的一条答卷：答案、持久化三态与流程终点。
 pub(crate) struct SnapshotRow {
     pub(crate) receipt_id: Uuid,
     pub(crate) submitted_at: DateTime<Utc>,
     pub(crate) answers: BTreeMap<Uuid, Value>,
-    pub(crate) question_states: Option<BTreeMap<Uuid, AnswerState>>,
+    pub(crate) question_states: BTreeMap<Uuid, AnswerState>,
+    pub(crate) outcome: Outcome,
 }
 
-pub(crate) fn snapshot_row(
-    prepared: &PreparedDocument,
-    receipt_id: Uuid,
-    submitted_at: DateTime<Utc>,
-    answers: BTreeMap<Uuid, Value>,
-) -> AppResult<SnapshotRow> {
-    let (answers, question_states) = if prepared.document().logic.is_some() {
-        // 只重建答案与三态，不为报表分配用不到的路径 UUID 列表。
-        let (answers, question_states) = prepared
-            .evaluate_stored_states(&answers)
-            .map_err(|error| AppError::internal(error))?;
-        (answers, Some(question_states))
-    } else {
-        (answers, None)
-    };
+fn snapshot_row(stored: StoredResponseRow) -> AppResult<SnapshotRow> {
     Ok(SnapshotRow {
-        receipt_id,
-        submitted_at,
-        answers,
-        question_states,
+        receipt_id: stored.id,
+        submitted_at: stored.submitted_at,
+        answers: serde_json::from_value(stored.answers)?,
+        question_states: serde_json::from_value(stored.question_states)?,
+        outcome: stored.outcome,
     })
 }
 
-pub(crate) fn plain_question_states(
-    document: &Document,
-    answers: &BTreeMap<Uuid, Value>,
-) -> BTreeMap<Uuid, AnswerState> {
-    document
-        .questions
-        .iter()
-        .map(|question| {
-            (
-                question.id,
-                if answers.contains_key(&question.id) {
-                    AnswerState::Answered
-                } else {
-                    AnswerState::Unanswered
-                },
-            )
-        })
-        .collect()
-}
-
-/// 供阻塞线程把存储行解码并重建规则状态；求值器来自同一份已编译文档。
-fn snapshot_rows(
-    prepared: &PreparedDocument,
-    stored: Vec<StoredResponseRow>,
-) -> AppResult<Vec<SnapshotRow>> {
-    stored
-        .into_iter()
-        .map(|row| {
-            snapshot_row(
-                prepared,
-                row.id,
-                row.submitted_at,
-                serde_json::from_value(row.answers)?,
-            )
-        })
-        .collect()
+fn decode_rows(stored: Vec<StoredResponseRow>) -> AppResult<Vec<SnapshotRow>> {
+    stored.into_iter().map(snapshot_row).collect()
 }
 
 /// 统计响应的固定部分：总数、按上海自然日的趋势与逐题统计。
-struct ReportStatistics {
-    total_count: u64,
-    trend: Vec<DailyCount>,
-    questions: Vec<QuestionStatistics>,
+pub(crate) struct ReportStatistics {
+    pub(crate) total_count: u64,
+    pub(crate) complete_count: u64,
+    pub(crate) screen_out_count: u64,
+    pub(crate) trend: Vec<DailyCount>,
+    pub(crate) questions: Vec<QuestionStatistics>,
 }
 
-fn summarize_report(
-    prepared: &PreparedDocument,
+pub(crate) fn summarize_report(
+    document: &Document,
     rows: &[SnapshotRow],
 ) -> AppResult<ReportStatistics> {
     let mut dates = BTreeMap::new();
+    let mut complete_count = 0u64;
+    let mut screen_out_count = 0u64;
     for row in rows {
+        // 趋势按全部正式提交（含筛选结束）统计，与 total_count 一致。
         *dates
             .entry(
                 row.submitted_at
@@ -676,15 +820,20 @@ fn summarize_report(
                     .date_naive(),
             )
             .or_insert(0) += 1;
+        match row.outcome {
+            Outcome::Complete => complete_count += 1,
+            Outcome::ScreenOut => screen_out_count += 1,
+        }
     }
-    let questions = prepared
-        .document()
+    let questions = document
         .questions
         .iter()
         .map(|question| summarize_question(question, rows))
         .collect::<AppResult<Vec<_>>>()?;
     Ok(ReportStatistics {
-        total_count: rows.len() as u64,
+        total_count: complete_count + screen_out_count,
+        complete_count,
+        screen_out_count,
         trend: dates
             .into_iter()
             .map(|(date, count)| DailyCount { date, count })
@@ -693,9 +842,21 @@ fn summarize_report(
     })
 }
 
+/// 各题只统计 `outcome = complete` 的样本；筛选结束不计入任何题目分母。
 pub(crate) fn summarize_question(
     question: &Question,
     rows: &[SnapshotRow],
+) -> AppResult<QuestionStatistics> {
+    let complete: Vec<&SnapshotRow> = rows
+        .iter()
+        .filter(|row| row.outcome == Outcome::Complete)
+        .collect();
+    summarize_complete_question(question, &complete)
+}
+
+fn summarize_complete_question(
+    question: &Question,
+    rows: &[&SnapshotRow],
 ) -> AppResult<QuestionStatistics> {
     let mut answered_count = 0u64;
     let mut skipped_count = 0u64;
@@ -720,22 +881,14 @@ pub(crate) fn summarize_question(
             }
         }
         QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => {
-            let mut answers = Vec::new();
+            // 正文通过文本答案分页接口读取；统计只保留计数与三态。
             for row in rows {
-                if let Some(value) =
-                    observe_row(row, question.id, &mut answered_count, &mut skipped_count)
-                {
-                    answers.push(TextResponse {
-                        receipt_id: row.receipt_id,
-                        submitted_at: row.submitted_at.with_timezone(&SHANGHAI_OFFSET),
-                        value: value.as_str().ok_or_else(invalid_stored_answer)?.to_owned(),
-                    });
-                }
+                let _ = observe_row(row, question.id, &mut answered_count, &mut skipped_count);
             }
             if is_textarea {
-                QuestionStatisticsData::Textarea { answers }
+                QuestionStatisticsData::Textarea {}
             } else {
-                QuestionStatisticsData::Text { answers }
+                QuestionStatisticsData::Text {}
             }
         }
         QuestionKind::Number { .. } => {
@@ -801,12 +954,7 @@ fn observe_row<'a>(
     answered_count: &mut u64,
     skipped_count: &mut u64,
 ) -> Option<&'a Value> {
-    if row
-        .question_states
-        .as_ref()
-        .and_then(|states| states.get(&question_id))
-        == Some(&AnswerState::Skipped)
-    {
+    if row.question_states.get(&question_id) == Some(&AnswerState::Skipped) {
         *skipped_count += 1;
     }
     let value = row.answers.get(&question_id)?;
@@ -817,7 +965,7 @@ fn observe_row<'a>(
 fn summarize_choices(
     options: &[Choice],
     question_id: Uuid,
-    rows: &[SnapshotRow],
+    rows: &[&SnapshotRow],
     answered_count: &mut u64,
     skipped_count: &mut u64,
 ) -> AppResult<Vec<OptionFrequency>> {
@@ -860,51 +1008,57 @@ pub(crate) fn invalid_stored_answer() -> AppError {
     AppError::internal("已保存答案与发布题型不一致")
 }
 
+/// 运行均值：先按已有计数还原总和，再并入新值；`count` 从 1 开始。
+///
+/// `(mean * (count - 1) + value) / count` 对最大正负浮点也保持有限结果，
+/// 且只有一次乘加，不引入额外的溢出防护分支。
 pub(crate) fn update_mean(mean: &mut f64, value: f64, count: u64) {
-    let weight = 1.0 / count as f64;
-    // 同号时差值不会溢出；异号时改用加权形式，避免 MAX - (-MAX) 溢出。
-    if mean.is_sign_positive() == value.is_sign_positive() {
-        *mean += (value - *mean) * weight;
-    } else {
-        *mean = *mean * (1.0 - weight) + value * weight;
+    *mean = (*mean * (count.saturating_sub(1) as f64) + value) / count as f64;
+}
+
+fn outcome_text(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Complete => "complete",
+        Outcome::ScreenOut => "screen_out",
     }
 }
 
-pub(crate) fn encode_csv(
-    document: &Document,
-    version_id: Uuid,
-    version_number: i32,
-    rows: &[SnapshotRow],
-) -> AppResult<Vec<u8>> {
-    #[track_caller]
-    fn write_cell(writer: &mut csv::Writer<Vec<u8>>, cell: &str) -> AppResult<()> {
-        writer
-            .write_field(formula_safe(cell).as_bytes())
-            .map_err(|error| AppError::internal(error))
+fn state_text(state: AnswerState) -> &'static str {
+    match state {
+        AnswerState::Answered => "已答",
+        AnswerState::Unanswered => "适用未答",
+        AnswerState::Skipped => "规则跳过",
     }
-    let estimated_bytes = rows
-        .len()
-        .saturating_mul(document.questions.len() * 16 + 64)
-        .saturating_add(128)
-        .min(16 << 20);
-    let mut writer = csv::WriterBuilder::new()
+}
+
+fn csv_writer() -> csv::Writer<Vec<u8>> {
+    csv::WriterBuilder::new()
         .terminator(csv::Terminator::CRLF)
-        .from_writer(Vec::with_capacity(estimated_bytes));
-    let version_id = version_id.to_string();
-    let version_number = version_number.to_string();
-    let with_states = document.logic.is_some();
-    for header in [
-        "receipt_id",
-        "version_id",
-        "version_number",
-        "submitted_at (Asia/Shanghai +08:00)",
-    ] {
+        .from_writer(Vec::with_capacity(4 << 10))
+}
+
+#[track_caller]
+fn write_cell(writer: &mut csv::Writer<Vec<u8>>, cell: &str) -> AppResult<()> {
+    writer
+        .write_field(formula_safe(cell).as_bytes())
+        .map_err(|error| AppError::internal(error))
+}
+
+fn finish_writer(writer: csv::Writer<Vec<u8>>) -> AppResult<Vec<u8>> {
+    writer
+        .into_inner()
+        .map_err(|error| AppError::internal(error))
+}
+
+/// CSV 表头：固定前缀列 + 题目列（有规则时每题后追加状态列）。
+pub(crate) fn encode_csv_header(document: &Document) -> AppResult<Vec<u8>> {
+    let mut writer = csv_writer();
+    for header in CSV_HEADER {
         write_cell(&mut writer, header)?;
     }
-    let mut id_buf = Uuid::encode_buffer();
-    // 单个缓冲区复用整次导出，避免每个单元格与表头都分配新字符串。
+    let with_states = document.logic.is_some();
+    // 单个缓冲区复用整次表头编码，避免每个单元格都分配新字符串。
     let mut header_buf: String = String::with_capacity(128);
-    let mut json_buf: Vec<u8> = Vec::with_capacity(128);
     for question in &document.questions {
         header_buf.clear();
         write!(&mut header_buf, "{} [{}]", question.title, question.id)
@@ -920,25 +1074,37 @@ pub(crate) fn encode_csv(
     writer
         .write_record(std::iter::empty::<&[u8]>())
         .map_err(|error| AppError::internal(error))?;
-    for SnapshotRow {
-        receipt_id,
-        submitted_at,
-        answers,
-        question_states,
-    } in rows
-    {
+    finish_writer(writer)
+}
+
+/// 一批答卷的 CSV 记录（不含表头）；调用方按批拼接。
+pub(crate) fn encode_csv_rows(
+    document: &Document,
+    version_id: Uuid,
+    version_number: i32,
+    rows: &[SnapshotRow],
+) -> AppResult<Vec<u8>> {
+    let mut writer = csv_writer();
+    let version_id = version_id.to_string();
+    let version_number = version_number.to_string();
+    let with_states = document.logic.is_some();
+    let mut id_buf = Uuid::encode_buffer();
+    let mut json_buf: Vec<u8> = Vec::with_capacity(128);
+    for row in rows {
         write_cell(
             &mut writer,
-            receipt_id.hyphenated().encode_lower(&mut id_buf),
+            row.receipt_id.hyphenated().encode_lower(&mut id_buf),
         )?;
+        write_cell(&mut writer, outcome_text(row.outcome))?;
         write_cell(&mut writer, &version_id)?;
         write_cell(&mut writer, &version_number)?;
-        let timestamp = submitted_at
+        let timestamp = row
+            .submitted_at
             .with_timezone(&SHANGHAI_OFFSET)
             .to_rfc3339_opts(SecondsFormat::AutoSi, false);
         write_cell(&mut writer, &timestamp)?;
         for question in &document.questions {
-            match answers.get(&question.id) {
+            match row.answers.get(&question.id) {
                 None => write_cell(&mut writer, "")?,
                 Some(Value::String(value)) => write_cell(&mut writer, value)?,
                 // 多选保持 JSON 数组，不用逗号连接，以免丢失集合与 CSV 字段边界。
@@ -950,22 +1116,38 @@ pub(crate) fn encode_csv(
                     write_cell(&mut writer, json)?;
                 }
             }
-            if let Some(states) = &question_states {
-                let state = match states[&question.id] {
-                    AnswerState::Answered => "已答",
-                    AnswerState::Unanswered => "适用未答",
-                    AnswerState::Skipped => "规则跳过",
-                };
-                write_cell(&mut writer, state)?;
+            if with_states {
+                let state = row
+                    .question_states
+                    .get(&question.id)
+                    .copied()
+                    .ok_or_else(invalid_stored_answer)?;
+                write_cell(&mut writer, state_text(state))?;
             }
         }
         writer
             .write_record(std::iter::empty::<&[u8]>())
             .map_err(|error| AppError::internal(error))?;
     }
-    writer
-        .into_inner()
-        .map_err(|error| AppError::internal(error))
+    finish_writer(writer)
+}
+
+/// 表头与全部行的完整编码；供小批量测试和一次性场景使用。
+#[cfg(test)]
+pub(crate) fn encode_csv(
+    document: &Document,
+    version_id: Uuid,
+    version_number: i32,
+    rows: &[SnapshotRow],
+) -> AppResult<Vec<u8>> {
+    let mut bytes = encode_csv_header(document)?;
+    bytes.extend_from_slice(&encode_csv_rows(
+        document,
+        version_id,
+        version_number,
+        rows,
+    )?);
+    Ok(bytes)
 }
 
 pub(crate) fn formula_safe(value: &str) -> Cow<'_, str> {

@@ -27,6 +27,7 @@ use crate::{
     domain::Document,
     entities::{SurveyStatus, UserRole, survey, user},
     error::AppError,
+    repository::VersionCache,
     security::Limits,
 };
 
@@ -38,6 +39,8 @@ pub(crate) fn test_config() -> Config {
         listen: "127.0.0.1:3000".parse().expect("测试监听地址合法"),
         public_origin: "http://localhost:3000".to_owned(),
         cookie_secure: false,
+        allow_insecure_http: false,
+        trust_proxy: false,
         session_ttl_seconds: 3_600,
         auth_requests_per_minute: 2,
         submissions_per_minute: 3,
@@ -50,6 +53,7 @@ pub(crate) fn test_state() -> AppState {
         db: DatabaseConnection::default(),
         config: Arc::new(test_config()),
         limits: Arc::new(Limits::new()),
+        versions: Arc::new(VersionCache::new()),
     }
 }
 

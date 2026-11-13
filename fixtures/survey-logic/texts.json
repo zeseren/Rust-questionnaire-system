@@ -361,6 +361,189 @@
       "error": "invalid_reference",
       "line": 4,
       "column": 6
+    },
+    {
+      "name": "三元条件编译为if且分支类型必须一致",
+      "replacements": [
+        [
+          "1 / 0",
+          "if selected(choose, yes) then 3 else 1"
+        ]
+      ],
+      "edits": [
+        {
+          "path": [
+            "variables",
+            1,
+            "expression"
+          ],
+          "value": {
+            "op": "if",
+            "condition": {
+              "op": "selected",
+              "question_id": "00000000-0000-4000-8000-000000000001",
+              "option_id": "00000000-0000-4000-8000-000000000101"
+            },
+            "then_branch": {
+              "op": "number",
+              "value": "3"
+            },
+            "else_branch": {
+              "op": "number",
+              "value": "1"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "一元负号允许空格并作用于答案",
+      "replacements": [
+        [
+          "1 / 0",
+          "- answer(amount)"
+        ]
+      ],
+      "edits": [
+        {
+          "path": [
+            "variables",
+            1,
+            "expression"
+          ],
+          "value": {
+            "op": "negate",
+            "value": {
+              "op": "answer",
+              "question_id": "00000000-0000-4000-8000-000000000002"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "文本包含函数编译为布尔判断",
+      "replacements": [
+        [
+          "let broken: number = 1 / 0;",
+          "let broken: boolean = contains(\"反馈\", \"馈\");"
+        ]
+      ],
+      "edits": [
+        {
+          "path": [
+            "variables",
+            1,
+            "value_type"
+          ],
+          "value": "boolean"
+        },
+        {
+          "path": [
+            "variables",
+            1,
+            "expression"
+          ],
+          "value": {
+            "op": "contains",
+            "text": {
+              "op": "text",
+              "value": "反馈"
+            },
+            "substring": {
+              "op": "text",
+              "value": "馈"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "文本前缀函数编译为布尔判断",
+      "replacements": [
+        [
+          "let broken: number = 1 / 0;",
+          "let broken: boolean = starts_with(\"反馈\", \"反\");"
+        ]
+      ],
+      "edits": [
+        {
+          "path": [
+            "variables",
+            1,
+            "value_type"
+          ],
+          "value": "boolean"
+        },
+        {
+          "path": [
+            "variables",
+            1,
+            "expression"
+          ],
+          "value": {
+            "op": "starts_with",
+            "text": {
+              "op": "text",
+              "value": "反馈"
+            },
+            "prefix": {
+              "op": "text",
+              "value": "反"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "单选身份可以比较相等",
+      "replacements": [
+        [
+          "let broken: number = 1 / 0;",
+          "let broken: boolean = answer(choose) == answer(choose);"
+        ]
+      ],
+      "edits": [
+        {
+          "path": [
+            "variables",
+            1,
+            "value_type"
+          ],
+          "value": "boolean"
+        },
+        {
+          "path": [
+            "variables",
+            1,
+            "expression"
+          ],
+          "value": {
+            "op": "compare",
+            "comparison": "eq",
+            "left": {
+              "op": "answer",
+              "question_id": "00000000-0000-4000-8000-000000000001"
+            },
+            "right": {
+              "op": "answer",
+              "question_id": "00000000-0000-4000-8000-000000000001"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "多分支节点的错误定位到具体when行",
+      "replacements": [
+        [
+          "  when selected(choose, yes) -> left;",
+          "  when selected(choose, yes) -> left;\n  when 42 -> left;"
+        ]
+      ],
+      "error": "type_mismatch",
+      "line": 24,
+      "column": 3
     }
   ],
   "format_cases": [
@@ -1365,6 +1548,70 @@
         }
       },
       "expected": "dsl 1 semantics 1;\nbind question q1 = \"00000000-0000-4000-8000-000000000001\";\nbind option q1_o1 = \"00000000-0000-4000-8000-000000000101\";\nbind option q1_o2 = \"00000000-0000-4000-8000-000000000102\";\nbind question q2 = \"00000000-0000-4000-8000-000000000002\";\nbind option q2_o1 = \"00000000-0000-4000-8000-000000000103\";\nbind option q2_o2 = \"00000000-0000-4000-8000-000000000104\";\nbind question q3 = \"00000000-0000-4000-8000-000000000003\";\nbind question q4 = \"00000000-0000-4000-8000-000000000004\";\nbind question q5 = \"00000000-0000-4000-8000-000000000005\";\nbind question q6 = \"00000000-0000-4000-8000-000000000006\";\nbind variable v1 = \"00000000-0000-4000-8000-000000002001\";\nbind variable v2 = \"00000000-0000-4000-8000-000000002002\";\nbind variable v3 = \"00000000-0000-4000-8000-000000002003\";\nbind variable v4 = \"00000000-0000-4000-8000-000000002004\";\nbind variable v5 = \"00000000-0000-4000-8000-000000002005\";\nbind node n1 = \"00000000-0000-4000-8000-000000001001\";\nbind node n2 = \"00000000-0000-4000-8000-000000001002\";\nbind node n3 = \"00000000-0000-4000-8000-000000001003\";\nbind node n4 = \"00000000-0000-4000-8000-000000001007\";\nbind node n5 = \"00000000-0000-4000-8000-000000001004\";\nbind node n6 = \"00000000-0000-4000-8000-000000001005\";\nbind node n7 = \"00000000-0000-4000-8000-000000001006\";\nbind node n8 = \"00000000-0000-4000-8000-000000001008\";\n\nlet v1: number = (number(\"1.5\") + (number(\"2\") * number(\"0.25\")));\nlet v2: number = length(\"中文😀\");\nlet v3: number = coalesce((variable(v1) - number(\"0\")), number(\"0\"));\nlet v4: number = (variable(v3) / number(\"4\"));\nlet v5: boolean = !(answered(q1));\nvisible q3 = (\"yes\" == \"yes\");\nrequired q3 = (\"a\" != \"b\");\nvisible q4 = any(variable(v5), false);\nvalidate q4 = all((answer(q4) < number(\"10\")), (answer(q4) <= number(\"9\")), (answer(q4) > number(\"0\")), (variable(v1) >= number(\"2\")));\nvalidate q2 = contains_all(q2, [q2_o1, q2_o2]);\nvalidate q6 = (number(\"1.2300e+2\") == number(\"-0.0\"));\nentry n1;\npage n1 [q1, q2] -> n2;\nbranch n2 {\n  when selected(q1, q1_o1) -> n3;\n  when contains_any(q2, [q2_o2]) -> n5;\n  when all(true, variable(v5)) -> n6;\n  else -> n7;\n}\npage n3 [q3, q4] -> n4;\nbranch n4 {\n  when coalesce((variable(v4) > number(\"0\")), false) -> n6;\n  else -> n7;\n}\npage n5 [q5] -> n7;\npage n6 [q6] -> n8;\nend n7 = screen_out;\nend n8 = complete;\n"
+    },
+    {
+      "name": "三元负号与文本函数输出可再次解析",
+      "questions": [
+        {
+          "id": "00000000-0000-4000-8000-000000003001",
+          "title": "文本",
+          "required": false,
+          "type": "text",
+          "max_length": 200
+        }
+      ],
+      "logic": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+          {
+            "id": "00000000-0000-4000-8000-000000003002",
+            "value_type": "number",
+            "expression": {
+              "op": "if",
+              "condition": {
+                "op": "contains",
+                "text": {
+                  "op": "answer",
+                  "question_id": "00000000-0000-4000-8000-000000003001"
+                },
+                "substring": {
+                  "op": "text",
+                  "value": "甲"
+                }
+              },
+              "then_branch": {
+                "op": "negate",
+                "value": {
+                  "op": "number",
+                  "value": "2"
+                }
+              },
+              "else_branch": {
+                "op": "number",
+                "value": "1"
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000003003",
+            "value_type": "boolean",
+            "expression": {
+              "op": "starts_with",
+              "text": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000003001"
+              },
+              "prefix": {
+                "op": "text",
+                "value": "甲"
+              }
+            }
+          }
+        ],
+        "rules": []
+      },
+      "expected": "dsl 1 semantics 1;\nbind question q1 = \"00000000-0000-4000-8000-000000003001\";\nbind variable v1 = \"00000000-0000-4000-8000-000000003002\";\nbind variable v2 = \"00000000-0000-4000-8000-000000003003\";\n\nlet v1: number = if contains(answer(q1), \"甲\") then -(number(\"2\")) else number(\"1\");\nlet v2: boolean = starts_with(answer(q1), \"甲\");\n"
     }
   ]
 }

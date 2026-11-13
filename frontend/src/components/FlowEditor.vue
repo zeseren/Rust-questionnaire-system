@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { computed, nextTick } from 'vue'
 import { insertFlowNode } from '../flow-tools'
+import { newId } from '../uuid'
 import type { ComputedVariable, FlowBranch, FlowDefinition, FlowNode, Question } from '../types'
 import ConditionBuilder from './ConditionBuilder.vue'
 import FlowTarget from './FlowTarget.vue'
@@ -15,13 +16,13 @@ const flow = defineModel<FlowDefinition | null | undefined>({ required: true })
 const props = defineProps<{ questions: Question[]; variables: ComputedVariable[] }>()
 function start(perQuestion = false) {
   if (!props.questions.length) return
-  const end = crypto.randomUUID()
+  const end = newId()
   const groups = perQuestion
     ? props.questions.map((question) => [question.id])
     : [props.questions.map((question) => question.id)]
   const pages = groups.map((question_ids) => ({
     type: 'page' as const,
-    id: crypto.randomUUID(),
+    id: newId(),
     question_ids,
     next: end,
   }))
@@ -288,10 +289,12 @@ function removeFlow() {
             结束方式
             <select v-model="node.outcome">
               <option value="complete">完成填写，允许确认提交</option>
-              <option value="screen_out">筛选结束（仅可预览）</option>
+              <option value="screen_out">筛选结束（提交后不产生正式答卷）</option>
             </select>
           </label>
-          <p v-if="node.outcome === 'screen_out'" class="hint">包含筛选结束的问卷暂不可发布。</p>
+          <p v-if="node.outcome === 'screen_out'" class="hint">
+            筛选结束同样返回回执并计入总收卷，但不计入各题统计与分母。
+          </p>
         </template>
         <div class="node-insert actions">
           <span class="hint">在后面插入</span>

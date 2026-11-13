@@ -11,11 +11,12 @@ use uuid::Uuid;
 
 use crate::{
     domain::Document,
-    entities::{AuditAction, FillingMode, SurveyStatus, UserRole},
+    entities::{AuditAction, FillingMode, Outcome, SurveyStatus, UserRole},
     error::AppError,
     repository::{SurveyMetaRow, ensure_collecting},
     submissions::{
-        idempotency_conflict, privacy_notice, submission_payload_hash, validate_idempotency_key,
+        PublicSurveyMeta, idempotency_conflict, privacy_notice, submission_payload_hash,
+        validate_idempotency_key,
     },
     surveys::{
         CollectionAction, CollectionSettings, SurveyFilters, ensure_editable,
@@ -144,6 +145,13 @@ fn 实体枚举与数据库检查和序列化值严格对齐() {
             (AuditAction::RestoreSurvey, "restore_survey"),
         ],
         "action",
+    );
+    断言枚举(
+        &[
+            (Outcome::Complete, "complete"),
+            (Outcome::ScreenOut, "screen_out"),
+        ],
+        "outcome",
     );
 }
 
@@ -300,7 +308,7 @@ async fn 恢复与首次发布要求截止时间未到() {
 }
 
 #[test]
-fn 管理详情只在发布后提供分享链接() {
+fn 管理详情不包含分享链接字段且按读取时刻物化状态() {
     let now = Utc::now();
     let record = survey_model();
     let 编号 = record.id;
@@ -311,20 +319,23 @@ fn 管理详情只在发布后提供分享链接() {
     assert_eq!(草案.status, SurveyStatus::Unpublished);
     assert_eq!(草案.revision, 1);
     assert!(草案.current_version_id.is_none());
-    assert!(草案.share_url.is_none(), "未发布不提供分享链接");
     assert_eq!(草案.draft.title, "测试问卷");
+    // 分享链接由前端统一按 `/s/{id}` 拼接，服务端 DTO 不再返回虚构字段。
+    let 序列化 = serde_json::to_value(&草案).expect("详情可序列化");
+    assert!(序列化.get("share_url").is_none());
 
     let mut 已发布 = record.clone();
     已发布.status = SurveyStatus::Collecting;
     已发布.current_version_id = Some(Uuid::new_v4());
     已发布.mode = Some(FillingMode::Anonymous);
     let 详情 = survey_detail(SurveyMetaRow::from(&已发布), 文档.clone(), now);
-    assert_eq!(
-        详情.share_url,
-        Some(format!("/api/public/surveys/{编号}")),
-        "链接指向问卷而不是某个版本"
-    );
     assert_eq!(详情.mode, Some(FillingMode::Anonymous));
+    assert!(
+        serde_json::to_value(&详情)
+            .expect("详情可序列化")
+            .get("share_url")
+            .is_none()
+    );
 
     let mut 已到期 = 已发布;
     已到期.deadline = Some(now - Duration::seconds(1));
@@ -475,20 +486,24 @@ fn 带版本(version: u8, variant: u8) -> Uuid {
 }
 
 #[tokio::test]
-async fn 幂等秘密必须是安全随机_uuidv4() {
+async fn 幂等秘密接受_uuidv4_与_uuidv7() {
     validate_idempotency_key(Uuid::new_v4()).expect("UUIDv4 合法");
+    validate_idempotency_key(Uuid::now_v7()).expect("UUIDv7 合法");
+    validate_idempotency_key(带版本(7, 0x80)).expect("RFC 变体的 UUIDv7 合法");
     for (说明, key) in [
         ("Nil", Uuid::nil()),
         ("版本 1", 带版本(1, 0x80)),
         ("版本 3", 带版本(3, 0x80)),
         ("版本 5", 带版本(5, 0x80)),
+        ("版本 8", 带版本(8, 0x80)),
         ("Microsoft 变体", 带版本(4, 0xc0)),
+        ("UUIDv7 非 RFC 变体", 带版本(7, 0xc0)),
     ] {
         let error = validate_idempotency_key(key).expect_err("必须拒绝");
         let (状态, 码, 消息) = 三元组(error).await;
         assert_eq!(状态, StatusCode::UNPROCESSABLE_ENTITY, "{说明}");
         assert_eq!(码, "validation_failed", "{说明}");
-        assert_eq!(消息, "idempotency_key 必须是安全随机生成的 UUIDv4");
+        assert_eq!(消息, "idempotency_key 必须是 UUIDv4 或 UUIDv7");
     }
 }
 
@@ -538,6 +553,40 @@ fn 隐私提示按填写模式区分且不宣称完全匿名() {
         登录.mode_notice.contains("不能称为完全匿名"),
         "登录模式必须明确否认完全匿名"
     );
+}
+
+#[test]
+fn 公开元信息只暴露声明的字段() {
+    let meta = PublicSurveyMeta {
+        survey_id: Uuid::now_v7(),
+        title: "标题".to_owned(),
+        description: "说明".to_owned(),
+        purpose: "目的".to_owned(),
+        mode: FillingMode::LoginOnce,
+        deadline: None,
+        privacy: privacy_notice(FillingMode::LoginOnce),
+    };
+    let serialized = serde_json::to_value(&meta).expect("元信息可序列化");
+    let keys: std::collections::BTreeSet<&str> = serialized
+        .as_object()
+        .expect("元信息是对象")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let expected: std::collections::BTreeSet<&str> = [
+        "survey_id",
+        "title",
+        "description",
+        "purpose",
+        "mode",
+        "deadline",
+        "privacy",
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(keys, expected, "公开元信息不能返回题面或答卷字段");
+    assert!(serialized.get("document").is_none());
+    assert!(serialized.get("version_id").is_none());
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@
 import type { Question, SurveyDocument } from '../types'
 import type { Inputs, InputValue } from '../answers'
 const values = defineModel<Inputs>({ required: true })
-const emit = defineEmits<{ change: [id: string, value: InputValue] }>()
+const emit = defineEmits<{ change: [id: string, value: InputValue]; commit: [id: string] }>()
 withDefaults(
   defineProps<{ document: SurveyDocument; errors?: Record<string, string>; disabled?: boolean }>(),
   { errors: () => ({}) },
@@ -116,6 +116,7 @@ function scores(question: Question) {
           :value="textValue(question)"
           placeholder="请输入数字"
           @input="update(question, $event)"
+          @blur="emit('commit', question.id)"
         />
         <p class="hint mt">
           {{ question.integer ? '仅限整数' : '支持整数和小数'
@@ -148,6 +149,7 @@ function scores(question: Question) {
           :aria-invalid="!!errors[question.id]"
           :value="textValue(question)"
           @input="update(question, $event)"
+          @blur="emit('commit', question.id)"
         />
         <div class="rating-labels">
           <span>{{ question.min_label || `${question.min} 分` }}</span>

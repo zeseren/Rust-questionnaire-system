@@ -314,3 +314,170 @@ fn 空规则包编译仍拦截重复或全零的题目与选项身份() {
         assert_eq!(error.code, LogicErrorCode::InvalidReference, "{name}");
     }
 }
+
+#[test]
+fn 三元条件短路未命中分支且负号保持有限数值契约() {
+    let fixtures = fixtures();
+    let questions = &fixtures.questions;
+    let base = |expression: Value| {
+        json!({
+            "dsl_version": 1,
+            "semantics_version": 1,
+            "expression": expression,
+        })
+    };
+
+    // 条件为 false 时只求值 else，then 分支里的除零不得被发现。
+    let compiled = compile_expression(
+        &base(json!({
+            "op": "if",
+            "condition": { "op": "boolean", "value": false },
+            "then_branch": {
+                "op": "arithmetic", "operator": "divide",
+                "left": { "op": "number", "value": "1" },
+                "right": { "op": "number", "value": "0" },
+            },
+            "else_branch": {
+                "op": "arithmetic", "operator": "multiply",
+                "left": { "op": "number", "value": "2" },
+                "right": { "op": "number", "value": "3" },
+            },
+        })),
+        questions,
+    )
+    .unwrap();
+    assert_eq!(compiled.value_type(), LogicValueType::Number);
+    assert_eq!(
+        compiled.evaluate(&BTreeMap::new()).unwrap(),
+        LogicValue::Number(6.0)
+    );
+
+    // 条件缺失时三元短路为 Missing，不读取任何分支。
+    let compiled = compile_expression(
+        &base(json!({
+            "op": "if",
+            "condition": {
+                "op": "compare",
+                "comparison": "gt",
+                "left": { "op": "answer", "question_id": fixtures.questions[3].id },
+                "right": { "op": "number", "value": "0" },
+            },
+            "then_branch": { "op": "number", "value": "1" },
+            "else_branch": { "op": "number", "value": "0" },
+        })),
+        questions,
+    )
+    .unwrap();
+    assert_eq!(
+        compiled.evaluate(&BTreeMap::new()).unwrap(),
+        LogicValue::Missing
+    );
+
+    // 负号归一正零，并拒绝非数字操作数。
+    let compiled = compile_expression(
+        &base(json!({ "op": "negate", "value": { "op": "number", "value": "-0" } })),
+        questions,
+    )
+    .unwrap();
+    assert_eq!(
+        compiled.evaluate(&BTreeMap::new()).unwrap(),
+        LogicValue::Number(0.0)
+    );
+    let error = compile_expression(
+        &base(json!({ "op": "negate", "value": { "op": "text", "value": "1" } })),
+        questions,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, LogicErrorCode::TypeMismatch);
+}
+
+#[test]
+fn 文本函数与单选相等比较遵循静态类型() {
+    let fixtures = fixtures();
+    let questions = &fixtures.questions;
+    let base = |expression: Value| {
+        json!({
+            "dsl_version": 1,
+            "semantics_version": 1,
+            "expression": expression,
+        })
+    };
+    let text_question = fixtures.questions[2].id;
+    let choice_question = fixtures.questions[0].id;
+
+    let compiled = compile_expression(
+        &base(json!({
+            "op": "all",
+            "expressions": [
+                {
+                    "op": "contains",
+                    "text": { "op": "answer", "question_id": text_question },
+                    "substring": { "op": "text", "value": "馈" },
+                },
+                {
+                    "op": "starts_with",
+                    "text": { "op": "answer", "question_id": text_question },
+                    "prefix": { "op": "text", "value": "反" },
+                },
+                {
+                    "op": "compare",
+                    "comparison": "eq",
+                    "left": { "op": "answer", "question_id": choice_question },
+                    "right": { "op": "answer", "question_id": choice_question },
+                },
+            ],
+        })),
+        questions,
+    )
+    .unwrap();
+    let mut answers = BTreeMap::new();
+    answers.insert(text_question, json!("反馈"));
+    answers.insert(
+        choice_question,
+        json!(fixtures.questions[0].kind.options().unwrap()[0].id),
+    );
+    assert_eq!(
+        compiled.evaluate(&answers).unwrap(),
+        LogicValue::Boolean(true)
+    );
+
+    // 文本函数不接受数字操作数；选择身份不允许大小排序。
+    let error = compile_expression(
+        &base(json!({
+            "op": "contains",
+            "text": { "op": "number", "value": "1" },
+            "substring": { "op": "text", "value": "1" },
+        })),
+        questions,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, LogicErrorCode::TypeMismatch);
+
+    let error = compile_expression(
+        &base(json!({
+            "op": "compare",
+            "comparison": "lt",
+            "left": { "op": "answer", "question_id": choice_question },
+            "right": { "op": "answer", "question_id": choice_question },
+        })),
+        questions,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, LogicErrorCode::TypeMismatch);
+
+    // 缺失的选择身份比较保持 Missing。
+    let compiled = compile_expression(
+        &base(json!({
+            "op": "compare",
+            "comparison": "ne",
+            "left": { "op": "answer", "question_id": choice_question },
+            "right": { "op": "answer", "question_id": choice_question },
+        })),
+        questions,
+    )
+    .unwrap();
+    assert_eq!(
+        compiled.evaluate(&BTreeMap::new()).unwrap(),
+        LogicValue::Missing
+    );
+}

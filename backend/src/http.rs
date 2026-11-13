@@ -12,7 +12,6 @@ use serde::{
     Deserialize, Deserializer, Serialize,
     de::{self, DeserializeOwned},
 };
-use std::fmt;
 use utoipa::{IntoParams, ToSchema};
 
 pub(crate) struct ApiJson<T>(pub T);
@@ -30,7 +29,7 @@ impl<T: DeserializeOwned + Send> FromRequest<AppState> for ApiJson<T> {
                     AppError::new(
                         StatusCode::PAYLOAD_TOO_LARGE,
                         "body_too_large",
-                        "请求体不能超过 1 MiB",
+                        "请求体超出允许的大小限制",
                     )
                 } else {
                     // serde 错误可包含原始输入，不直接返回或记录。
@@ -79,26 +78,21 @@ pub(crate) struct Pagination {
 // 查询 DTO 用 flatten 嵌入 Pagination 时，Serde 先把值缓冲成字符串，
 // 不再经过 serde_urlencoded 的数字解析；因此这里同时接受数字和十进制字符串。
 fn optional_u64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
-    struct Visitor;
-    impl de::Visitor<'_> for Visitor {
-        type Value = u64;
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("非负整数")
-        }
-        fn visit_u64<E: de::Error>(self, value: u64) -> Result<u64, E> {
-            Ok(value)
-        }
-        fn visit_str<E: de::Error>(self, value: &str) -> Result<u64, E> {
-            // 只接受 ASCII 十进制数字，拒绝 `+1` 这类 str::parse 允许的写法。
-            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-                return Err(E::invalid_value(de::Unexpected::Str(value), &self));
-            }
-            value
-                .parse()
-                .map_err(|_| E::invalid_value(de::Unexpected::Str(value), &self))
-        }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Decimal {
+        Number(u64),
+        Text(String),
     }
-    deserializer.deserialize_any(Visitor).map(Some)
+
+    match Option::<Decimal>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(Decimal::Number(value)) => Ok(Some(value)),
+        Some(Decimal::Text(text)) => text
+            .parse()
+            .map(Some)
+            .map_err(|_| de::Error::custom("分页参数必须是非负整数")),
+    }
 }
 
 /// 一次解析完成的分页参数：业务层直接使用，不再手工重算偏移与页码。

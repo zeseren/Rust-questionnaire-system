@@ -3,9 +3,11 @@
 <!-- [主提交通道在哪] 题目卡片内不设主按钮；保存与发布统一由编辑器顶部固定栏承担，卡片内「设置规则」为次级操作。 -->
 <!-- 题型配置按契约编辑，服务器负责草稿容量和发布规则的最终校验。 -->
 <script setup lang="ts">
+import { ref } from 'vue'
 import { newQuestion, TEXT_ANSWER_LIMITS } from '../documents'
 import { questionNames } from '../format'
-import type { Question } from '../types'
+import { newId } from '../uuid'
+import type { Choice, Question } from '../types'
 import Icon from './Icon.vue'
 const question = defineModel<Question>({ required: true })
 defineProps<{
@@ -14,9 +16,12 @@ defineProps<{
   disabled?: boolean
   error?: string
   hasRule?: boolean
-  ruleDisabled?: boolean
 }>()
 defineEmits<{ move: [direction: number]; duplicate: []; remove: []; rule: [] }>()
+/** 数字输入的本地草稿：允许暂时为空或只有负号，不立即回写模型。 */
+const drafts = ref<Record<string, string>>({})
+/** 最近一次单选/多选选项，切到文本或数字题后仍可在切回时恢复。 */
+const lastOptions = ref<Choice[]>([])
 function isQuestionType(value: string): value is Question['type'] {
   return Object.hasOwn(questionNames, value)
 }
@@ -29,12 +34,16 @@ function changeType(event: Event) {
   next.id = before.id
   next.title = before.title
   next.required = before.required
-  if ('options' in before && 'options' in next) next.options = before.options
+  // 只有当前题型确实带选项时才覆盖缓存，避免空列表冲掉已有选项。
+  if ('options' in before && before.options.length)
+    lastOptions.value = before.options.map((option) => ({ ...option }))
+  if ('options' in next && lastOptions.value.length)
+    next.options = lastOptions.value.map((option) => ({ ...option }))
+  drafts.value = {}
   question.value = next
 }
 function addOption() {
-  if ('options' in question.value)
-    question.value.options.push({ id: crypto.randomUUID(), label: '' })
+  if ('options' in question.value) question.value.options.push({ id: newId(), label: '' })
 }
 function bound(name: 'min' | 'max', event: Event) {
   if (!(event.currentTarget instanceof HTMLInputElement)) return
@@ -49,47 +58,69 @@ function bound(name: 'min' | 'max', event: Event) {
   if (!Number.isFinite(parsed)) return
   question.value[name] = parsed
 }
-function updateInteger(event: Event, apply: (value: number) => void) {
-  if (!(event.currentTarget instanceof HTMLInputElement)) return
-  if (event.currentTarget.value.trim() === '') return
-  const parsed = Number(event.currentTarget.value)
-  if (!Number.isInteger(parsed)) return
-  apply(parsed)
-}
-function setMinChoices(event: Event) {
+
+type IntegerField = 'min_choices' | 'max_choices' | 'max_length' | 'rating_min' | 'rating_max'
+
+/** 按字段定位当前题目的整数字段；题型不匹配时返回 null。 */
+function integerField(
+  field: IntegerField,
+): { read: number; write: (value: number) => void } | null {
   const current = question.value
-  if (current.type !== 'multiple_choice') return
-  updateInteger(event, (value) => {
-    current.min_choices = value
-  })
+  switch (field) {
+    case 'min_choices':
+      return current.type === 'multiple_choice'
+        ? { read: current.min_choices, write: (value) => (current.min_choices = value) }
+        : null
+    case 'max_choices':
+      return current.type === 'multiple_choice'
+        ? { read: current.max_choices, write: (value) => (current.max_choices = value) }
+        : null
+    case 'max_length':
+      return current.type === 'text' || current.type === 'textarea'
+        ? { read: current.max_length, write: (value) => (current.max_length = value) }
+        : null
+    case 'rating_min':
+      return current.type === 'rating'
+        ? { read: current.min, write: (value) => (current.min = value) }
+        : null
+    case 'rating_max':
+      return current.type === 'rating'
+        ? { read: current.max, write: (value) => (current.max = value) }
+        : null
+  }
 }
-function setMaxChoices(event: Event) {
-  const current = question.value
-  if (current.type !== 'multiple_choice') return
-  updateInteger(event, (value) => {
-    current.max_choices = value
-  })
+
+/** 输入中展示草稿原文，未编辑时展示模型值。 */
+function draftValue(field: IntegerField, current: number): string {
+  return drafts.value[field] ?? String(current)
 }
-function setMaxLength(event: Event) {
-  const current = question.value
-  if (current.type !== 'text' && current.type !== 'textarea') return
-  updateInteger(event, (value) => {
-    current.max_length = value
-  })
+
+/** 输入过程中只在完整整数时回写；空串与过渡负号留在草稿里。 */
+function inputInteger(field: IntegerField, event: Event) {
+  const target = integerField(field)
+  if (!target || !(event.currentTarget instanceof HTMLInputElement)) return
+  const raw = event.currentTarget.value
+  drafts.value[field] = raw
+  const text = raw.trim()
+  if (text === '' || text === '-' || text === '+') return
+  const parsed = Number(text)
+  if (Number.isInteger(parsed)) target.write(parsed)
 }
-function setRatingMin(event: Event) {
-  const current = question.value
-  if (current.type !== 'rating') return
-  updateInteger(event, (value) => {
-    current.min = value
-  })
-}
-function setRatingMax(event: Event) {
-  const current = question.value
-  if (current.type !== 'rating') return
-  updateInteger(event, (value) => {
-    current.max = value
-  })
+
+/** 失焦时结算草稿：合法整数回写，其余恢复为模型值，支持退格重输与负评分。 */
+function commitInteger(field: IntegerField, event: Event) {
+  const target = integerField(field)
+  if (!target || !(event.currentTarget instanceof HTMLInputElement)) return
+  const input = event.currentTarget
+  const raw = (drafts.value[field] ?? input.value).trim()
+  delete drafts.value[field]
+  const parsed = Number(raw)
+  if (raw !== '' && raw !== '-' && Number.isInteger(parsed)) {
+    target.write(parsed)
+    input.value = String(parsed)
+    return
+  }
+  input.value = String(target.read)
 }
 </script>
 <template>
@@ -186,25 +217,27 @@ function setRatingMax(event: Event) {
         <label class="field">
           最少选择
           <input
-            :value="question.min_choices"
+            :value="draftValue('min_choices', question.min_choices)"
             type="number"
             min="0"
             max="50"
             step="1"
             required
-            @input="setMinChoices"
+            @input="inputInteger('min_choices', $event)"
+            @blur="commitInteger('min_choices', $event)"
           />
         </label>
         <label class="field">
           最多选择
           <input
-            :value="question.max_choices"
+            :value="draftValue('max_choices', question.max_choices)"
             type="number"
             min="1"
             max="50"
             step="1"
             required
-            @input="setMaxChoices"
+            @input="inputInteger('max_choices', $event)"
+            @blur="commitInteger('max_choices', $event)"
           />
         </label>
       </div>
@@ -214,13 +247,14 @@ function setRatingMax(event: Event) {
       >
         字数上限
         <input
-          :value="question.max_length"
+          :value="draftValue('max_length', question.max_length)"
           type="number"
           min="1"
           :max="TEXT_ANSWER_LIMITS[question.type]"
           step="1"
           required
-          @input="setMaxLength"
+          @input="inputInteger('max_length', $event)"
+          @blur="commitInteger('max_length', $event)"
         />
         <span class="hint">最多可设置为 {{ TEXT_ANSWER_LIMITS[question.type] }} 个字符。</span>
       </label>
@@ -257,25 +291,27 @@ function setRatingMax(event: Event) {
           <label class="field">
             最低分
             <input
-              :value="question.min"
+              :value="draftValue('rating_min', question.min)"
               type="number"
               step="1"
               min="-2147483648"
               max="2147483647"
               required
-              @input="setRatingMin"
+              @input="inputInteger('rating_min', $event)"
+              @blur="commitInteger('rating_min', $event)"
             />
           </label>
           <label class="field">
             最高分
             <input
-              :value="question.max"
+              :value="draftValue('rating_max', question.max)"
               type="number"
               step="1"
               min="-2147483648"
               max="2147483647"
               required
-              @input="setRatingMax"
+              @input="inputInteger('rating_max', $event)"
+              @blur="commitInteger('rating_max', $event)"
             />
           </label>
         </div>
@@ -294,12 +330,7 @@ function setRatingMax(event: Event) {
         <span class="hint">
           {{ hasRule ? '此题已配置条件规则' : '可以按前面的回答设置显示与必填' }}
         </span>
-        <button
-          type="button"
-          class="text-button accent"
-          :disabled="ruleDisabled"
-          @click="$emit('rule')"
-        >
+        <button type="button" class="text-button accent" @click="$emit('rule')">
           <Icon name="grid" />
           {{ hasRule ? '编辑规则' : '设置规则' }}
         </button>

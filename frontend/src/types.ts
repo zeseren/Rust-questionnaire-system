@@ -53,7 +53,12 @@ export interface SurveySummary {
 }
 export interface SurveyDetail extends Omit<SurveySummary, 'title'> {
   draft: SurveyDocument
-  share_url: string | null
+}
+export interface SurveyCounts {
+  unpublished: number
+  collecting: number
+  closed: number
+  archived: number
 }
 export interface Version {
   id: string
@@ -80,12 +85,23 @@ export interface PublicSurvey {
   mode: FillingMode
   deadline: string | null
   document: SurveyDocument
-  privacy: {
-    mode_notice: string
-    data_visibility: string
-    sensitive_data_notice: string
-    public_link_notice: string
-  }
+  privacy: PrivacyNotice
+}
+/** 免登录的问卷元信息；不包含题面与任何答卷数据。 */
+export interface PublicSurveyMeta {
+  survey_id: string
+  title: string
+  description: string
+  purpose: string
+  mode: FillingMode
+  deadline: string | null
+  privacy: PrivacyNotice
+}
+export interface PrivacyNotice {
+  mode_notice: string
+  data_visibility: string
+  sensitive_data_notice: string
+  public_link_notice: string
 }
 export type AnswerValue = string | string[] | number | null
 export interface Answer {
@@ -100,6 +116,8 @@ export interface Submission {
 export interface Receipt {
   status: 'submitted'
   receipt_id: string
+  /** 完整答卷或筛选结束；两者都返回回执，但不一定生成可统计答卷。 */
+  outcome: FlowOutcome
 }
 export interface ReportSelection {
   version_id: string
@@ -111,6 +129,7 @@ export interface ReportSelection {
 export interface ResponseSummary {
   receipt_id: string
   submitted_at: string
+  outcome: FlowOutcome
 }
 export interface ResponseDetail extends Omit<ReportSelection, 'from' | 'to'>, ResponseSummary {
   document: SurveyDocument
@@ -136,7 +155,7 @@ export type QuestionStatistics = {
       options: OptionFrequency[]
       proportion_note?: string
     }
-  | { type: 'text' | 'textarea'; answers: (ResponseSummary & { value: string })[] }
+  | { type: 'text' | 'textarea' }
   | { type: 'number'; mean: number | null; min: number | null; max: number | null }
   | {
       type: 'rating'
@@ -146,8 +165,15 @@ export type QuestionStatistics = {
       distribution: { value: number; count: number }[]
     }
 )
+export interface TextResponse {
+  receipt_id: string
+  submitted_at: string
+  value: string
+}
 export interface Statistics extends ReportSelection {
   total_count: number
+  complete_count: number
+  screen_out_count: number
   trend: { date: string; count: number }[]
   questions: QuestionStatistics[]
 }
@@ -254,4 +280,6 @@ export interface EvaluatedResponse {
   answers: Record<string, AnswerValue>
   question_states: Record<string, AnswerState>
   path: string[]
+  /** 路径终点：完整填写或筛选结束；两种都能生成回执。 */
+  outcome: FlowOutcome
 }

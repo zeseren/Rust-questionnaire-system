@@ -28,7 +28,7 @@ struct Grammar;
 static PRECEDENCE: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
     use Rule::{
         add, divide, equal, greater, greater_equal, less, less_equal, logical_and, logical_or,
-        multiply, negation, not_equal, subtract,
+        multiply, negation, not_equal, subtract, unary_minus,
     };
     PrattParser::new()
         .op(Op::infix(logical_or, Assoc::Left))
@@ -41,7 +41,7 @@ static PRECEDENCE: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
             | Op::infix(greater_equal, Assoc::Left))
         .op(Op::infix(add, Assoc::Left) | Op::infix(subtract, Assoc::Left))
         .op(Op::infix(multiply, Assoc::Left) | Op::infix(divide, Assoc::Left))
-        .op(Op::prefix(negation))
+        .op(Op::prefix(negation) | Op::prefix(unary_minus))
 });
 
 /// 文本错误携带源位置，语义错误同时保留原 AST 路径。
@@ -102,9 +102,13 @@ fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
         return Err(failure(source, 0, LogicErrorCode::LimitExceeded));
     }
     let lexicon = next(&mut parse(source, Rule::lexicon)?);
-    // 每层记录尚未结束的前缀运算；括号、函数与 ! 共用递归深度预算。
+    // 每层记录尚未结束的前缀运算；括号、函数、! 与一元 - 共用递归深度预算。
     let mut prefixes = vec![0_usize];
     let mut depth = 1;
+    // 三元条件没有显式闭合符号，按语句累积；嵌套的 if 同样参与解析递归预算。
+    let mut conditions = 0_usize;
+    // 区分二元与一元 `-`：只有紧接完整操作数之后的减号才是中缀运算符。
+    let mut ends_primary = false;
     for token in lexicon.into_inner() {
         if token.as_rule() == Rule::EOI {
             break;
@@ -112,30 +116,51 @@ fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
         let offset = token.as_span().start();
         if token.as_rule() == Rule::string {
             string(source, &token)?;
+            ends_primary = true;
             continue;
         }
-        if token.as_rule() != Rule::symbol {
-            continue;
+        if token.as_rule() == Rule::identifier {
+            match token.as_str() {
+                // 条件与两个分支关键字之后都重新开始一个表达式，不能当作操作数结尾。
+                "if" => {
+                    conditions += 1;
+                    ends_primary = false;
+                }
+                "then" | "else" => ends_primary = false,
+                _ => ends_primary = true,
+            }
+        } else if token.as_rule() == Rule::number {
+            ends_primary = true;
         }
-        match token.as_str() {
-            "!" => {
-                *prefixes.last_mut().expect("始终保留表达式外层") += 1;
-                depth += 1;
+        if token.as_rule() == Rule::symbol {
+            match token.as_str() {
+                "!" => {
+                    *prefixes.last_mut().expect("始终保留表达式外层") += 1;
+                    depth += 1;
+                }
+                "-" if !ends_primary => {
+                    *prefixes.last_mut().expect("始终保留表达式外层") += 1;
+                    depth += 1;
+                }
+                "(" => {
+                    prefixes.push(0);
+                    depth += 1;
+                }
+                ")" if prefixes.len() > 1 => {
+                    depth -= 1 + prefixes.pop().expect("已检查存在内层");
+                }
+                "&&" | "||" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "/"
+                | "," | ";" | "->" | "}" => {
+                    depth -= std::mem::take(prefixes.last_mut().expect("始终保留表达式外层"));
+                    if token.as_str() == ";" {
+                        conditions = 0;
+                    }
+                }
+                _ => {}
             }
-            "(" => {
-                prefixes.push(0);
-                depth += 1;
-            }
-            ")" if prefixes.len() > 1 => {
-                depth -= 1 + prefixes.pop().expect("已检查存在内层");
-            }
-            "&&" | "||" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "/" | ","
-            | ";" | "->" | "}" => {
-                depth -= std::mem::take(prefixes.last_mut().expect("始终保留表达式外层"));
-            }
-            _ => {}
+            ends_primary = matches!(token.as_str(), ")" | "]");
         }
-        if depth > 64 {
+        if depth + conditions > 64 {
             return Err(failure(source, offset, LogicErrorCode::LimitExceeded));
         }
     }
@@ -160,9 +185,19 @@ struct Binding {
 #[derive(Clone, Copy)]
 enum Location {
     Variable(usize),
-    Rule { index: usize, field: RuleField },
+    Rule {
+        index: usize,
+        field: RuleField,
+    },
     Flow,
     Node(usize),
+    /// 分支节点的单个条件；路径到 `branches[{case}]`，用于精确指向出错的 `when` 行。
+    BranchCase {
+        node: usize,
+        case: usize,
+    },
+    /// 分支节点的默认出口；路径到 `otherwise`。
+    BranchOtherwise(usize),
 }
 
 impl Location {
@@ -173,6 +208,10 @@ impl Location {
             Self::Rule { index, field } => format!("$.logic.rules[{index}].{}", field.as_str()),
             Self::Flow => "$.logic.flow".into(),
             Self::Node(index) => format!("$.logic.flow.nodes[{index}]"),
+            Self::BranchCase { node, case } => {
+                format!("$.logic.flow.nodes[{node}].branches[{case}]")
+            }
+            Self::BranchOtherwise(node) => format!("$.logic.flow.nodes[{node}].otherwise"),
         }
     }
 }
@@ -287,6 +326,9 @@ impl<'a> Compiler<'a> {
     /// Pratt 解析同时维护每个子树的 `(depth, nodes)`，
     /// 避免每次构造二元节点都重新遍历整棵左子树。
     fn build(&self, pair: Pair<'a, Rule>) -> Result<(Value, Budget), LogicTextError> {
+        if pair.as_rule() == Rule::if_expression {
+            return self.build_if(pair);
+        }
         if pair.as_rule() != Rule::expression {
             return Err(self.failure(&pair, LogicErrorCode::InvalidSyntax));
         }
@@ -295,7 +337,11 @@ impl<'a> Compiler<'a> {
             .map_prefix(|op, value| {
                 let (value, budget) = value?;
                 let budget = Budget::parent([budget]).checked(self.source, op.as_span().start())?;
-                Ok((json!({"op":"not", "expression":value}), budget))
+                match op.as_rule() {
+                    Rule::negation => Ok((json!({"op":"not", "expression":value}), budget)),
+                    Rule::unary_minus => Ok((json!({"op":"negate", "value":value}), budget)),
+                    _ => Err(self.failure(&op, LogicErrorCode::InvalidSyntax)),
+                }
             })
             .map_infix(|left, op, right| {
                 let (left, left_budget) = left?;
@@ -342,17 +388,39 @@ impl<'a> Compiler<'a> {
             .parse(pair.into_inner())
     }
 
+    /// 三元条件：三个子表达式各占一个对象层级；分支未命中时求值不读取其答案。
+    fn build_if(&self, pair: Pair<'a, Rule>) -> Result<(Value, Budget), LogicTextError> {
+        let offset = pair.as_span().start();
+        let mut parts = pair.into_inner();
+        next(&mut parts); // if
+        let (condition, condition_budget) = self.build(next(&mut parts))?;
+        next(&mut parts); // then
+        let (then_branch, then_budget) = self.build(next(&mut parts))?;
+        next(&mut parts); // else
+        let (else_branch, else_budget) = self.build(next(&mut parts))?;
+        let budget = Budget::parent([condition_budget, then_budget, else_budget])
+            .checked(self.source, offset)?;
+        Ok((
+            json!({
+                "op": "if",
+                "condition": condition,
+                "then_branch": then_branch,
+                "else_branch": else_branch,
+            }),
+            budget,
+        ))
+    }
+
     fn primary(&self, pair: Pair<'a, Rule>) -> Result<(Value, Budget), LogicTextError> {
         let value = match pair.as_rule() {
-            Rule::number | Rule::negative_number => {
-                json!({"op":"number", "value":pair.as_str()})
-            }
+            Rule::number => json!({"op":"number", "value":pair.as_str()}),
             Rule::string => json!({"op":"text", "value":string(self.source, &pair)?}),
             Rule::boolean => json!({"op":"boolean", "value":pair.as_str() == "true"}),
             Rule::identifier => {
                 json!({"op":"variable", "variable_id":self.reference(pair, Category::Variable)?})
             }
             Rule::group => return self.build(next(&mut pair.into_inner())),
+            Rule::if_expression => return self.build_if(pair),
             Rule::call => return self.call(pair),
             _ => return Err(self.failure(&pair, LogicErrorCode::InvalidSyntax)),
         };
@@ -368,7 +436,8 @@ impl<'a> Compiler<'a> {
         let arguments: Vec<_> = parts.collect();
         let arity = match op {
             "answer" | "answered" | "variable" | "number" | "length" => Some(1),
-            "selected" | "contains_any" | "contains_all" | "coalesce" => Some(2),
+            "selected" | "contains_any" | "contains_all" | "coalesce" | "contains"
+            | "starts_with" => Some(2),
             "all" | "any" => None,
             _ => return Err(self.failure(&name, LogicErrorCode::InvalidSyntax)),
         };
@@ -441,6 +510,22 @@ impl<'a> Compiler<'a> {
                 (
                     json!({"op":op,"value":value,"fallback":fallback}),
                     Budget::parent([value_budget, fallback_budget]),
+                )
+            }
+            "contains" => {
+                let (text, text_budget) = self.build(argument(0))?;
+                let (substring, substring_budget) = self.build(argument(1))?;
+                (
+                    json!({"op":op,"text":text,"substring":substring}),
+                    Budget::parent([text_budget, substring_budget]),
+                )
+            }
+            "starts_with" => {
+                let (text, text_budget) = self.build(argument(0))?;
+                let (prefix, prefix_budget) = self.build(argument(1))?;
+                (
+                    json!({"op":op,"text":text,"prefix":prefix}),
+                    Budget::parent([text_budget, prefix_budget]),
                 )
             }
             _ => {
@@ -584,14 +669,26 @@ impl<'a> Compiler<'a> {
                         },
                         _ => {
                             let mut branches = Vec::new();
+                            let node_index = nodes.len();
                             let otherwise = loop {
                                 let clause = next(&mut fields);
                                 let kind = clause.as_rule();
+                                let offset = clause.as_span().start();
                                 let mut clause = clause.into_inner();
                                 next(&mut clause);
                                 if kind == Rule::otherwise {
+                                    self.locations
+                                        .push((Location::BranchOtherwise(node_index), offset));
                                     break self.reference(next(&mut clause), Category::Node)?;
                                 }
+                                let case = branches.len();
+                                self.locations.push((
+                                    Location::BranchCase {
+                                        node: node_index,
+                                        case,
+                                    },
+                                    offset,
+                                ));
                                 branches.push(FlowBranch {
                                     when: self.expression(next(&mut clause))?,
                                     target: self.reference(next(&mut clause), Category::Node)?,
@@ -725,6 +822,200 @@ pub fn parse_logic_text(
         locations: Vec::new(),
     }
     .compile(program, questions)
+}
+
+/// 文本文档中的一条别名绑定，供右侧速查栏展示。
+#[derive(Debug, Serialize)]
+pub struct LogicTextBinding {
+    /// 绑定类别：`question` / `option` / `variable` / `node`。
+    pub category: &'static str,
+    /// 源码中的别名。
+    pub alias: String,
+    /// 解析后的非零身份。
+    pub id: Uuid,
+}
+
+/// 文本工作台的诊断巡检结果。
+///
+/// 即使后续语句编译失败，也尽量返回已经扫描到的绑定，避免前端在报错时清空速查栏。
+#[derive(Debug, Serialize)]
+pub struct LogicTextInspection {
+    /// 已扫描到的合法绑定，按源码出现顺序。
+    pub bindings: Vec<LogicTextBinding>,
+    /// 完整编译失败时的领域错误；成功时为 `None`。
+    pub error: Option<LogicTextError>,
+    /// 错误在源码中的字节偏移。
+    pub error_offset: Option<usize>,
+    /// 从 1 开始的行号。
+    pub line: Option<usize>,
+    /// 从 1 开始的 Unicode 标量列号。
+    pub column: Option<usize>,
+}
+
+/// 巡检文本 DSL：返回绑定速查表与可选诊断。
+///
+/// 绑定扫描独立于完整文法；多分支节点或后续语句报错时仍保留已识别的 `bind` 行。
+#[must_use]
+pub fn inspect_logic_text(source: &str, questions: &[Question]) -> LogicTextInspection {
+    let bindings = scan_bindings(source);
+    match parse_logic_text(source, questions) {
+        Ok(_) => LogicTextInspection {
+            bindings,
+            error: None,
+            error_offset: None,
+            line: None,
+            column: None,
+        },
+        Err(error) => LogicTextInspection {
+            bindings,
+            error_offset: Some(offset_of(source, error.line, error.column)),
+            line: Some(error.line),
+            column: Some(error.column),
+            error: Some(error),
+        },
+    }
+}
+
+/// 把从 1 开始的行列号换算回字节偏移；越界时退化为源码末尾。
+fn offset_of(source: &str, line: usize, column: usize) -> usize {
+    let mut current_line = 1;
+    let mut current_column = 1;
+    for (offset, character) in source.char_indices() {
+        if current_line == line && current_column == column {
+            return offset;
+        }
+        if character == '\n' {
+            current_line += 1;
+            current_column = 1;
+        } else {
+            current_column += 1;
+        }
+    }
+    source.len()
+}
+
+/// 容错扫描 `bind` 语句；跳过注释与字符串，不依赖完整程序能否解析。
+fn scan_bindings(source: &str) -> Vec<LogicTextBinding> {
+    let mut bindings = Vec::new();
+    let mut index = 0;
+    while index < source.len() {
+        index = skip_trivia(source, index);
+        if source[index..].starts_with('"') {
+            // 顶层字符串整体跳过，避免把字符串内容里的 bind 误认成声明。
+            match read_string(source, index) {
+                Some((_, after)) => {
+                    index = after;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        let Some((word, after)) = read_ident(source, index) else {
+            index = next_char_boundary(source, index);
+            continue;
+        };
+        index = after;
+        if word != "bind" {
+            continue;
+        }
+        let Some((category, after)) = read_ident(source, skip_trivia(source, after)) else {
+            continue;
+        };
+        let Some((alias, after)) = read_ident(source, skip_trivia(source, after)) else {
+            continue;
+        };
+        let cursor = skip_trivia(source, after);
+        if !source[cursor..].starts_with('=') {
+            continue;
+        }
+        let Some((raw, after)) = read_string(source, skip_trivia(source, cursor + 1)) else {
+            continue;
+        };
+        let cursor = skip_trivia(source, after);
+        if !source[cursor..].starts_with(';') {
+            continue;
+        }
+        index = cursor + 1;
+        let category = match category {
+            "question" => "question",
+            "option" => "option",
+            "variable" => "variable",
+            "node" => "node",
+            _ => continue,
+        };
+        let Ok(value) = serde_json::from_str::<String>(raw) else {
+            continue;
+        };
+        if let Some(id) = crate::identity::parse(&value) {
+            bindings.push(LogicTextBinding {
+                category,
+                alias: alias.to_owned(),
+                id,
+            });
+        }
+    }
+    bindings
+}
+
+fn skip_trivia(source: &str, mut index: usize) -> usize {
+    loop {
+        let Some(rest) = source.get(index..) else {
+            return source.len();
+        };
+        let Some(character) = rest.chars().next() else {
+            return index;
+        };
+        if character.is_whitespace() {
+            index += character.len_utf8();
+        } else if rest.starts_with("//") {
+            index = rest
+                .find('\n')
+                .map_or(source.len(), |position| index + position + 1);
+        } else {
+            return index;
+        }
+    }
+}
+
+fn next_char_boundary(source: &str, index: usize) -> usize {
+    source
+        .get(index..)
+        .and_then(|rest| rest.chars().next())
+        .map_or(source.len(), |character| index + character.len_utf8())
+}
+
+fn read_ident(source: &str, index: usize) -> Option<(&str, usize)> {
+    let bytes = source.as_bytes();
+    let first = *bytes.get(index)?;
+    if !(first.is_ascii_alphabetic() || first == b'_') {
+        return None;
+    }
+    let mut end = index + 1;
+    while bytes
+        .get(end)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+    {
+        end += 1;
+    }
+    Some((&source[index..end], end))
+}
+
+fn read_string(source: &str, index: usize) -> Option<(&str, usize)> {
+    if !source.get(index..)?.starts_with('"') {
+        return None;
+    }
+    let mut escaped = false;
+    for (offset, character) in source[index..].char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            let end = index + offset + 1;
+            return Some((&source[index..end], end));
+        }
+    }
+    None
 }
 
 /// 二元运算符由 (op, 名称) 反查符号；与 TS 端 `binary` 表一一对应。
@@ -951,6 +1242,32 @@ fn write_expression(
             write_expression(aliases, output, field("value")?)?;
             output.push(')');
         }
+        "if" => {
+            output.push_str("if ");
+            write_expression(aliases, output, field("condition")?)?;
+            output.push_str(" then ");
+            write_expression(aliases, output, field("then_branch")?)?;
+            output.push_str(" else ");
+            write_expression(aliases, output, field("else_branch")?)?;
+        }
+        "negate" => {
+            output.push_str("-(");
+            write_expression(aliases, output, field("value")?)?;
+            output.push(')');
+        }
+        "contains" | "starts_with" => {
+            output.push_str(op);
+            output.push('(');
+            write_expression(aliases, output, field("text")?)?;
+            output.push_str(", ");
+            let target = if op == "contains" {
+                field("substring")?
+            } else {
+                field("prefix")?
+            };
+            write_expression(aliases, output, target)?;
+            output.push(')');
+        }
         _ => {
             // 二元运算符按 (op, comparison/operator) 反查符号，无法反查即拒绝。
             let name = if op == "compare" {
@@ -1069,5 +1386,62 @@ mod tests {
         let 错误 = check_text_budget(&format!("{}true", "!".repeat(64))).unwrap_err();
         assert_eq!(错误.error.code, LogicErrorCode::LimitExceeded);
         assert_eq!((错误.line, 错误.column), (1, 64));
+
+        // 前缀一元负号与 `!` 使用同一预算；二元减号不计入前缀深度。
+        let 错误 = check_text_budget(&format!("{}true", "-".repeat(64))).unwrap_err();
+        assert_eq!(错误.error.code, LogicErrorCode::LimitExceeded);
+        assert_eq!((错误.line, 错误.column), (1, 64));
+        assert!(
+            check_text_budget(&format!("1{}", " - 1".repeat(64))).is_ok(),
+            "连续的二元减号不构成前缀嵌套"
+        );
+    }
+
+    #[test]
+    fn 巡检在后续语法错误时仍返回已扫描绑定() {
+        use crate::domain::{Question, QuestionKind};
+
+        let source = concat!(
+            "dsl 1 semantics 1;\n",
+            "// 注释中的 bind 不算绑定\n",
+            "bind question q = \"00000000-0000-4000-8000-000000000001\";\n",
+            "bind option o = \"00000000-0000-4000-8000-000000000101\";\n",
+            "let broken = ;",
+        );
+        let inspection = inspect_logic_text(source, &[]);
+        assert_eq!(inspection.bindings.len(), 2, "注释与字符串不影响扫描");
+        assert_eq!(inspection.bindings[0].category, "question");
+        assert_eq!(inspection.bindings[0].alias, "q");
+        assert_eq!(
+            inspection.bindings[0].id,
+            Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap()
+        );
+        assert_eq!(inspection.bindings[1].category, "option");
+        let error = inspection.error.as_ref().expect("语法错误必须返回");
+        assert_eq!(error.error.code, LogicErrorCode::InvalidSyntax);
+        assert_eq!(inspection.line, Some(error.line));
+        assert_eq!(inspection.column, Some(error.column));
+        assert!(
+            inspection
+                .error_offset
+                .is_some_and(|offset| offset <= source.len()),
+            "错误偏移必须落在源码范围内"
+        );
+
+        // 完整解析成功时不携带诊断。
+        let question = Question {
+            id: Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap(),
+            title: "文本".into(),
+            required: false,
+            kind: QuestionKind::Text { max_length: 10 },
+        };
+        let source = concat!(
+            "dsl 1 semantics 1;\n",
+            "bind question q = \"00000000-0000-4000-8000-000000000001\";\n",
+            "visible q = true;",
+        );
+        let inspection = inspect_logic_text(source, &[question]);
+        assert!(inspection.error.is_none(), "合法文本不应报错");
+        assert_eq!(inspection.bindings.len(), 1);
     }
 }

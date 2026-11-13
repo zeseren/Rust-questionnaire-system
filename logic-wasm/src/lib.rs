@@ -21,7 +21,7 @@ use questionnaire_logic::domain::{Answer, FlowEvent, FlowSession as CoreFlowSess
 use questionnaire_logic::domain::{
     Document, DocumentLogic, LogicValueType, Question,
     compile_expression as core_compile_expression, format_logic_text as core_format_logic_text,
-    parse_logic_text as core_parse_logic_text,
+    inspect_logic_text as core_inspect_logic_text, parse_logic_text as core_parse_logic_text,
 };
 use questionnaire_logic::identity::Uuid;
 
@@ -62,6 +62,20 @@ pub fn parse_logic_text(source: &str, questions_json: &str) -> String {
     let result = (|| {
         let questions: Vec<Question> = decode(questions_json, "questions_json")?;
         core_parse_logic_text(source, &questions).map_err(domain_error)
+    })();
+    envelope_generic(result)
+}
+
+/// 巡检文本 DSL：成功信封返回 `{bindings,error,error_offset,line,column}`。
+///
+/// 解析失败时错误保留在成功值内部，而不是整体变成 error 信封，这样前端右侧速查栏
+/// 可以同时展示已扫描到的绑定；只有 `questions_json` 本身非法才返回边界错误。
+#[wasm_bindgen]
+#[must_use]
+pub fn inspect_logic_text(source: &str, questions_json: &str) -> String {
+    let result = (|| {
+        let questions: Vec<Question> = decode(questions_json, "questions_json")?;
+        Ok(core_inspect_logic_text(source, &questions))
     })();
     envelope_generic(result)
 }
@@ -224,11 +238,11 @@ impl FlowSession {
 
     /// 从最终答案重建整份答卷：不读取也不修改会话当前的历史与输入。
     ///
-    /// 复用核心 `FlowEvaluator::evaluate_answers`（与提交路径同一段代码），因此
-    /// 到达 complete 只代表可提交，不代表已经保存。
+    /// 复用核心 `FlowEvaluator::evaluate_answers`（与提交路径同一段代码），成功值
+    /// 携带 `outcome`（`complete` 或 `screen_out`）；到达结束只代表可提交，不代表已经保存。
     ///
     /// # 错误
-    /// 未知/重复题目、不适用答案、校验失败、未决条件或筛选结束时返回 error 信封。
+    /// 未知/重复题目、不适用答案、校验失败或未决条件时返回 error 信封。
     pub fn evaluate_answers(&self, answers_json: String) -> String {
         let result = (|| {
             let answers: Vec<Answer> = decode(&answers_json, "answers_json")?;

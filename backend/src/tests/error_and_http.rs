@@ -199,7 +199,7 @@ async fn 超过请求体上限映射为四百一十三() {
     let (状态, _, body) = send_raw_http(router, &请求).await;
     assert_eq!(状态, StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(body["error"]["code"], "body_too_large");
-    assert_eq!(body["error"]["message"], "请求体不能超过 1 MiB");
+    assert_eq!(body["error"]["message"], "请求体超出允许的大小限制");
 }
 
 #[tokio::test]
