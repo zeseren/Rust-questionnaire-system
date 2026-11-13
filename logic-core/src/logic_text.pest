@@ -5,9 +5,12 @@ COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }
 
 // 先使用无递归的词法入口检查容量与嵌套，再进入完整文法。
 lexicon = { SOI ~ token* ~ EOI }
-token = _{ identifier | number | string | symbol }
+token = _{ identifier | number | string | symbol | keyword }
 identifier_continue = _{ ASCII_ALPHANUMERIC | "_" }
-identifier = @{ (ASCII_ALPHA | "_") ~ identifier_continue* }
+// 三元条件与布尔字面量不能充当别名或引用名，否则表达式内部会出现无法消解的歧义。
+reserved = _{ ("if" | "then" | "else" | "true" | "false") ~ !identifier_continue }
+identifier = @{ !reserved ~ (ASCII_ALPHA | "_") ~ identifier_continue* }
+keyword = @{ ("if" | "then" | "else" | "true" | "false") ~ !identifier_continue }
 number = @{ ("0" | '1'..'9' ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT+)? ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
 version = @{ ASCII_DIGIT+ }
 string = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }

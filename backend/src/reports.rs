@@ -183,7 +183,7 @@ pub(crate) enum QuestionStatisticsData {
     Rating {
         min: i32,
         max: i32,
-        /// 按分值升序排列；没有出现的分值频次为 0。
+        /// 按分值升序排列；只返回实际出现过的分值，避免跨度过大的评分范围构造稀疏零桶。
         distribution: Vec<RatingFrequency>,
         /// 排除缺失值，合法 0 参与；无有效回答时为 null。
         mean: Option<f64>,

@@ -26,6 +26,13 @@ const surveyTakenDown = ref<'' | 'true' | 'false'>('')
 const auditAction = ref('')
 const auditActor = ref('')
 const auditTarget = ref('')
+/** 账号 ID 与目标 ID 会直接拼进查询串，格式错误只会在后端换来一次必然 400。 */
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const filterError = ref('')
+function invalidUuid(value: string) {
+  const trimmed = value.trim()
+  return trimmed !== '' && !UUID_TEXT.test(trimmed)
+}
 const applied = ref({
   title: '',
   status: '' as Status | '',
@@ -35,6 +42,11 @@ const applied = ref({
   target_id: '',
 })
 function applyFilters() {
+  if (invalidUuid(auditActor.value) || invalidUuid(auditTarget.value)) {
+    filterError.value = '账号 ID 与目标 ID 需要是 36 位连字符 UUID；留空表示不筛选。'
+    return
+  }
+  filterError.value = ''
   page.value = 1
   applied.value = {
     title: surveyTitle.value.trim(),
@@ -233,13 +245,24 @@ const actionNames: Record<string, string> = {
       </label>
       <label class="field">
         操作者账号 ID
-        <input v-model="auditActor" placeholder="留空表示全部" autocomplete="off" />
+        <input
+          v-model="auditActor"
+          placeholder="36 位连字符 UUID，留空表示全部"
+          autocomplete="off"
+          :aria-invalid="invalidUuid(auditActor)"
+        />
       </label>
       <label class="field">
         目标 ID
-        <input v-model="auditTarget" placeholder="留空表示全部" autocomplete="off" />
+        <input
+          v-model="auditTarget"
+          placeholder="36 位连字符 UUID，留空表示全部"
+          autocomplete="off"
+          :aria-invalid="invalidUuid(auditTarget)"
+        />
       </label>
     </template>
+    <p v-if="filterError" class="accent hint" style="flex-basis: 100%">{{ filterError }}</p>
     <button type="button" class="text-button danger-text" @click="resetFilters">重置筛选</button>
     <button class="button button-primary">应用筛选</button>
   </form>

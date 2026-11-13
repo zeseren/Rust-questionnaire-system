@@ -119,7 +119,7 @@ fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
             ends_primary = true;
             continue;
         }
-        if token.as_rule() == Rule::identifier {
+        if matches!(token.as_rule(), Rule::identifier | Rule::keyword) {
             match token.as_str() {
                 // 条件与两个分支关键字之后都重新开始一个表达式，不能当作操作数结尾。
                 "if" => {
@@ -127,6 +127,7 @@ fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
                     ends_primary = false;
                 }
                 "then" | "else" => ends_primary = false,
+                // `true` / `false` 是操作数，与被保留的别名关键字区分处理。
                 _ => ends_primary = true,
             }
         } else if token.as_rule() == Rule::number {

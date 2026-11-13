@@ -289,7 +289,7 @@ function removeFlow() {
             结束方式
             <select v-model="node.outcome">
               <option value="complete">完成填写，允许确认提交</option>
-              <option value="screen_out">筛选结束（提交后不产生正式答卷）</option>
+              <option value="screen_out">筛选结束（落库为甄别记录，计入总收卷）</option>
             </select>
           </label>
           <p v-if="node.outcome === 'screen_out'" class="hint">

@@ -163,15 +163,21 @@ pub(crate) fn admit_at(window: &Mutex<Window>, maximum: u32, now: Instant) -> Ap
     admit(&mut window, maximum, now)
 }
 
-fn admit_bucket<K: Copy + Eq + Hash>(
+pub(crate) fn admit_bucket<K: Copy + Eq + Hash>(
     buckets: &Mutex<HashMap<K, Window>>,
+    capacity: usize,
     key: K,
     maximum: u32,
     now: Instant,
 ) -> AppResult<()> {
     let mut buckets = buckets.lock().unwrap_or_else(PoisonError::into_inner);
-    if buckets.len() >= MAX_TRACKED_BUCKETS {
+    // 先淘汰过期窗口；若 60 秒内仍被活跃键占满（大量随机 IPv6 或问卷 ID），必须整体清空，
+    // 否则映射会突破上限无界增长。清空只重置计数，不影响任何请求的合法性判定。
+    if buckets.len() >= capacity {
         buckets.retain(|_, window| now.saturating_duration_since(window.started) < WINDOW);
+        if buckets.len() >= capacity {
+            buckets.clear();
+        }
     }
     let window = buckets.entry(key).or_insert(Window {
         started: now,
@@ -223,6 +229,7 @@ pub(crate) fn check(state: &AppState, request: &Request) -> AppResult<()> {
             let client = client_ip(request, state.config.trust_proxy);
             admit_bucket(
                 &state.limits.auth,
+                MAX_TRACKED_BUCKETS,
                 bucket_key(&salt, client),
                 state.config.auth_requests_per_minute,
                 now,
@@ -237,6 +244,7 @@ pub(crate) fn check(state: &AppState, request: &Request) -> AppResult<()> {
             let survey_id = submission_survey_id(path).unwrap_or_else(Uuid::nil);
             admit_bucket(
                 &state.limits.submissions,
+                MAX_TRACKED_BUCKETS,
                 (bucket_key(&salt, client), survey_id),
                 state.config.submissions_per_minute,
                 now,

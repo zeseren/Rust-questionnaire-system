@@ -235,6 +235,40 @@ fn 一元负号与三元条件解析为统一表达式节点() {
 }
 
 #[test]
+fn 保留关键字不能用作别名或引用名() {
+    let document = document();
+    let header = "dsl 1 semantics 1;\n";
+    for alias in ["if", "then", "else", "true", "false"] {
+        let source =
+            format!("{header}bind question {alias} = \"00000000-0000-4000-8000-000000000001\";");
+        assert_eq!(
+            parse_program(&source, &document.questions)
+                .unwrap_err()
+                .error
+                .code,
+            LogicErrorCode::InvalidSyntax,
+            "别名 {alias} 必须被文法拒绝"
+        );
+        let source =
+            format!("{header}bind node {alias} = \"00000000-0000-4000-8000-0000000000aa\";");
+        assert_eq!(
+            parse_program(&source, &document.questions)
+                .unwrap_err()
+                .error
+                .code,
+            LogicErrorCode::InvalidSyntax,
+            "节点别名 {alias} 必须被文法拒绝"
+        );
+    }
+    // 前缀相近但并非保留字的别名仍然合法。
+    let source = format!("{header}bind question iffy = \"00000000-0000-4000-8000-000000000001\";");
+    assert!(
+        parse_program(&source, &document.questions).is_ok(),
+        "非保留字前缀必须继续可用"
+    );
+}
+
+#[test]
 fn 巡检接口在语法错误后仍返回已扫描绑定() {
     let document = document();
     let source = concat!(

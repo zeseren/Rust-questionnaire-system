@@ -303,6 +303,23 @@ async fn 限流窗口满六十秒后重置() {
 }
 
 #[tokio::test]
+async fn 活跃桶达到上限且无可淘汰窗口时整体清空() {
+    let 基准 = Instant::now();
+    let buckets = Mutex::new(std::collections::HashMap::new());
+    // 三个键都在同一窗口内活跃，`retain` 一条也删不掉。
+    for key in 0..3_u32 {
+        security::admit_bucket(&buckets, 3, key, 10, 基准).expect("常规请求必须放行");
+    }
+    assert_eq!(buckets.lock().expect("加锁成功").len(), 3);
+    security::admit_bucket(&buckets, 3, 99, 10, 基准).expect("超限后仍必须放行本次请求");
+    let 剩余 = buckets.lock().expect("加锁成功").len();
+    assert_eq!(
+        剩余, 1,
+        "无可淘汰窗口时必须整体清空，仅保留当前请求桶，实际 {剩余}"
+    );
+}
+
+#[tokio::test]
 async fn 互斥锁中毒后限流仍可恢复() {
     let state = test_state();
     let 中毒 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

@@ -336,7 +336,7 @@ async function openReceipt(receipt: string) {
     <template v-if="detail">
       <p class="eyebrow">
         V{{ detail.version_number }} · {{ dateTime(detail.submitted_at) }}（北京时间） ·
-        {{ detail.outcome === 'screen_out' ? '甄别结束（不生成正式答卷）' : '完整答卷' }}
+        {{ detail.outcome === 'screen_out' ? '甄别结束（已作为正式记录计入总收卷）' : '完整答卷' }}
       </p>
       <h2>{{ detail.document.title }}</h2>
       <code class="receipt">回执：{{ detail.receipt_id }}</code>

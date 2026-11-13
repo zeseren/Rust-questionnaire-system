@@ -161,30 +161,34 @@ async function load() {
 async function reload() {
   if (!changed.value || window.confirm('重新加载将放弃当前未保存的修改，是否继续？')) await load()
 }
-/** 文本草稿在保存前的取舍：应用、忽略或取消；返回是否继续保存。 */
-function resolveTextDraft(): boolean {
-  if (!textPending.value) return true
-  const apply = window.confirm(
-    '文本 DSL 有尚未应用的修改。\n\n确定：立即应用文本规则再保存；取消：忽略这段草稿，按当前可视化规则保存。',
-  )
-  if (apply) {
-    if (!logicEditor.value?.applyText()) {
-      workspace.value = 'logic'
-      error.value = '文本规则存在错误，请修正后再保存。'
-      return false
-    }
-    textPending.value = false
-    return true
-  }
-  logicEditor.value?.discardText()
-  textPending.value = false
-  return true
-}
+/** 文本草稿未应用时由三步弹窗决定：应用并保存、忽略草稿保存、取消保存。 */
+const textDraftDialog = ref(false)
 async function save() {
   if (!draft.value || !survey.value || locked.value || !editorForm.value) return
-  if (!resolveTextDraft()) return
-  if (!editorForm.value.checkValidity()) {
-    const invalid = Array.from(editorForm.value.elements).find(
+  if (textPending.value) {
+    textDraftDialog.value = true
+    return
+  }
+  await commit()
+}
+/** 用户选择后再动草稿：取消不会丢弃任何已写内容。 */
+function chooseTextDraft(choice: 'apply' | 'discard' | 'cancel') {
+  textDraftDialog.value = false
+  if (choice === 'cancel') return
+  if (choice === 'apply' && !logicEditor.value?.applyText()) {
+    workspace.value = 'logic'
+    error.value = '文本规则存在错误，请修正后再保存。'
+    return
+  }
+  if (choice === 'discard') logicEditor.value?.discardText()
+  textPending.value = false
+  void commit()
+}
+async function commit() {
+  const form = editorForm.value
+  if (!form) return
+  if (!form.checkValidity()) {
+    const invalid = Array.from(form.elements).find(
       (element): element is HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement =>
         (element instanceof HTMLInputElement ||
           element instanceof HTMLSelectElement ||
@@ -197,7 +201,7 @@ async function save() {
         ? 'logic'
         : 'settings'
     await nextTick()
-    editorForm.value.reportValidity()
+    form.reportValidity()
     return
   }
   busy.value = true
@@ -755,6 +759,24 @@ onBeforeUnmount(() => {
       </aside>
     </div>
   </div>
+  <Modal v-if="textDraftDialog" title="文本规则尚未应用" @close="chooseTextDraft('cancel')">
+    <p class="subtle mb">
+      文本 DSL 中还有未写回可视化规则的修改。请选择这次保存要采用哪一种草稿；取消不会丢弃任何内容。
+    </p>
+    <ul class="hint mb">
+      <li>应用并保存：先把文本规则写回可视化规则，再保存草稿。</li>
+      <li>忽略草稿保存：放弃这段文本修改，按当前可视化规则保存。</li>
+      <li>取消保存：回到编辑器，可继续修改文本或先试填确认。</li>
+    </ul>
+    <div class="actions between">
+      <button class="button" @click="chooseTextDraft('cancel')">取消保存</button>
+      <span class="grow" aria-hidden="true"></span>
+      <button class="text-button danger-text" @click="chooseTextDraft('discard')">
+        忽略草稿保存
+      </button>
+      <button class="button button-primary" @click="chooseTextDraft('apply')">应用并保存</button>
+    </div>
+  </Modal>
   <Modal v-if="templateDialog" title="选择一个问卷起点" wide @close="templateDialog = false">
     <p class="subtle mb">模板包含可直接试填的题目和规则，应用后可以自由修改。</p>
     <SurveyTemplatePicker v-model="selectedTemplate" :allow-blank="false" :disabled="locked" />

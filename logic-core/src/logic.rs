@@ -99,7 +99,7 @@ pub(crate) fn error(code: LogicErrorCode, path: &str, question_id: Option<Uuid>)
         LogicErrorCode::ConstraintFailed => "答案不符合自定义约束",
         LogicErrorCode::UnknownCondition => "条件尚不能确定，请补全相关答案",
         LogicErrorCode::InapplicableAnswer => "提交包含隐藏或未进入分支的题目，请核对当前路径",
-        LogicErrorCode::ScreenedOut => "筛选结束不产生正式答卷",
+        LogicErrorCode::ScreenedOut => "筛选结束已作为甄别记录落库，不计入各题统计",
     };
     LogicError {
         code,
