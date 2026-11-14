@@ -10,3 +10,5 @@ mod logic_text;
 
 pub mod domain;
 pub mod identity;
+#[cfg(test)]
+mod tests;

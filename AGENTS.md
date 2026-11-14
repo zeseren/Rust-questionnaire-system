@@ -96,7 +96,7 @@ pnpm run wasm:build                                           # 仅在改动 log
 
 | 层级 | 位置 | 覆盖内容 |
 | --- | --- | --- |
-| `logic-core` 单元 | `logic-core/src/*.rs` 内的 `#[cfg(test)]` 模块 | 各模块内部不变量：身份严格解析、表达式、变量拓扑排序、流程状态机与文本 DSL |
+| `logic-core` 单元 | `logic-core/src/tests/{identity,domain,logic,logic_document,flow,logic_text}.rs` | 各模块内部不变量：身份严格解析、表达式、变量拓扑排序、流程状态机与文本 DSL |
 | `logic-core` 契约集成 | `logic-core/tests/{domain,logic,flow,logic_text}.rs` | 领域校验、三值逻辑、前向流程与文本 DSL 的跨模块契约，并与 `fixtures/survey-logic/` 共读人工预期 |
 | `logic-wasm` 边界 | `logic-wasm/tests/smoke.rs` | JSON 字符串信封的成功/错误形状与错误分类穿透 |
 | `backend` 单元与 HTTP | `backend/src/tests/{config,error_and_http,security_and_router,auth_and_admin,surveys_and_submissions,reports}.rs` | 配置解析、错误信封与抽取器、CSRF/盲化 IP 限流/路由、认证与治理、问卷生命周期与提交、报表聚合与分批 CSV 导出 |

@@ -221,7 +221,7 @@ $Stats | Select-Object version_number, total_count, timezone
 
 | 目标 / 文件 | 覆盖内容 |
 | --- | --- |
-| `logic-core/src/*.rs` 内的 `#[cfg(test)]` | 模块内部不变量：身份严格解析、表达式类型检查与三值求值、变量拓扑排序、流程状态机、文本 DSL 词法与格式化 |
+| `logic-core/src/tests/{identity,domain,logic,logic_document,flow,logic_text}.rs` | 模块内部不变量：身份严格解析、表达式类型检查与三值求值、变量拓扑排序、流程状态机、文本 DSL 词法与格式化 |
 | `logic-core/tests/domain.rs` | 文档与答案的草稿/发布校验、容量边界与题目级错误定位 |
 | `logic-core/tests/logic.rs` | 与 `fixtures/survey-logic/expressions.json` 共读的单表达式语义 |
 | `logic-core/tests/flow.rs` | 与 `fixtures/survey-logic/flows.json` 共读的前向流程、改答清理与路径重建 |
