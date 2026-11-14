@@ -65,7 +65,14 @@ test('safeReturn 拒绝非字符串、相对、协议相对与反斜杠路径', 
 })
 
 test('safeReturn 拒绝回跳登录与注册页自身', () => {
-  const rejected = ['/login', '/login?redirect=/x', '/register', '/register?a=1']
+  const rejected = [
+    '/login',
+    '/login?redirect=/x',
+    '/login#section',
+    '/register',
+    '/register?a=1',
+    '/register#top',
+  ]
   for (const value of rejected) assert.equal(safeReturn(value), '/', value)
 })
 

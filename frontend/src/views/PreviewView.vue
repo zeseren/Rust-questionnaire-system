@@ -21,7 +21,7 @@ const mobile = ref(false)
 const feedback = ref('')
 const answeredCount = computed(() => Object.values(values.value).filter(isAnswered).length)
 function validate() {
-  if (preview.data.value?.document.logic) return
+  if (preview.data.value?.document.logic || !preview.data.value?.document.questions.length) return
   if (!preview.data.value?.publishable) {
     feedback.value = '请先修正发布校验问题，再体验填写校验。'
     return
@@ -62,20 +62,27 @@ function validate() {
           </p>
         </section>
         <FlowFields
-          v-if="preview.data.value.document.logic"
+          v-if="preview.data.value.document.logic && preview.data.value.document.questions.length"
           :document="preview.data.value.document"
           preview
           @submit="feedback = '填写校验通过。这是预览，未提交正式答卷。'"
           @change="feedback = ''"
         />
         <SurveyFields
-          v-else
+          v-else-if="preview.data.value.document.questions.length"
           v-model="values"
           :document="preview.data.value.document"
           :errors="errors"
         />
+        <div v-else class="empty-state">
+          <h3>还没有题目</h3>
+          <p>返回编辑添加问题后，即可在此预览。</p>
+        </div>
         <p v-if="feedback" class="notice mt" role="status">{{ feedback }}</p>
-        <div v-if="!preview.data.value.document.logic" class="fill-footer">
+        <div
+          v-if="!preview.data.value.document.logic && preview.data.value.document.questions.length"
+          class="fill-footer"
+        >
           <div class="fill-footer-left">
             <RouterLink class="text-button" :to="`/surveys/${route.params.id}/edit`">
               ← 返回编辑

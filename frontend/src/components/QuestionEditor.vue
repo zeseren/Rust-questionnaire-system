@@ -45,82 +45,95 @@ function changeType(event: Event) {
 function addOption() {
   if ('options' in question.value) question.value.options.push({ id: newId(), label: '' })
 }
-function bound(name: 'min' | 'max', event: Event) {
-  if (!(event.currentTarget instanceof HTMLInputElement)) return
-  // 非 number 题型没有 min/max 字段，这里的判定同时是类型收窄，不能删。
-  if (question.value.type !== 'number') return
-  const value = event.currentTarget.value
-  if (value.trim() === '') {
-    question.value[name] = null
-    return
-  }
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return
-  question.value[name] = parsed
-}
 
 type IntegerField = 'min_choices' | 'max_choices' | 'max_length' | 'rating_min' | 'rating_max'
+type NumberBoundField = 'number_min' | 'number_max'
+type NumericField = IntegerField | NumberBoundField
 
-/** 按字段定位当前题目的整数字段；题型不匹配时返回 null。 */
-function integerField(
-  field: IntegerField,
-): { read: number; write: (value: number) => void } | null {
+type NumericDescriptor =
+  | { allowEmpty: false; read: number; write: (value: number) => void }
+  | { allowEmpty: true; read: number | null; write: (value: number | null) => void }
+
+/** 按字段定位当前题目的数值配置；题型不匹配时返回 null。 */
+function numericField(field: NumericField): NumericDescriptor | null {
   const current = question.value
   switch (field) {
     case 'min_choices':
       return current.type === 'multiple_choice'
-        ? { read: current.min_choices, write: (value) => (current.min_choices = value) }
+        ? { allowEmpty: false, read: current.min_choices, write: (v) => (current.min_choices = v) }
         : null
     case 'max_choices':
       return current.type === 'multiple_choice'
-        ? { read: current.max_choices, write: (value) => (current.max_choices = value) }
+        ? { allowEmpty: false, read: current.max_choices, write: (v) => (current.max_choices = v) }
         : null
     case 'max_length':
       return current.type === 'text' || current.type === 'textarea'
-        ? { read: current.max_length, write: (value) => (current.max_length = value) }
+        ? { allowEmpty: false, read: current.max_length, write: (v) => (current.max_length = v) }
         : null
     case 'rating_min':
       return current.type === 'rating'
-        ? { read: current.min, write: (value) => (current.min = value) }
+        ? { allowEmpty: false, read: current.min, write: (v) => (current.min = v) }
         : null
     case 'rating_max':
       return current.type === 'rating'
-        ? { read: current.max, write: (value) => (current.max = value) }
+        ? { allowEmpty: false, read: current.max, write: (v) => (current.max = v) }
+        : null
+    case 'number_min':
+      return current.type === 'number'
+        ? { allowEmpty: true, read: current.min, write: (v) => (current.min = v) }
+        : null
+    case 'number_max':
+      return current.type === 'number'
+        ? { allowEmpty: true, read: current.max, write: (v) => (current.max = v) }
         : null
   }
 }
 
-/** 输入中展示草稿原文，未编辑时展示模型值。 */
-function draftValue(field: IntegerField, current: number): string {
-  return drafts.value[field] ?? String(current)
+/** 输入中展示草稿原文，未编辑时展示模型值；空上下限渲染为空串以保留占位符。 */
+function draftText(field: NumericField, current: number | null): string {
+  return drafts.value[field] ?? (current === null ? '' : String(current))
 }
 
-/** 输入过程中只在完整整数时回写；空串与过渡负号留在草稿里。 */
-function inputInteger(field: IntegerField, event: Event) {
-  const target = integerField(field)
+/** 输入过程中仅在合法数值时回写；空串与过渡正负号留在草稿里。 */
+function inputNumeric(field: NumericField, event: Event) {
+  const target = numericField(field)
   if (!target || !(event.currentTarget instanceof HTMLInputElement)) return
   const raw = event.currentTarget.value
   drafts.value[field] = raw
   const text = raw.trim()
   if (text === '' || text === '-' || text === '+') return
   const parsed = Number(text)
-  if (Number.isInteger(parsed)) target.write(parsed)
+  if (target.allowEmpty) {
+    if (Number.isFinite(parsed)) target.write(parsed)
+  } else if (Number.isInteger(parsed)) {
+    target.write(parsed)
+  }
 }
 
-/** 失焦时结算草稿：合法整数回写，其余恢复为模型值，支持退格重输与负评分。 */
-function commitInteger(field: IntegerField, event: Event) {
-  const target = integerField(field)
+/** 失焦时结算草稿：可选上下限空串回写 null，非法过渡文本恢复模型值。 */
+function commitNumeric(field: NumericField, event: Event) {
+  const target = numericField(field)
   if (!target || !(event.currentTarget instanceof HTMLInputElement)) return
   const input = event.currentTarget
   const raw = (drafts.value[field] ?? input.value).trim()
   delete drafts.value[field]
+  if (raw === '' && target.allowEmpty) {
+    target.write(null)
+    input.value = ''
+    return
+  }
   const parsed = Number(raw)
-  if (raw !== '' && raw !== '-' && Number.isInteger(parsed)) {
+  const valid =
+    raw !== '' &&
+    raw !== '-' &&
+    raw !== '+' &&
+    (target.allowEmpty ? Number.isFinite(parsed) : Number.isInteger(parsed))
+  if (valid) {
     target.write(parsed)
     input.value = String(parsed)
     return
   }
-  input.value = String(target.read)
+  input.value = target.read === null ? '' : String(target.read)
 }
 </script>
 <template>
@@ -217,27 +230,27 @@ function commitInteger(field: IntegerField, event: Event) {
         <label class="field">
           最少选择
           <input
-            :value="draftValue('min_choices', question.min_choices)"
+            :value="draftText('min_choices', question.min_choices)"
             type="number"
             min="0"
             max="50"
             step="1"
             required
-            @input="inputInteger('min_choices', $event)"
-            @blur="commitInteger('min_choices', $event)"
+            @input="inputNumeric('min_choices', $event)"
+            @blur="commitNumeric('min_choices', $event)"
           />
         </label>
         <label class="field">
           最多选择
           <input
-            :value="draftValue('max_choices', question.max_choices)"
+            :value="draftText('max_choices', question.max_choices)"
             type="number"
             min="1"
             max="50"
             step="1"
             required
-            @input="inputInteger('max_choices', $event)"
-            @blur="commitInteger('max_choices', $event)"
+            @input="inputNumeric('max_choices', $event)"
+            @blur="commitNumeric('max_choices', $event)"
           />
         </label>
       </div>
@@ -247,14 +260,14 @@ function commitInteger(field: IntegerField, event: Event) {
       >
         字数上限
         <input
-          :value="draftValue('max_length', question.max_length)"
+          :value="draftText('max_length', question.max_length)"
           type="number"
           min="1"
           :max="TEXT_ANSWER_LIMITS[question.type]"
           step="1"
           required
-          @input="inputInteger('max_length', $event)"
-          @blur="commitInteger('max_length', $event)"
+          @input="inputNumeric('max_length', $event)"
+          @blur="commitNumeric('max_length', $event)"
         />
         <span class="hint">最多可设置为 {{ TEXT_ANSWER_LIMITS[question.type] }} 个字符。</span>
       </label>
@@ -265,9 +278,10 @@ function commitInteger(field: IntegerField, event: Event) {
             <input
               type="number"
               step="any"
-              :value="question.min ?? ''"
+              :value="draftText('number_min', question.min)"
               placeholder="不限"
-              @input="bound('min', $event)"
+              @input="inputNumeric('number_min', $event)"
+              @blur="commitNumeric('number_min', $event)"
             />
           </label>
           <label class="field">
@@ -275,9 +289,10 @@ function commitInteger(field: IntegerField, event: Event) {
             <input
               type="number"
               step="any"
-              :value="question.max ?? ''"
+              :value="draftText('number_max', question.max)"
               placeholder="不限"
-              @input="bound('max', $event)"
+              @input="inputNumeric('number_max', $event)"
+              @blur="commitNumeric('number_max', $event)"
             />
           </label>
         </div>
@@ -291,27 +306,27 @@ function commitInteger(field: IntegerField, event: Event) {
           <label class="field">
             最低分
             <input
-              :value="draftValue('rating_min', question.min)"
+              :value="draftText('rating_min', question.min)"
               type="number"
               step="1"
               min="-2147483648"
               max="2147483647"
               required
-              @input="inputInteger('rating_min', $event)"
-              @blur="commitInteger('rating_min', $event)"
+              @input="inputNumeric('rating_min', $event)"
+              @blur="commitNumeric('rating_min', $event)"
             />
           </label>
           <label class="field">
             最高分
             <input
-              :value="draftValue('rating_max', question.max)"
+              :value="draftText('rating_max', question.max)"
               type="number"
               step="1"
               min="-2147483648"
               max="2147483647"
               required
-              @input="inputInteger('rating_max', $event)"
-              @blur="commitInteger('rating_max', $event)"
+              @input="inputNumeric('rating_max', $event)"
+              @blur="commitNumeric('rating_max', $event)"
             />
           </label>
         </div>

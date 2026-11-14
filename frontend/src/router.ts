@@ -5,7 +5,7 @@ import { useAuth, useNotice } from './stores.ts'
 export function safeReturn(value: unknown): string {
   return typeof value === 'string' &&
     /^\/(?!\/)[^\\]*$/.test(value) &&
-    !/^\/(login|register)(\?|$)/.test(value)
+    !/^\/(login|register)([?#]|$)/.test(value)
     ? value
     : '/'
 }

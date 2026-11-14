@@ -50,11 +50,14 @@ const snippets = [
   ['selected', 'selected(${题目}, ${选项})', '选中指定选项'],
   ['contains_any', 'contains_any(${题目}, [${选项}])', '选中任一选项'],
   ['contains_all', 'contains_all(${题目}, [${选项}])', '选中全部选项'],
+  ['contains', 'contains(${文本}, ${子串})', '文本包含子串'],
+  ['starts_with', 'starts_with(${文本}, ${前缀})', '文本以指定前缀开头'],
   ['variable', 'variable(${变量})', '读取计算变量'],
   ['coalesce', 'coalesce(${值}, ${默认值})', '缺失时使用默认值'],
   ['length', 'length(${值})', '文本长度或选项数量'],
   ['all', 'all(${条件一}, ${条件二})', '全部条件成立'],
   ['any', 'any(${条件一}, ${条件二})', '任一条件成立'],
+  ['if', 'if ${条件} then ${真值} else ${假值}', '三元条件表达式'],
   ['number', 'number("${0}")', '保留原文的数字常量'],
   ['visible', 'visible ${题目} = ${条件};', '题目显示条件'],
   ['required', 'required ${题目} = ${条件};', '动态必填条件'],
@@ -93,6 +96,8 @@ function complete(context: CompletionContext) {
         'choices',
         'complete',
         'screen_out',
+        'then',
+        'else',
         'entry',
         'bind',
       ].map((label) => ({ label, type: 'keyword' })),
@@ -108,10 +113,10 @@ const language = StreamLanguage.define({
       return 'comment'
     }
     if (stream.match(/"(?:[^"\\]|\\.)*(?:"|$)/)) return 'string'
-    if (stream.match(/-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/)) return 'number'
+    if (stream.match(/(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/)) return 'number'
     if (
       stream.match(
-        /\b(?:dsl|semantics|bind|question|option|variable|node|let|visible|required|validate|entry|page|branch|when|else|end|complete|screen_out)\b/,
+        /\b(?:dsl|semantics|bind|question|option|variable|node|let|visible|required|validate|entry|page|branch|when|if|then|else|end|complete|screen_out)\b/,
       )
     )
       return 'keyword'

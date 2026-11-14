@@ -1,6 +1,6 @@
 <!-- [入口在哪] /login 与 /register 共用此页；卡片眉题行右侧即可在登录/注册间切换。 -->
-<!-- [用户在第 1 步后悔了怎么删/退] 卡片底部常驻「← 返回首页」，不依赖登录态，随时可退出认证流程。 -->
-<!-- [主提交通道在哪] 表单内唯一主按钮「登录/创建账号」；切换入口与返回首页均为低权重文本链接。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 卡片底部仅在已登录（回工作台）或携带公开回跳目标（回问卷/上一页）时渲染返回链接；未登录且无公开目标时不展示，避免 / 链接被守卫再次打回 /login 的死循环。 -->
+<!-- [主提交通道在哪] 表单内唯一主按钮「登录/创建账号」；切换入口与返回链接均为低权重文本链接。 -->
 <!-- 注册后使用同一登录流程；返回地址仅允许应用内部路径。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
@@ -14,6 +14,25 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuth()
 const register = computed(() => route.name === 'register')
+interface BackTarget {
+  to: string
+  label: string
+}
+// 仅暴露可安全抵达的返回目标：已登录回工作台，未登录只接受无需鉴权的公开页面。
+const backLink = computed<BackTarget | null>(() => {
+  if (auth.user) return { to: '/', label: '← 返回工作台' }
+  if (typeof route.query.redirect !== 'string') return null
+  const target = safeReturn(route.query.redirect)
+  const resolved = router.resolve(target)
+  if (
+    resolved.meta.auth ||
+    resolved.name === 'not-found' ||
+    resolved.name === 'login' ||
+    resolved.name === 'register'
+  )
+    return null
+  return { to: target, label: resolved.name === 'fill' ? '← 返回问卷' : '← 返回上一页' }
+})
 function success() {
   router.replace(safeReturn(route.query.redirect))
 }
@@ -63,8 +82,8 @@ function success() {
       </p>
       <ErrorNotice :message="auth.restoreError" />
       <AuthForm :mode="register ? 'register' : 'login'" @success="success" />
-      <div class="actions mt">
-        <RouterLink class="text-button" to="/">← 返回首页</RouterLink>
+      <div v-if="backLink" class="actions mt">
+        <RouterLink class="text-button" :to="backLink.to">{{ backLink.label }}</RouterLink>
       </div>
     </section>
   </div>

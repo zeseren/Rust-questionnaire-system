@@ -50,21 +50,35 @@ function expired() {
 }
 window.addEventListener('session-expired', expired)
 onBeforeUnmount(() => window.removeEventListener('session-expired', expired))
-async function logout() {
+async function logout(): Promise<void> {
   closeMobile()
-  const failure = await router.push('/login')
-  if (failure) return
+  let logoutError: unknown = null
+  // 在组件离开守卫放行后、路由提交前撤销会话：取消离开不破坏当前会话，登出失败也不切去登录页。
+  const stop = router.beforeResolve(async (to) => {
+    if (to.name !== 'login') return true
+    stop()
+    try {
+      await auth.logout()
+    } catch (error) {
+      logoutError = error
+      return false
+    }
+    return true
+  })
   try {
-    await auth.logout()
-    notice.show('已退出登录。')
-  } catch (error) {
-    notice.show(message(error))
+    const failure = await router.push('/login')
+    if (logoutError) {
+      notice.show(message(logoutError))
+      return
+    }
+    if (!failure) notice.show('已退出登录。')
+  } finally {
+    stop()
   }
 }
 // 会话过期弹窗不可用右上角关闭，必须保留“退出并稍后处理”逃生口。
 async function dismissExpired() {
   await logout()
-  auth.expired = false
 }
 function closeMobile() {
   mobileOpen.value = false
