@@ -67,11 +67,11 @@ pnpm run format:check                                         # Prettier 格式�
 pnpm run wasm:build                                           # 仅在改动 logic-core/ 或 logic-wasm/ 时重建并同步 WASM 产物
 ```
 
-## 分支与提交流程（必须遵守）
+## 分支与提交流程
 
-- **动代码前必须新建分支**：`git switch -c <type>/<主题>`（如 `fix/submission-idempotency`、`docs/branch-rule`）。禁止直接在 `main` 上修改文件或提交；源码、测试、文档、配置与单行修复一律适用。
-- **一个分支只做一件可描述的事**：分支名说明意图，便于单独审查与回退；发现无关问题另开分支。
-- **完成并验证后再合并**：先跑完对应检查（Rust：`fmt`/`clippy`/`test`；前端：`test:regression`/`typecheck`/格式；改动 `logic-core` 或 `logic-wasm` 时先 `pnpm run wasm:build`），再合入 `main`（可快进时用 `--ff-only`），合并后删除该分支。
+- **用到子代理就必须先开分支**：一旦把改动派给 `task`/`sonic`/`scout` 等子代理，先 `git switch -c <type>/<主题>`（如 `fix/submission-idempotency`），子代理的产出与之后主代理在同一主题下的修改都留在该分支上，中途不要切回 `main`。
+- **合并回 `main` 由用户决定**：分支上完成修改并跑完对应检查（Rust：`fmt`/`clippy`/`test`；前端：`test:regression`/`typecheck`/格式；改动 `logic-core` 或 `logic-wasm` 时先 `pnpm run wasm:build`）后等待明确要求，再快进合入 `main`（`--ff-only`）并删除分支。
+- **纯主代理的小改动不必为开分支而开分支**：单文件文档、配置或一处明确的修复可以直接在当前分支完成；一个提交仍只做一件事，发现无关问题另开分支。
 
 ## Code Conventions & Anti-Over-Engineering Rules
 
