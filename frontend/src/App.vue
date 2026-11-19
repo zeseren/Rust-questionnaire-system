@@ -21,10 +21,10 @@ const mobileDialog = ref<HTMLDialogElement>()
 const standalone = computed(() => Boolean(route.meta.standalone))
 /** 引擎状态来自真实加载结果；只在工作台外壳按需动态导入，登录页等 standalone 路由不为侧边栏提前拉取 wasm。 */
 const wasmReady = ref(false)
-let engineLoaded = false
+let engineRequested = false
 async function loadEngineStatus() {
-  if (engineLoaded) return
-  engineLoaded = true
+  if (engineRequested) return
+  engineRequested = true
   try {
     wasmReady.value = (await import('./wasm/index')).wasmReady
   } catch {
@@ -34,7 +34,7 @@ async function loadEngineStatus() {
 watch(
   standalone,
   (value) => {
-    if (!value) loadEngineStatus()
+    if (!value) void loadEngineStatus()
   },
   { immediate: true },
 )

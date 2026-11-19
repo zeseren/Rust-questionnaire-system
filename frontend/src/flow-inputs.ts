@@ -1,23 +1,17 @@
 //! 界面保留原始输入，流程只接收正确 JSON 类型。
 import { FlowSession } from './wasm/index.ts'
 import { LogicError } from './logic.ts'
-import { isNumberLiteral, numberError, numberInput } from './numbers.ts'
+import { isNumberPrefix, numberError, numberInput } from './numbers.ts'
 import type { Inputs, InputValue } from './answers.ts'
 import type { Answer, FlowSnapshot, SurveyDocument } from './types.ts'
-
-/** 可继续补全为数字的过渡前缀：单独负号、`12.`、`1e`、`1e-` 等。 */
-const NUMBER_PREFIX = /^(?:-|-?\.\d*|-?\d+(?:\.\d*)?|-?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d*)$/
-
-/** 输入尚未完成但仍是合法数字前缀；此时不把原文交给引擎判为无效答案。 */
-export function transitionalNumber(raw: string): boolean {
-  return !isNumberLiteral(raw) && NUMBER_PREFIX.test(raw)
-}
 
 export class FlowInputs {
   #document: SurveyDocument
   #session: FlowSession
   #snapshot: FlowSnapshot
   #values: Inputs = {}
+  /** 只留在界面镜像、引擎尚未见过的数字前缀；这些题的快照错误不代表当前输入。 */
+  #unsettled = new Set<string>()
 
   constructor(document: SurveyDocument) {
     this.#document = document
@@ -31,6 +25,10 @@ export class FlowInputs {
   values(): Inputs {
     // 数组值写入时已克隆，基础类型不可变，消费方只读，浅拷贝即可。
     return { ...this.#values }
+  }
+  /** 输入仍停留在未结算数字前缀的题目；返回副本，调用方可安全持有。 */
+  unsettled(): ReadonlySet<string> {
+    return new Set(this.#unsettled)
   }
   change(questionId: string, value: InputValue) {
     this.#apply(questionId, value, false)
@@ -69,10 +67,10 @@ export class FlowInputs {
       typeof value === 'string' &&
       (question?.type === 'number' || question?.type === 'rating')
     ) {
-      const raw = numberInput(value)
       // 过渡前缀：只留在界面镜像里，等完整数字或失焦结算时才送引擎。
-      if (raw && transitionalNumber(raw)) {
+      if (isNumberPrefix(numberInput(value))) {
         this.#values[questionId] = value
+        this.#unsettled.add(questionId)
         return
       }
     }
@@ -90,17 +88,18 @@ export class FlowInputs {
     this.#session.dispatch({ type: 'change', question_id: questionId, value: typed })
     this.#snapshot = this.#session.snapshot()
     this.#values[questionId] = Array.isArray(value) ? [...value] : value
-    for (const id of this.#snapshot.cleared) delete this.#values[id]
+    this.#unsettled.delete(questionId)
+    for (const id of this.#snapshot.cleared) {
+      delete this.#values[id]
+      this.#unsettled.delete(id)
+    }
   }
 
-  /** 翻页前把仍处于过渡状态的数字原文结算为完整输入。 */
+  /** 翻页前把仍未结算的数字前缀按完整输入送给引擎。 */
   #flushTransitions() {
-    for (const [questionId, value] of Object.entries(this.#values)) {
-      if (typeof value !== 'string') continue
-      const question = this.#document.questions.find((item) => item.id === questionId)
-      if (question?.type !== 'number' && question?.type !== 'rating') continue
-      const raw = numberInput(value)
-      if (raw && transitionalNumber(raw)) this.#apply(questionId, value, true)
+    for (const questionId of [...this.#unsettled]) {
+      const value = this.#values[questionId]
+      if (typeof value === 'string') this.#apply(questionId, value, true)
     }
   }
 }

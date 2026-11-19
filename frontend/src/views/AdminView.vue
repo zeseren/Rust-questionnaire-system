@@ -29,6 +29,7 @@ const auditTarget = ref('')
 /** 账号 ID 与目标 ID 会直接拼进查询串，格式错误只会在后端换来一次必然 400。 */
 const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const filterError = ref('')
+const PAGE_SIZE = 20
 function invalidUuid(value: string) {
   const trimmed = value.trim()
   return trimmed !== '' && !UUID_TEXT.test(trimmed)
@@ -73,7 +74,7 @@ type AdminListResult =
 const list = useResource<AdminListResult>(async () => {
   const suffix = query({
     page: page.value,
-    page_size: 20,
+    page_size: PAGE_SIZE,
     ...(tab.value === 'surveys'
       ? {
           title: applied.value.title,
@@ -164,7 +165,8 @@ async function govern() {
     selected.value = null
     await list.refresh()
     const total = list.data.value?.total
-    if (total != null) page.value = Math.min(page.value, Math.max(1, Math.ceil(total / 20)))
+    if (total !== undefined)
+      page.value = Math.min(page.value, Math.max(1, Math.ceil(total / PAGE_SIZE)))
   } catch (failure) {
     error.value = message(failure)
   } finally {
@@ -375,7 +377,12 @@ const actionNames: Record<string, string> = {
       <h3>暂无记录</h3>
       <p>当前列表没有可展示的内容。</p>
     </div>
-    <Pagination :page="page" :total="list.data.value.total" @change="page = $event" />
+    <Pagination
+      :page="page"
+      :total="list.data.value.total"
+      :page-size="PAGE_SIZE"
+      @change="page = $event"
+    />
   </template>
   <Modal v-if="selected" :title="operation" :dismissible="!busy" @close="selected = null">
     <form class="form-stack" @submit.prevent="govern">

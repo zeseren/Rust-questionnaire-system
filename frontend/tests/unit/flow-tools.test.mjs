@@ -1,7 +1,12 @@
-//! 流程拓扑插入：新节点接管前驱的实际出口（页面 next 或分支 otherwise），其余跳转保持不变。
+//! 流程拓扑工具：插入节点接管前驱的实际出口；题目归属保持页面拼接顺序等于题目顺序。
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { insertFlowNode } from '../../src/flow-tools.ts'
+import {
+  assignablePageIds,
+  assignQuestion,
+  insertFlowNode,
+  insertionExit,
+} from '../../src/flow-tools.ts'
 
 const id = (suffix) => `00000000-0000-4000-8000-0000000000${suffix}`
 
@@ -176,4 +181,62 @@ test('在汇合页后插入页面时接管实际出边而不是数组后继', ()
   assert.equal(flow.nodes[4].id, newcomer, '数组后继 newcomer 不受影响')
   assert.equal(flow.nodes[4].next, join)
   assert.equal(flow.nodes[5].next, end)
+})
+
+test('insertionExit 只对已接出口的页面与分支给出可接管的目标', () => {
+  const [p1, branch, end] = [id('a1'), id('a2'), id('a3')]
+  assert.equal(insertionExit({ type: 'page', id: p1, question_ids: [], next: end }), end)
+  assert.equal(insertionExit({ type: 'page', id: p1, question_ids: [], next: '' }), null)
+  assert.equal(insertionExit({ type: 'branch', id: branch, branches: [], otherwise: end }), end)
+  assert.equal(insertionExit({ type: 'branch', id: branch, branches: [], otherwise: '' }), null)
+  assert.equal(insertionExit({ type: 'end', id: end, outcome: 'complete' }), null)
+})
+
+function pagedFlow(groups) {
+  const end = id('9f')
+  const pages = groups.map((question_ids, index) => ({
+    type: 'page',
+    id: id(`9${index}`),
+    question_ids: [...question_ids],
+    next: end,
+  }))
+  pages.forEach((page, index) => {
+    page.next = pages[index + 1]?.id ?? end
+  })
+  return { entry: pages[0].id, nodes: [...pages, { type: 'end', id: end, outcome: 'complete' }] }
+}
+const questions = ['q1', 'q2', 'q3'].map((name) => ({ id: name }))
+
+test('每题一页时题目可以并入相邻页面，但不能越过其他题目', () => {
+  const flow = pagedFlow([['q1'], ['q2'], ['q3']])
+  const [p1, p2, p3] = flow.nodes.map((node) => node.id)
+  assert.deepEqual([...assignablePageIds(flow, questions, 'q1')], [p1, p2])
+  assert.deepEqual([...assignablePageIds(flow, questions, 'q2')], [p1, p2, p3])
+  assert.deepEqual([...assignablePageIds(flow, questions, 'q3')], [p2, p3])
+
+  assert.equal(assignQuestion(flow, questions, 'q3', p1), false, 'q3 不能越过 q2')
+  assert.deepEqual(
+    flow.nodes.slice(0, 3).map((node) => node.question_ids),
+    [['q1'], ['q2'], ['q3']],
+    '被拒绝时不改动流程',
+  )
+
+  assert.equal(assignQuestion(flow, questions, 'q2', p1), true)
+  assert.deepEqual(
+    flow.nodes.slice(0, 3).map((node) => node.question_ids),
+    [['q1', 'q2'], [], ['q3']],
+  )
+  // 腾空的页面不再约束顺序：q3 现在可以继续并入第一页。
+  assert.deepEqual([...assignablePageIds(flow, questions, 'q3')], [p1, p2, p3])
+})
+
+test('未归属的题目按全局顺序落位，页内保持题目顺序', () => {
+  const flow = pagedFlow([['q1'], ['q3']])
+  const [p1, p2] = flow.nodes.map((node) => node.id)
+  assert.deepEqual([...assignablePageIds(flow, questions, 'q2')], [p1, p2])
+  assert.equal(assignQuestion(flow, questions, 'q2', p2), true)
+  assert.deepEqual(flow.nodes[1].question_ids, ['q2', 'q3'])
+
+  assert.equal(assignablePageIds(flow, questions, '不存在的题目').size, 0)
+  assert.equal(assignQuestion(flow, questions, 'q2', flow.nodes[2].id), false, '结束节点不是页面')
 })

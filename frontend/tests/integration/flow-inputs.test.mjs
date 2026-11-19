@@ -31,7 +31,7 @@ test('空串转成缺失值，非法数字原文透传给引擎', () => {
 test('数字过渡前缀暂不判错，失焦结算后才显示校验结果', () => {
   const question = numberQuestion({ required: false })
   const form = new FlowInputs(surveyDocument([question]))
-  for (const prefix of ['-', '12.', '1e', '1e-', '.']) {
+  for (const prefix of ['-', '12.', '1e', '1e-', '1.5e+']) {
     form.change(question.id, prefix)
     assert.equal(form.values()[question.id], prefix, `${prefix}：界面保留原文`)
     assert.equal(form.snapshot().errors[question.id], undefined, `${prefix}：击键中途不报错`)
@@ -40,15 +40,28 @@ test('数字过渡前缀暂不判错，失焦结算后才显示校验结果', ()
       false,
       `${prefix}：尚未成为正式答案`,
     )
+    assert.ok(form.unsettled().has(question.id), `${prefix}：标记为未结算`)
   }
   form.change(question.id, '12.')
   form.commit(question.id)
   assert.equal(form.snapshot().errors[question.id], 'invalid_answer')
+  assert.equal(form.unsettled().has(question.id), false, '结算后错误属于当前输入，不再隐藏')
   // 完整数字继续正常写回原生数字，负评分可以从单独负号继续输入。
   form.change(question.id, '-')
   form.change(question.id, '-3')
   assert.equal(form.snapshot().answers[question.id], -3)
   assert.equal(form.snapshot().errors[question.id], undefined)
+})
+
+test('永远补不成合法数字的写法不算输入中，立即交给引擎判错', () => {
+  const question = numberQuestion({ required: false })
+  for (const raw of ['.', '.5', '-.5', '00', '01', '1.e']) {
+    const form = new FlowInputs(surveyDocument([question]))
+    form.change(question.id, raw)
+    assert.equal(form.values()[question.id], raw, `${raw}：界面保留原文`)
+    assert.equal(form.snapshot().errors[question.id], 'invalid_answer', raw)
+    assert.equal(form.unsettled().size, 0, `${raw}：错误不被当作输入中隐藏`)
+  }
 })
 
 test('翻页前自动结算过渡前缀，残缺输入给出题目级错误', () => {

@@ -2,14 +2,9 @@
 <!-- [用户在第 1 步后悔了怎么删/退] 顶部右侧常驻低饱和「移除页面流程」幽灵按钮可整体退回单页；每个节点右侧的「删除节点」悬停变红并二次确认，随时可撤销单点改动。 -->
 <!-- [主提交通道在哪] 流程编辑不设主按钮，修改即时写回；顶部唯一主按钮仍是编辑器固定栏的「发布问卷」。 -->
 <!-- 页面顺序和出口由作者显式配置，结构变化后保留失效引用供定位修复。 -->
-<script lang="ts">
-// 分支对象会因提高优先级而换位，用对象身份分配稳定 key，避免 Vue 复用错误的 DOM。
-const branchKeys = new WeakMap<object, number>()
-let branchKeySeq = 0
-</script>
 <script setup lang="ts">
 import { computed, nextTick } from 'vue'
-import { insertFlowNode } from '../flow-tools'
+import { assignablePageIds, assignQuestion, insertFlowNode, insertionExit } from '../flow-tools'
 import { newId } from '../uuid'
 import type { ComputedVariable, FlowBranch, FlowDefinition, FlowNode, Question } from '../types'
 import ConditionBuilder from './ConditionBuilder.vue'
@@ -47,10 +42,8 @@ async function locate(id: string) {
 }
 function addNode(index: number, type: FlowNode['type']) {
   if (!flow.value) return
-  // 结束节点之后没有可接管的出口，插入会被拒绝。
   const id = insertFlowNode(flow.value, index, type)
-  if (!id) return
-  void locate(id)
+  if (id) void locate(id)
 }
 function move(index: number, direction: number) {
   if (!flow.value) return
@@ -65,33 +58,14 @@ function raiseBranch(branches: FlowBranch[], index: number) {
   if (!moved) return
   branches.splice(index - 1, 0, moved)
 }
-function pageNodes() {
-  return (flow.value?.nodes ?? []).filter(
-    (node): node is Extract<FlowNode, { type: 'page' }> => node.type === 'page',
-  )
-}
-/** 页面拼接后的题目顺序必须等于全局题目顺序：只有移到相邻页面的接缝处才合法。 */
-function assignablePages(questionId: string) {
-  const pages = pageNodes()
-  const current = pages.find((node) => node.question_ids.includes(questionId))
-  if (!current) return new Set<string>()
-  const legal = new Set([current.id])
-  // 移走页面里唯一的题目会留下空页面，Rust 流程校验会拒绝。
-  if (current.question_ids.length > 1) {
-    const index = pages.indexOf(current)
-    const position = current.question_ids.indexOf(questionId)
-    const previous = pages[index - 1]
-    const next = pages[index + 1]
-    if (position === 0 && previous) legal.add(previous.id)
-    if (position === current.question_ids.length - 1 && next) legal.add(next.id)
-  }
-  return legal
-}
 function assignOptions(questionId: string) {
-  const legal = assignablePages(questionId)
+  const nodes = flow.value?.nodes ?? []
+  const legal = flow.value
+    ? assignablePageIds(flow.value, props.questions, questionId)
+    : new Set<string>()
   return [
     { value: '', label: '未分配', disabled: true },
-    ...(flow.value?.nodes ?? []).flatMap((node, index) =>
+    ...nodes.flatMap((node, index) =>
       node.type === 'page'
         ? [{ value: node.id, label: `${index + 1}. 页面`, disabled: !legal.has(node.id) }]
         : [],
@@ -99,25 +73,20 @@ function assignOptions(questionId: string) {
   ]
 }
 function assign(questionId: string, pageId: string) {
-  if (!assignablePages(questionId).has(pageId)) return
-  const pages = pageNodes()
-  const current = pages.find((node) => node.question_ids.includes(questionId))
-  const target = pages.find((node) => node.id === pageId)
-  if (!current || !target || current === target) return
-  const order = new Map(props.questions.map((question, position) => [question.id, position]))
-  current.question_ids = current.question_ids.filter((id) => id !== questionId)
-  target.question_ids.push(questionId)
-  target.question_ids.sort((a, b) => (order.get(a) ?? -1) - (order.get(b) ?? -1))
+  if (flow.value) assignQuestion(flow.value, props.questions, questionId, pageId)
 }
 function questionTitle(id: string) {
   const question = props.questions.find((item) => item.id === id)
   if (!question) return '题目已删除'
   return question.title || '未命名题目'
 }
+// 分支对象会因提高优先级而换位，用对象身份分配稳定 key，避免 Vue 把编辑状态套到另一条分支上。
+const branchKeys = new WeakMap<FlowBranch, number>()
+let branchKeySeq = 0
 function branchKey(branch: FlowBranch) {
   let key = branchKeys.get(branch)
   if (key === undefined) {
-    key = ++branchKeySeq
+    key = branchKeySeq += 1
     branchKeys.set(branch, key)
   }
   return key
@@ -347,13 +316,15 @@ function removeFlow() {
           </p>
         </template>
         <div v-if="node.type !== 'end'" class="node-insert actions">
-          <span class="hint">在后面插入</span>
+          <span class="hint">
+            {{ insertionExit(node) ? '在后面插入' : '先为此节点设置出口，才能在后面插入' }}
+          </span>
           <button
             v-for="(label, type) in { page: '页面', branch: '分支', end: '结束' }"
             :key="type"
             type="button"
             class="text-button"
-            :disabled="flow.nodes.length >= 256"
+            :disabled="flow.nodes.length >= 256 || !insertionExit(node)"
             @click="addNode(index, type)"
           >
             <Icon name="plus" />

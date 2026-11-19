@@ -128,8 +128,9 @@ function restore() {
 function discard() {
   generate()
 }
+/** 只应用尚未同步的文本；生成失败后文本为空且已同步，不会把旧文本或空文本写回规则。 */
 function apply() {
-  if (props.disabled || importError.value) return false
+  if (props.disabled || !pending.value) return false
   const result = check()
   if (!result) return false
   logic.value = result

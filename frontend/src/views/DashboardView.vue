@@ -126,7 +126,8 @@ async function performAction() {
     pendingAction.value = null
     await refresh()
     const total = list.data.value?.total
-    if (total != null) page.value = Math.min(page.value, Math.max(1, Math.ceil(total / PAGE_SIZE)))
+    if (total !== undefined)
+      page.value = Math.min(page.value, Math.max(1, Math.ceil(total / PAGE_SIZE)))
   } catch (error) {
     actionError.value = message(error)
   } finally {

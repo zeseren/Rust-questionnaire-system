@@ -6,7 +6,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { onBeforeRouteLeave, RouterLink, useRoute } from 'vue-router'
 import { api, ApiError, message } from '../api'
-import { buildAnswers, isAnswered, type Inputs } from '../answers'
+import { buildAnswers, isAnswered, isSubmission, type Inputs } from '../answers'
 import { dateTime, shareLink } from '../format'
 import { decode } from '../json'
 import { useAuth } from '../stores'
@@ -107,15 +107,9 @@ function readPending(): Submission | null {
   try {
     const raw = localStorage.getItem(pendingKey)
     if (!raw) return null
-    const submission = decode<Submission | null>(raw)
-    if (!submission || typeof submission !== 'object') return null
-    if (
-      typeof submission.version_id !== 'string' ||
-      typeof submission.idempotency_key !== 'string' ||
-      !Array.isArray(submission.answers)
-    )
-      return null
-    return submission
+    // 本地存储可被任意改写：按 unknown 读入，形状完整才当作未决提交。
+    const stored = decode<unknown>(raw)
+    return isSubmission(stored) ? stored : null
   } catch {
     return null
   }
@@ -299,9 +293,8 @@ async function submit(flowAnswers?: Answer[]) {
         reason.status === 401 ||
         reason.code === 'idempotency_conflict'
     } else uncertain.value = true
-    if (uncertain.value) {
-      if (pending.value) writePending(pending.value)
-    } else {
+    // 结果未知时保留请求前已写入的冻结载荷；明确失败才丢弃。
+    if (!uncertain.value) {
       pending.value = null
       clearPending()
     }

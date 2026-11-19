@@ -4,9 +4,8 @@
 <!-- 预览和填写共用同一会话；只有显式确认才交付当前有效答案。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, watch } from 'vue'
-import { FlowInputs, transitionalNumber } from '../flow-inputs'
+import { FlowInputs } from '../flow-inputs'
 import { LogicError } from '../logic'
-import { numberInput } from '../numbers'
 import type { Answer, FlowEvent, FlowSnapshot, Question, SurveyDocument } from '../types'
 import { isAnswered } from '../answers'
 import type { Inputs, InputValue } from '../answers'
@@ -35,6 +34,7 @@ let inputs: FlowInputs | undefined
 let recorded: FlowEvent[] = []
 const snapshot = shallowRef<FlowSnapshot>()
 const values = ref<Inputs>({})
+const unsettled = shallowRef<ReadonlySet<string>>(new Set())
 const touched = ref<Set<string>>(new Set())
 const attempted = ref(false)
 const error = ref('')
@@ -42,6 +42,7 @@ const root = ref<HTMLElement>()
 function refresh() {
   snapshot.value = inputs?.snapshot()
   values.value = inputs?.values() ?? {}
+  unsettled.value = inputs?.unsettled() ?? new Set()
   for (const id of snapshot.value?.cleared ?? []) touched.value.delete(id)
 }
 /** 回放暂存进度；与当前题面不兼容时保留已恢复的部分并从头继续。 */
@@ -111,7 +112,12 @@ function commit(id: string) {
   refresh()
 }
 watch(
-  [() => [props.document, props.document.logic, props.document.questions], () => props.restore],
+  [
+    () => props.document,
+    () => props.document.logic,
+    () => props.document.questions,
+    () => props.restore,
+  ],
   initSession,
   { immediate: true },
 )
@@ -138,14 +144,8 @@ const numbers = computed<Record<string, number>>(() => {
 const fieldErrors = computed<Record<string, string>>(() => {
   const result: Record<string, string> = {}
   for (const q of pageDocument.value.questions) {
-    const raw = values.value[q.id]
-    // 数字题尚在过渡前缀时按“输入中”处理，不显示上一轮遗留的校验错误。
-    if (
-      (q.type === 'number' || q.type === 'rating') &&
-      typeof raw === 'string' &&
-      transitionalNumber(numberInput(raw))
-    )
-      continue
+    // 引擎还没见过的数字前缀按“输入中”处理，不显示上一轮遗留的校验错误；结算后照常显示。
+    if (unsettled.value.has(q.id)) continue
     const code = snapshot.value?.errors[q.id]
     const text =
       props.errors[q.id] ||

@@ -1,5 +1,5 @@
 //! 数字输入按原生数字发送，最终精度与资格校验由服务器执行。
-import type { Answer, SurveyDocument } from './types.ts'
+import type { Answer, AnswerValue, Submission, SurveyDocument } from './types.ts'
 import { numberError, numberInput } from './numbers.ts'
 import { isBlank, validText } from './value-contract.ts'
 export type InputValue = string | string[] | number | null
@@ -8,6 +8,34 @@ export function isAnswered(value: InputValue | undefined) {
   if (value == null) return false
   if (Array.isArray(value)) return value.length > 0
   return typeof value === 'string' ? !isBlank(value) : true
+}
+function isAnswerValue(value: unknown): value is AnswerValue {
+  if (value === null || typeof value === 'string' || typeof value === 'number') return true
+  return Array.isArray(value) && value.every((item: unknown) => typeof item === 'string')
+}
+function isAnswer(value: unknown): value is Answer {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'question_id' in value &&
+    typeof value.question_id === 'string' &&
+    'value' in value &&
+    isAnswerValue(value.value)
+  )
+}
+/** 校验从本地存储等不可信来源读回的提交载荷；字段缺失或类型不符一律不认。 */
+export function isSubmission(value: unknown): value is Submission {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'version_id' in value &&
+    typeof value.version_id === 'string' &&
+    'idempotency_key' in value &&
+    typeof value.idempotency_key === 'string' &&
+    'answers' in value &&
+    Array.isArray(value.answers) &&
+    value.answers.every(isAnswer)
+  )
 }
 export function buildAnswers(document: SurveyDocument, values: Inputs) {
   const answers: Answer[] = []
