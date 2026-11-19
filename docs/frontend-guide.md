@@ -124,11 +124,12 @@ frontend/
 
 ## 6. WASM DSL 引擎接入与重建
 
-`frontend/src/wasm/index.ts` 在模块顶层通过 `await loadEngine()` 完成 WASM 实例化，对外同步暴露 5 个接口：
+`frontend/src/wasm/index.ts` 在模块顶层通过 `await loadEngine()` 完成 WASM 实例化，对外同步暴露 6 个接口：
 
 | 导出项 | 职责 |
 | --- | --- |
 | `parseLogicText(source, questions)` | 将文本 DSL 解析并编译为 `DocumentLogic`；失败抛出带行列号的 `LogicTextError` |
+| `inspectLogicText(source, questions)` | 解析并返回绑定速查与诊断（不抛出），供规则文本编辑器使用 |
 | `formatLogicText(logic, questions)` | 将 `DocumentLogic` 格式化为确定性文本 DSL（与后端逐字节一致） |
 | `compileDocumentLogic(logic, questions)` | 校验整份规则模型，返回变量拓扑顺序 `variableOrder` 与求值器 |
 | `compileExpression(raw, questions)` | 编译单条表达式，返回静态类型 `valueType`、依赖集合与求值函数；供双端语义契约测试使用 |

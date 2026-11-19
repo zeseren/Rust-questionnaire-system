@@ -1011,12 +1011,13 @@ pub(crate) fn invalid_stored_answer() -> AppError {
     AppError::internal("已保存答案与发布题型不一致")
 }
 
-/// 运行均值：按旧均值与新值各自的比例加权并入；`count` 从 1 开始。
+/// 运行均值：`mean + (value / n - mean / n)`；`count` 从 1 开始。
 ///
-/// `mean * (1 - 1/n) + value / n` 不把旧均值乘回计数，避免中间总和超过 `f64` 上限。
+/// 先各自除以 `count` 再相减，避免把旧均值乘回计数后中间总和超过 `f64` 上限；
+/// 同一个数值重复出现时两次除法结果逐位相同，差值恰为 0，均值不会被舍入误差推离原值。
 pub(crate) fn update_mean(mean: &mut f64, value: f64, count: u64) {
     let n = count as f64;
-    *mean = *mean * (1.0 - 1.0 / n) + value / n;
+    *mean += value / n - *mean / n;
 }
 
 fn outcome_text(outcome: Outcome) -> &'static str {

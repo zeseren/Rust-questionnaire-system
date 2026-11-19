@@ -57,8 +57,10 @@ const loginRequired = computed(() => meta.value?.mode === 'login_once' && !auth.
 const draftKey = computed(() =>
   survey.value ? `${STORAGE_PREFIX}${id}:${survey.value.version_id}` : '',
 )
-/** 未决提交按问卷保存，载荷内自带版本号；重试时沿用原来的幂等键。 */
-const pendingKey = `${STORAGE_PREFIX}${id}:pending`
+/** 未决提交按问卷与账号保存：同一浏览器换账号后，不会把上一个账号的答案当成本人的重试。 */
+function pendingKey() {
+  return `${STORAGE_PREFIX}${id}:pending:${auth.user?.id ?? 'anonymous'}`
+}
 function flowChanged(count: number) {
   flowAnswered.value = count
   errors.value = {}
@@ -105,7 +107,7 @@ function writeDraft() {
 }
 function readPending(): Submission | null {
   try {
-    const raw = localStorage.getItem(pendingKey)
+    const raw = localStorage.getItem(pendingKey())
     if (!raw) return null
     // 本地存储可被任意改写：按 unknown 读入，形状完整才当作未决提交。
     const stored = decode<unknown>(raw)
@@ -116,14 +118,14 @@ function readPending(): Submission | null {
 }
 function writePending(submission: Submission) {
   try {
-    localStorage.setItem(pendingKey, JSON.stringify(submission))
+    localStorage.setItem(pendingKey(), JSON.stringify(submission))
   } catch {
     // 存储不可用时只在本次会话内保留原载荷。
   }
 }
 function clearPending() {
   try {
-    localStorage.removeItem(pendingKey)
+    localStorage.removeItem(pendingKey())
   } catch {}
 }
 let saveTimer: ReturnType<typeof setTimeout> | undefined

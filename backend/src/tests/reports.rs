@@ -995,6 +995,18 @@ fn 均值更新在异号大数之间不溢出() {
 }
 
 #[test]
+fn 均值更新对重复出现的同一数值保持精确() {
+    // 每一步 `value / n` 与 `mean / n` 逐位相同，差值恰为 0，均值不能被舍入推离原值。
+    for value in [0.1, 3.0, 5.0, 7.5, 1e300] {
+        let mut 均值 = 0.0;
+        for count in 1..=200 {
+            update_mean(&mut 均值, value, count);
+        }
+        assert_eq!(均值, value, "{value}");
+    }
+}
+
+#[test]
 fn 均值更新在两次同号最大值之间保持有限() {
     let mut 均值 = 0.0;
     update_mean(&mut 均值, f64::MAX, 1);

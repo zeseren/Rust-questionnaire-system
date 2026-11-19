@@ -147,7 +147,7 @@ $Stats | Select-Object version_number, total_count, timezone
 
 ### 3.5 结构指纹与启动期校验
 
-`backend/src/schema.sql` 是唯一权威 DDL，但 `CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列。因此迁移在首次建库时把 `schema.sql` 的归一化 SHA-256（去掉 `--` 注释与空行）写入 `schema_meta` 表，之后**每次启动**（`serve`、`migrate`、`create-admin`）在 `Migrator::up` 之后由 `migration::verify_schema` 比对一次：
+`backend/src/schema.sql` 是唯一权威 DDL，但迁移只执行一次（`seaql_migrations` 记录版本），已存在的表不会随文件更新。因此迁移在首次建库时把 `schema.sql` 的归一化 SHA-256（去掉 `--` 注释与空行）写入 `schema_meta` 表，之后**每次启动**（`serve`、`migrate`、`create-admin`）在 `Migrator::up` 之后由 `migration::verify_schema` 比对一次：
 
 | 情形 | 行为 |
 | --- | --- |
@@ -157,7 +157,7 @@ $Stats | Select-Object version_number, total_count, timezone
 
 处理办法：开发库直接执行 `./start.ps1 -ResetDb` 重建；确实要保留数据时，先手动把结构对齐（或确认当前结构就是目标结构），再以 `SCHEMA_REBASELINE=1` 启动一次，让迁移记录新指纹并输出一条 `WARN` 日志。
 
-`migration.rs` 的单元测试锁定“注释与空行变化不影响指纹、结构变化必然改变指纹”，因此调整 `schema.sql` 的排版不会误报。
+`migration.rs` 的单元测试锁定“注释与空行变化不影响指纹、结构变化必然改变指纹”；改写语句本身（包括换行拆句、行内空格）仍会改变指纹，这是有意的。开关只认 `1`/`true`（关闭用 `0`/`false` 或不设置），其它取值在启动时报错。
 
 ---
 

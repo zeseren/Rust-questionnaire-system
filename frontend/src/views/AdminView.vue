@@ -49,13 +49,16 @@ function applyFilters() {
   }
   filterError.value = ''
   page.value = 1
+  // 只更新当前页签的筛选条件：隐藏页签里的输入（可能是非法文本）不能写进请求参数。
+  const auditing = tab.value === 'audits'
+  const appliedBefore = applied.value
   applied.value = {
-    title: surveyTitle.value.trim(),
-    status: surveyStatus.value,
-    taken_down: surveyTakenDown.value,
-    action: auditAction.value,
-    actor_id: auditActor.value.trim(),
-    target_id: auditTarget.value.trim(),
+    title: auditing ? appliedBefore.title : surveyTitle.value.trim(),
+    status: auditing ? appliedBefore.status : surveyStatus.value,
+    taken_down: auditing ? appliedBefore.taken_down : surveyTakenDown.value,
+    action: auditing ? auditAction.value : appliedBefore.action,
+    actor_id: auditing ? auditActor.value.trim() : appliedBefore.actor_id,
+    target_id: auditing ? auditTarget.value.trim() : appliedBefore.target_id,
   }
 }
 function resetFilters() {

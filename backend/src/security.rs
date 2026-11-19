@@ -104,24 +104,27 @@ fn bucket_key(salt: &[u8; 32], client: Option<IpAddr>) -> [u8; 32] {
 }
 
 /// 只在本实例确实位于可信反向代理之后时读取转发头，否则客户端可伪造 IP 绕过限流。
-/// `X-Forwarded-For` 取最右侧的有效地址：追加式代理链里只有它由最近的、可信的代理写入。
+/// `X-Forwarded-For` 只看最后一条头的最后一项：追加式代理把自己的地址写在那里，
+/// 其余位置（含客户端自带的同名头）都可能是可伪造内容。
 fn client_ip(request: &Request, trust_proxy: bool) -> Option<IpAddr> {
     if trust_proxy {
         let forwarded = request
             .headers()
-            .get("x-forwarded-for")
+            .get_all("x-forwarded-for")
+            .iter()
+            .next_back()
             .and_then(|value| value.to_str().ok())
             .and_then(|value| {
                 value
-                    .split(',')
+                    .rsplit(',')
                     .map(str::trim)
-                    .filter(|part| !part.is_empty())
-                    .rev()
-                    .find_map(|part| part.parse::<IpAddr>().ok())
+                    .find(|part| !part.is_empty())
+                    .and_then(|part| part.parse::<IpAddr>().ok())
             });
         if forwarded.is_some() {
             return forwarded;
         }
+        // 最右项无法解析时不再向左回退，否则等于信任客户端可写的部分；改走 X-Real-IP 或对端地址。
         let real = request
             .headers()
             .get("x-real-ip")

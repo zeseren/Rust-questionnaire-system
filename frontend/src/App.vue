@@ -32,9 +32,10 @@ async function loadEngineStatus() {
   }
 }
 watch(
-  standalone,
-  (value) => {
-    if (!value) void loadEngineStatus()
+  [() => route.matched.length, standalone],
+  ([matched, value]) => {
+    // 首次导航落定前 route 仍是 START_LOCATION，此时 standalone 为 false，不能据此加载。
+    if (matched > 0 && !value) void loadEngineStatus()
   },
   { immediate: true },
 )

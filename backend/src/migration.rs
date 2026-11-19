@@ -40,7 +40,7 @@ impl MigrationTrait for InitialSchema {
     }
 }
 
-/// `schema.sql` 去掉注释与空行后的摘要：只表达结构，不随排版或注释变化。
+/// `schema.sql` 去掉注释与空行后的摘要：只表达结构，不随注释与空行变化。
 fn digest_of(sql: &str) -> String {
     let normalized = sql
         .lines()
@@ -66,7 +66,7 @@ pub(crate) async fn verify_schema<C: ConnectionTrait>(connection: &C) -> Result<
     if stored.as_deref() == Some(expected.as_str()) {
         return Ok(());
     }
-    if rebaseline() {
+    if rebaseline()? {
         record_digest(connection, &expected).await?;
         tracing::warn!(?stored, current = %expected, "数据库结构指纹已重新记录");
         return Ok(());
@@ -82,24 +82,27 @@ pub(crate) async fn verify_schema<C: ConnectionTrait>(connection: &C) -> Result<
 }
 
 async fn stored_digest<C: ConnectionTrait>(connection: &C) -> Result<Option<String>, DbErr> {
+    // 不带 schema 限定：与建表语句一样跟随连接的 `search_path`。
     let present = connection
         .query_one_raw(Statement::from_string(
             DbBackend::Postgres,
-            "SELECT to_regclass('public.schema_meta') IS NOT NULL".to_owned(),
+            "SELECT to_regclass('schema_meta') IS NOT NULL AS present".to_owned(),
         ))
         .await?
-        .and_then(|row| row.try_get_by::<bool, _>(0).ok())
+        .map(|row| row.try_get::<bool>("", "present"))
+        .transpose()?
         .unwrap_or(false);
     if !present {
         return Ok(None);
     }
-    Ok(connection
+    connection
         .query_one_raw(Statement::from_string(
             DbBackend::Postgres,
             "SELECT digest FROM schema_meta LIMIT 1".to_owned(),
         ))
         .await?
-        .and_then(|row| row.try_get_by::<String, _>(0).ok()))
+        .map(|row| row.try_get::<String>("", "digest"))
+        .transpose()
 }
 
 async fn record_digest<C: ConnectionTrait>(connection: &C, digest: &str) -> Result<(), DbErr> {
@@ -117,8 +120,25 @@ async fn record_digest<C: ConnectionTrait>(connection: &C, digest: &str) -> Resu
     Ok(())
 }
 
-fn rebaseline() -> bool {
-    std::env::var_os(REBASELINE_ENV).is_some_and(|value| !value.is_empty())
+fn rebaseline() -> Result<bool, DbErr> {
+    match std::env::var(REBASELINE_ENV) {
+        Ok(value) => parse_rebaseline(Some(&value)),
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err(DbErr::Custom("SCHEMA_REBASELINE 不是有效文本".to_owned()))
+        }
+    }
+}
+
+/// 只接受显式开关：留一行 `false` 不会悄悄关掉结构校验，拼写错误则直接报错。
+fn parse_rebaseline(value: Option<&str>) -> Result<bool, DbErr> {
+    match value.map(str::trim) {
+        None | Some("" | "0" | "false") => Ok(false),
+        Some("1" | "true") => Ok(true),
+        Some(other) => Err(DbErr::Custom(format!(
+            "SCHEMA_REBASELINE 只能为 1/true 或 0/false，当前为 {other}"
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -130,6 +150,19 @@ mod tests {
         let base = "CREATE TABLE a (id uuid);\nCREATE INDEX a_id ON a(id);";
         let decorated = "-- 说明\n\n  CREATE TABLE a (id uuid);  \n\n-- 另一条说明\nCREATE INDEX a_id ON a(id);\n";
         assert_eq!(digest_of(base), digest_of(decorated));
+    }
+
+    #[test]
+    fn 重新基线开关只认显式布尔值() {
+        use super::parse_rebaseline;
+        for value in [None, Some(""), Some("0"), Some("false"), Some(" false ")] {
+            assert!(parse_rebaseline(value).is_ok_and(|on| !on), "{value:?}");
+        }
+        for value in [Some("1"), Some("true"), Some(" true ")] {
+            assert!(parse_rebaseline(value).is_ok_and(|on| on), "{value:?}");
+        }
+        assert!(parse_rebaseline(Some("yes")).is_err());
+        assert!(parse_rebaseline(Some("2")).is_err());
     }
 
     #[test]

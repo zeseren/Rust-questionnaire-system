@@ -220,6 +220,34 @@ async fn 信任代理时按转发头分桶() {
     let error = security::check(&state, &请求("203.0.113.1, 203.0.113.9"))
         .expect_err("同一最右侧转发地址的第三次请求必须限流");
     assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
+
+    // 追加式代理写的是最后一条同名头；客户端自带的同名头不能参与分桶。
+    let 多行头 = |最后一条: &str| {
+        raw_request(
+            "POST",
+            "/api/auth/login",
+            &[
+                ("origin", "http://localhost:3000"),
+                ("x-csrf-protection", "1"),
+                ("x-forwarded-for", "203.0.113.210"),
+                ("x-forwarded-for", 最后一条),
+            ],
+        )
+    };
+    security::check(&state, &多行头("203.0.113.220")).expect("按最后一条转发头分桶");
+    security::check(&state, &多行头("203.0.113.220")).expect("同一最后一条转发头共享分桶");
+    let error =
+        security::check(&state, &多行头("203.0.113.220")).expect_err("第一条同名头不能改变分桶");
+    assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
+
+    // 最右项不可解析时不得向左回退到客户端可伪造的地址，而是落到对端哨兵桶。
+    for 左侧 in ["203.0.113.230", "203.0.113.231"] {
+        security::check(&state, &请求(&format!("{左侧}, not-an-ip")))
+            .expect("最右项非法时按对端地址分桶");
+    }
+    let error = security::check(&state, &请求("203.0.113.232, not-an-ip"))
+        .expect_err("最右项非法时不得回退到左侧地址");
+    assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
 }
 
 /// 未信任代理时忽略转发头，所有请求落在一个哨兵桶，客户端无法伪造 IP 绕过。
