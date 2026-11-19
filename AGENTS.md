@@ -67,6 +67,12 @@ pnpm run format:check                                         # Prettier 格式�
 pnpm run wasm:build                                           # 仅在改动 logic-core/ 或 logic-wasm/ 时重建并同步 WASM 产物
 ```
 
+## 分支与提交流程（必须遵守）
+
+- **动代码前必须新建分支**：`git switch -c <type>/<主题>`（如 `fix/submission-idempotency`、`docs/branch-rule`）。禁止直接在 `main` 上修改文件或提交；源码、测试、文档、配置与单行修复一律适用。
+- **一个分支只做一件可描述的事**：分支名说明意图，便于单独审查与回退；发现无关问题另开分支。
+- **完成并验证后再合并**：先跑完对应检查（Rust：`fmt`/`clippy`/`test`；前端：`test:regression`/`typecheck`/格式；改动 `logic-core` 或 `logic-wasm` 时先 `pnpm run wasm:build`），再合入 `main`（可快进时用 `--ff-only`），合并后删除该分支。
+
 ## Code Conventions & Anti-Over-Engineering Rules
 
 - **信守边界（Parse, don't re-validate）**：只在最外层边界（HTTP 抽取器、WASM 字符串信封、数据库约束）做一次性解析与校验，内部模块直接信任已确立的不变量。
