@@ -78,6 +78,32 @@ test('restore 遇到非 401 失败时记录后端文案', async (t) => {
   assert.equal(auth.restoreError, '数据库暂不可用')
 })
 
+test('restore 瞬时失败后再次调用会重试并恢复用户', async (t) => {
+  const env = installBrowserEnv(t)
+  let calls = 0
+  env.fetch = async () => {
+    calls += 1
+    if (calls === 1)
+      return errorResponse(500, { code: 'internal_error', message: '数据库暂不可用' })
+    return jsonResponse(USER)
+  }
+  freshPinia()
+  const auth = useAuth()
+
+  await auth.restore()
+  assert.equal(auth.user, null)
+  assert.equal(auth.restoreError, '数据库暂不可用')
+
+  await auth.restore()
+  assert.equal(calls, 2)
+  assert.deepEqual(auth.user, USER)
+  assert.equal(auth.restoreError, '')
+
+  // 恢复成功后才进入终态，不再继续探测服务端。
+  await auth.restore()
+  assert.equal(calls, 2)
+})
+
 test('login 成功后更新用户并清除过期与会话恢复错误', async (t) => {
   const env = installBrowserEnv(t)
   let logins = 0

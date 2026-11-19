@@ -355,10 +355,11 @@ function inputValue(event: Event) {
             @update:model-value="editList(index, $event)"
           />
         </div>
+        <!-- 根节点也占用引擎的 256 节点预算，因此子条件最多 255 条。 -->
         <button
           type="button"
           class="button"
-          :disabled="locked || list.length >= 256"
+          :disabled="locked || list.length >= 255"
           @click="update('expressions', [...list, { op: 'boolean', value: true }])"
         >
           添加条件

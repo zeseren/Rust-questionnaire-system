@@ -345,7 +345,7 @@ function commitNumeric(field: NumericField, event: Event) {
         <span class="hint">
           {{ hasRule ? '此题已配置条件规则' : '可以按前面的回答设置显示与必填' }}
         </span>
-        <button type="button" class="text-button accent" @click="$emit('rule')">
+        <button type="button" class="text-button" @click="$emit('rule')">
           <Icon name="grid" />
           {{ hasRule ? '编辑规则' : '设置规则' }}
         </button>

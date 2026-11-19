@@ -58,6 +58,42 @@ fn 文本预算超限错误定位到精确行列() {
 }
 
 #[test]
+fn 三元条件只统计同一层未结束的嵌套() {
+    // 逗号结束同一层的条件，`all` 下 63 个并列 if 不应被当成嵌套。
+    let 并列 = format!(
+        "all({})",
+        vec!["if true then true else false"; 63].join(", ")
+    );
+    assert!(
+        check_text_budget(&并列).is_ok(),
+        "并列条件必须按当前层计数，而不是跨逗号累加"
+    );
+
+    // 真正的嵌套仍在第 64 层被拒绝。
+    assert!(
+        check_text_budget(&format!(
+            "{}true{}",
+            "if true then ".repeat(63),
+            " else false".repeat(63)
+        ))
+        .is_ok(),
+        "63 层三元嵌套仍在预算内"
+    );
+    let 错误 = check_text_budget(&format!(
+        "{}true{}",
+        "if true then ".repeat(64),
+        " else false".repeat(64)
+    ))
+    .unwrap_err();
+    assert_eq!(错误.error.code, LogicErrorCode::LimitExceeded);
+    assert_eq!(
+        (错误.line, 错误.column),
+        (1, 1 + 13 * 63),
+        "定位到第 64 个 if"
+    );
+}
+
+#[test]
 fn 巡检在后续语法错误时仍返回已扫描绑定() {
     let source = concat!(
         "dsl 1 semantics 1;\n",

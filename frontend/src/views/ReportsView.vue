@@ -24,6 +24,7 @@ import LoadingState from '../components/LoadingState.vue'
 import Pagination from '../components/Pagination.vue'
 import Modal from '../components/Modal.vue'
 import Icon from '../components/Icon.vue'
+import '../editor.css'
 const route = useRoute()
 const id = String(route.params.id)
 const notice = useNotice()
@@ -98,11 +99,7 @@ function apply() {
   actionError.value = ''
   const start = toTimestamp(from.value)
   const end = toTimestamp(to.value)
-  if (
-    (start && !Number.isFinite(Date.parse(start))) ||
-    (end && !Number.isFinite(Date.parse(end))) ||
-    (start && end && Date.parse(start) >= Date.parse(end))
-  ) {
+  if (start && end && Date.parse(start) >= Date.parse(end)) {
     actionError.value = '结束时间必须晚于开始时间。'
     return
   }

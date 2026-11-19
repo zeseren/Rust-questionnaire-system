@@ -166,7 +166,7 @@ $Stats | Select-Object version_number, total_count, timezone
 
 ### 4.3 CSV 导出与电子表格公式注入防护
 
-- UTF-8 编码、CRLF 换行；表头依次为 `receipt_id`、`version_id`、`version_number`、`submitted_at`，随后为每道题的 `标题 [题目 UUID]`（有规则版本在每题后紧跟 `状态 [题目 UUID]` 列，取值为 `已答` / `适用未答` / `规则跳过`）。
+- 文件以 UTF-8 BOM（`EF BB BF`）开头、CRLF 换行；表头依次为 `receipt_id`、`outcome`、`version_id`、`version_number`、`submitted_at`，其中第二列 `outcome` 是该答卷的流程终点（`complete` / `screen_out`），随后为每道题的 `标题 [题目 UUID]`（有规则版本在每题后紧跟 `状态 [题目 UUID]` 列，取值为 `已答` / `适用未答` / `规则跳过`）。
 - 多选题答案在单个单元格内编码为 JSON 字符串数组（如 `["uuid1","uuid2"]`）。
 - **公式防护（`formula_safe`）**：任何单元格（含表头）若以 `=`、`+`、`-'、`@` 开头，或在前导空白/控制字符后出现上述字符，导出时自动在字段最前方前置单引号 `'`，防止 Excel / WPS 将用户文本作为公式执行。
 
@@ -207,7 +207,7 @@ $Stats | Select-Object version_number, total_count, timezone
 | `403 Forbidden` | `csrf_rejected`、`forbidden`、`account_disabled` | `Origin` 不匹配或缺少 `X-CSRF-Protection: 1`、非管理员访问 `/api/admin/*` |
 | `404 Not Found` | `not_found` | 资源不存在或不属于当前发布者 |
 | `409 Conflict` | `revision_conflict`、`mode_frozen`、`version_changed`、`idempotency_conflict`、`already_submitted`、`survey_not_collecting` | 草稿修订号过期、首次发布后改模式、提交版本已过期、同幂等键载荷不同、登录限次已交过、问卷已关闭/到期/下架 |
-| `413 Payload Too Large` | `payload_too_large` | 请求体超过 `1 MiB`（`MAX_SUBMISSION_BYTES`） |
+| `413 Payload Too Large` | `body_too_large` | 请求体超过 `1 MiB`（`MAX_SUBMISSION_BYTES`） |
 | `422 Unprocessable Entity` | `validation_failed` | 题面/规则/流程/答案校验未通过（题目级错误携带 `question_id`） |
 | `429 Too Many Requests` | `rate_limited` | 触发认证或公开提交固定窗口限流 |
 | `500 Internal Server Error` | `internal_error` | 内部异常（响应头附带 `X-Error-Id`，不泄露 SQL/ORM 原文） |

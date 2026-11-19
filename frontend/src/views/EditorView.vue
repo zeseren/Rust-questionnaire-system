@@ -134,7 +134,9 @@ async function handleError(reason: unknown) {
 /** 集中回写服务端返回的问卷详情；回收设置响应不重置本地草稿。 */
 function applySurveyDetail(result: SurveyDetail, resetDraft = true) {
   survey.value = result
-  revision.value = result.revision
+  if (resetDraft) revision.value = result.revision
+  // 回收设置响应带回的修订号与本地不同，说明其他窗口已保存过草稿：不推进本地修订，交给冲突状态处理。
+  else if (result.revision !== revision.value) conflict.value = true
   mode.value = result.mode
   deadline.value = localInput(result.deadline)
   if (resetDraft) {
@@ -292,6 +294,9 @@ async function performAction() {
       draft.value = null
       survey.value = null
       action.value = null
+      // 草稿已不存在，清掉未保存标记，避免离开时再提示未保存的修改。
+      textPending.value = false
+      markSaved()
       notice.show('草稿已删除。')
       await router.push('/surveys')
     } else if (requested === 'publish') {
@@ -345,7 +350,9 @@ function remove(questionId: string) {
   const referenced = !!draft.value.logic?.rules.some((rule) => rule.question_id === questionId)
   if (
     (question?.title.trim() || referenced) &&
-    !window.confirm('确定删除这道题目吗？相关规则引用也会一并清理。')
+    !window.confirm(
+      '确定删除这道题目吗？该题自身的规则会一并删除；其他规则中对它的引用需要手动修正。',
+    )
   )
     return
   removeQuestion(draft.value, questionId)
@@ -357,6 +364,10 @@ async function locateQuestion(questionId: string) {
 }
 async function editRule(questionId: string) {
   if (locked.value) return
+  if (textPending.value) {
+    notice.show('请先应用或放弃文本规则草稿。')
+    return
+  }
   workspace.value = 'logic'
   await nextTick()
   await logicEditor.value?.addRule(questionId)

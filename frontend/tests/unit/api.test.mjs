@@ -250,3 +250,27 @@ test('download 遇到错误信封时抛出 ApiError 且不创建下载链路', a
   assert.deepEqual(env.objectUrls.created, [])
   assert.deepEqual(env.timers.pending, [])
 })
+
+test('download 读取响应正文失败时报告中文网络错误并清理截止定时器', async (t) => {
+  const env = installBrowserEnv(t, { timers: 'manual' })
+  env.fetch = async () => ({
+    ok: true,
+    status: 200,
+    blob: async () => {
+      throw new Error('连接中断')
+    },
+  })
+
+  await assert.rejects(download('/api/surveys/1/export.csv', '答卷.csv'), (error) => {
+    assert.ok(error instanceof ApiError)
+    assert.equal(error.status, 0)
+    assert.equal(error.code, 'network_error')
+    assert.equal(error.message, '下载未完成，请检查网络后重试。')
+    return true
+  })
+
+  // 下载未完成时不得创建锚点或对象地址，且定时器已经清除。
+  assert.deepEqual(env.anchors, [])
+  assert.deepEqual(env.objectUrls.created, [])
+  assert.deepEqual(env.timers.pending, [])
+})

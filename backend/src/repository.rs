@@ -186,27 +186,36 @@ pub(crate) async fn lock_survey_meta(
     tx: &DatabaseTransaction,
     id: Uuid,
 ) -> AppResult<SurveyMetaRow> {
-    survey::Entity::find_by_id(id)
-        .select_only()
-        .columns(survey_meta_columns())
-        .lock(LockType::Update)
-        .into_model::<SurveyMetaRow>()
-        .one(tx)
-        .await?
-        .ok_or_else(AppError::not_found)
+    lock_survey_meta_by(tx, id, None).await
 }
 
-/// 所有者写入的元数据入口：锁元数据行并核对归属；不匹配按不存在处理。
+/// 所有者写入的元数据入口：归属过滤与 `FOR UPDATE` 同一条查询，别人的行不会被锁定。
 pub(crate) async fn lock_owned_survey_meta(
     tx: &DatabaseTransaction,
     owner_id: Uuid,
     id: Uuid,
 ) -> AppResult<SurveyMetaRow> {
-    let survey = lock_survey_meta(tx, id).await?;
-    if survey.owner_id != owner_id {
-        return Err(AppError::not_found());
+    lock_survey_meta_by(tx, id, Some(owner_id)).await
+}
+
+/// 行锁查询的单一实现；`owner_id` 为 `None` 时不限归属（管理员路径）。
+async fn lock_survey_meta_by(
+    tx: &DatabaseTransaction,
+    id: Uuid,
+    owner_id: Option<Uuid>,
+) -> AppResult<SurveyMetaRow> {
+    let mut query = survey::Entity::find_by_id(id)
+        .select_only()
+        .columns(survey_meta_columns());
+    if let Some(owner_id) = owner_id {
+        query = query.filter(survey::Column::OwnerId.eq(owner_id));
     }
-    Ok(survey)
+    query
+        .lock(LockType::Update)
+        .into_model::<SurveyMetaRow>()
+        .one(tx)
+        .await?
+        .ok_or_else(AppError::not_found)
 }
 
 /// 把“回收中但已过截止时间”物化为已关闭；只写状态与更新时间，不重写草稿列。

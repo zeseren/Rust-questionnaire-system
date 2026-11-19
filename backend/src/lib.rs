@@ -48,7 +48,8 @@ pub(crate) struct AppState {
     pub versions: Arc<repository::VersionCache>,
 }
 
-/// 草稿保存与创建允许的请求体上限；发布态题面最大 1 MiB，留足编辑期余量。
+/// 创建问卷与保存草稿路由的 HTTP 请求体上限；只约束编辑期请求，
+/// 不是发布态题面大小的保证（其余路由另有 `DEFAULT_BODY_LIMIT`）。
 pub(crate) const MAX_DRAFT_BYTES: usize = 8 * 1024 * 1024;
 
 /// 其余接口的默认请求体上限；公开提交另有 `MAX_SUBMISSION_BYTES`。
@@ -94,8 +95,9 @@ pub async fn run() -> anyhow::Result<()> {
             return Ok(());
         }
         ("create-admin", None) => {
-            let username = std::env::var("ADMIN_USERNAME").context("请设置 ADMIN_USERNAME")?;
-            let password = std::env::var("ADMIN_PASSWORD").context("请设置 ADMIN_PASSWORD")?;
+            let lookup = |name: &str| std::env::var(name);
+            let username = config::required(&lookup, "ADMIN_USERNAME")?;
+            let password = config::required(&lookup, "ADMIN_PASSWORD")?;
             auth::create_admin(&db, username, password).await?;
             tracing::info!("administrator created");
             db.close().await?;
@@ -184,6 +186,30 @@ async fn health(State(state): State<AppState>) -> AppResult<Json<serde_json::Val
 }
 
 async fn shutdown() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    result = tokio::signal::ctrl_c() => {
+                        if let Err(error) = result {
+                            tracing::error!(%error, "shutdown signal failed");
+                        }
+                    }
+                    _ = terminate.recv() => {}
+                }
+            }
+            // 注册失败不能静默变成“只等 Ctrl+C”而无人知晓；照常等待 ctrl_c 完成停机。
+            Err(error) => {
+                tracing::error!(%error, "SIGTERM 监听注册失败，仅等待 Ctrl+C");
+                if let Err(error) = tokio::signal::ctrl_c().await {
+                    tracing::error!(%error, "shutdown signal failed");
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
     if let Err(error) = tokio::signal::ctrl_c().await {
         tracing::error!(%error, "shutdown signal failed");
     }

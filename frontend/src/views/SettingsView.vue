@@ -17,6 +17,7 @@ const oldPassword = ref('')
 const newPassword = ref('')
 const confirmation = ref('')
 const error = ref('')
+const accountError = ref('')
 const busy = ref(false)
 const themes: { value: Theme; label: string; icon: string }[] = [
   { value: 'light', label: '浅色', icon: 'sun' },
@@ -30,10 +31,11 @@ function resetForm() {
   error.value = ''
 }
 async function logoutCurrent() {
+  accountError.value = ''
   try {
     await auth.logout()
   } catch (reason) {
-    error.value = message(reason)
+    accountError.value = message(reason)
     return
   }
   await router.replace('/login')
@@ -84,6 +86,7 @@ async function changePassword() {
           退出当前登录
         </button>
       </div>
+      <ErrorNotice :message="accountError" />
       <div class="account-grid">
         <div>
           <span class="hint">用户名</span>

@@ -67,7 +67,7 @@ fn domain_envelope(output: &str) -> Value {
 }
 
 #[test]
-fn 八个导出函数成功时只返回_ok_信封() {
+fn 七个导出函数成功时只返回_ok_信封() {
     let texts = texts();
     let item = &texts["format_cases"][0];
     let questions = item["questions"].to_string();
@@ -107,20 +107,7 @@ fn 八个导出函数成功时只返回_ok_信封() {
     let compiled = ok_envelope(&logic_wasm::compile_expression(&raw, &expression_questions));
     assert!(compiled.is_object(), "{compiled}");
 
-    // 5. 身份重写：成功值是文档对象。
-    let document = json!({
-        "title": "冒烟",
-        "description": "",
-        "purpose": "",
-        "thank_you": "",
-        "logic": item["logic"],
-        "questions": item["questions"],
-    })
-    .to_string();
-    let renewed = ok_envelope(&logic_wasm::renew_document_ids(&document));
-    assert!(renewed.is_object(), "{renewed}");
-
-    // 6. 单表达式求值：成功值是规则值对象。
+    // 5. 单表达式求值：成功值是规则值对象。
     let evaluated = ok_envelope(&logic_wasm::evaluate_expression(
         &raw,
         &expression_questions,
@@ -128,7 +115,7 @@ fn 八个导出函数成功时只返回_ok_信封() {
     ));
     assert!(evaluated.is_object(), "{evaluated}");
 
-    // 7. 文档规则求值：成功值是求值结果对象。
+    // 6. 文档规则求值：成功值是求值结果对象。
     let evaluated = ok_envelope(&logic_wasm::evaluate_document_logic(
         &case_logic,
         &expression_questions,
@@ -136,7 +123,7 @@ fn 八个导出函数成功时只返回_ok_信封() {
     ));
     assert!(evaluated.is_object(), "{evaluated}");
 
-    // 8. 文本巡检：成功值携带绑定列表与可选诊断字段。
+    // 7. 文本巡检：成功值携带绑定列表与可选诊断字段。
     let inspected = ok_envelope(&logic_wasm::inspect_logic_text(&expected, &questions));
     assert!(inspected["bindings"].is_array(), "{inspected}");
     assert!(inspected.get("error").is_some(), "{inspected}");
@@ -171,7 +158,6 @@ fn 非法_json_与错误_dto_结构按参数名归类为边界语法错误() {
     let wrong_questions = "{}";
     let wrong_logic = "[]";
     let wrong_answers = "[]";
-    let wrong_document = "[]";
 
     // 每个 (function, parameter) 组合保留一行；语法错误与结构错误交替覆盖。
     let cases = [
@@ -234,10 +220,6 @@ fn 非法_json_与错误_dto_结构按参数名归类为边界语法错误() {
         (
             "answers_json",
             logic_wasm::evaluate_document_logic(&case_logic, &expression_questions, wrong_answers),
-        ),
-        (
-            "document_json",
-            logic_wasm::renew_document_ids(wrong_document),
         ),
     ];
     for (parameter, output) in cases {

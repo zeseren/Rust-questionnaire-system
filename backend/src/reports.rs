@@ -508,7 +508,8 @@ async fn statistics(
 /// 每次下载重新认证并校验归属；按 `(submitted_at, id)` 键集每 500 行批量读取，逐批编码后按序拼装响应体。
 /// 表头固定为回执、流程终点、版本、提交时间（Asia/Shanghai +08:00），随后是题目 UUID 与标题；
 /// 带规则的版本在每题后增加状态列。多选是一个字段内的 JSON 数组，缺失留空。
-/// 所有字段统一防护公式注入，再按 CSV 规则转义；导出不把整表答卷读入内存。
+/// 所有字段统一防护公式注入，再按 CSV 规则转义；数据库按 500 行分批读取，
+/// 但编码后的 CSV 仍在内存中拼成整体后才返回。
 #[utoipa::path(
     get, path = "/api/surveys/{id}/export.csv", tag = "答卷与报表",
     params(("id" = Uuid, Path, description = "本人问卷 UUID"), ReportFilter),
@@ -541,7 +542,9 @@ async fn export_csv(
     let version_number = version.number;
     // 表头只编码一次，随后按 `(submitted_at, id)` 键集每 500 行读取一批；
     // 批次有界，既不会把整表答案一次性读入，也不会重复解析版本题面。
-    let mut bytes = encode_csv_header(&document)?;
+    // BOM 只在导出入口写入，让电子表格正确识别 UTF-8；内部编码函数不感知响应封装。
+    let mut bytes = b"\xEF\xBB\xBF".to_vec();
+    bytes.extend_from_slice(&encode_csv_header(&document)?);
     let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
     loop {
         let stored =
@@ -1008,12 +1011,12 @@ pub(crate) fn invalid_stored_answer() -> AppError {
     AppError::internal("已保存答案与发布题型不一致")
 }
 
-/// 运行均值：先按已有计数还原总和，再并入新值；`count` 从 1 开始。
+/// 运行均值：按旧均值与新值各自的比例加权并入；`count` 从 1 开始。
 ///
-/// `(mean * (count - 1) + value) / count` 对最大正负浮点也保持有限结果，
-/// 且只有一次乘加，不引入额外的溢出防护分支。
+/// `mean * (1 - 1/n) + value / n` 不把旧均值乘回计数，避免中间总和超过 `f64` 上限。
 pub(crate) fn update_mean(mean: &mut f64, value: f64, count: u64) {
-    *mean = (*mean * (count.saturating_sub(1) as f64) + value) / count as f64;
+    let n = count as f64;
+    *mean = *mean * (1.0 - 1.0 / n) + value / n;
 }
 
 fn outcome_text(outcome: Outcome) -> &'static str {

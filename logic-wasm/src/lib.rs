@@ -17,11 +17,11 @@ use serde_json::{Value, json};
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
-use questionnaire_logic::domain::{Answer, FlowEvent, FlowSession as CoreFlowSession};
+use questionnaire_logic::domain::{Answer, Document, FlowEvent, FlowSession as CoreFlowSession};
 use questionnaire_logic::domain::{
-    Document, DocumentLogic, LogicValueType, Question,
-    compile_expression as core_compile_expression, format_logic_text as core_format_logic_text,
-    inspect_logic_text as core_inspect_logic_text, parse_logic_text as core_parse_logic_text,
+    DocumentLogic, LogicValueType, Question, compile_expression as core_compile_expression,
+    format_logic_text as core_format_logic_text, inspect_logic_text as core_inspect_logic_text,
+    parse_logic_text as core_parse_logic_text,
 };
 use questionnaire_logic::identity::Uuid;
 
@@ -37,10 +37,18 @@ fn boundary_error(message: impl Into<String>) -> Value {
     })
 }
 
-/// 反序列化入参：解析失败与领域错误同样走 error 信封，但不携带题目/位置。
+/// 反序列化入参：语法/IO 失败与数据类型契约失败使用不同文案，均走 error 信封，
+/// 但不携带题目/位置。
 fn decode<'de, T: serde::Deserialize<'de>>(raw: &'de str, what: &str) -> Result<T, Value> {
-    serde_json::from_str(raw)
-        .map_err(|error| boundary_error(format!("{what} 不是合法 JSON：{error}")))
+    serde_json::from_str(raw).map_err(|error| {
+        let message = match error.classify() {
+            serde_json::error::Category::Syntax
+            | serde_json::error::Category::Eof
+            | serde_json::error::Category::Io => format!("{what} 不是合法 JSON：{error}"),
+            serde_json::error::Category::Data => format!("{what} 不符合数据契约：{error}"),
+        };
+        boundary_error(message)
+    })
 }
 
 /// 答案上下文：键必须是严格的题目身份，与领域侧共用同一套 UUID 规则。
@@ -123,7 +131,7 @@ pub fn compile_document_logic(logic_json: &str, questions_json: &str) -> String 
     envelope_generic(result)
 }
 
-/// 编译单个表达式包：`{"value_type":…,"dependencies":[…]}`，供表达式编辑器提示。
+/// 编译单个表达式包：`{"value_type":…,"dependencies":[…]}`，供双端语义契约测试使用。
 #[wasm_bindgen]
 #[must_use]
 pub fn compile_expression(raw_json: &str, questions_json: &str) -> String {
@@ -135,17 +143,6 @@ pub fn compile_expression(raw_json: &str, questions_json: &str) -> String {
             value_type: compiled.value_type(),
             dependencies: compiled.dependencies().collect(),
         })
-    })();
-    envelope_generic(result)
-}
-/// 重写整份问卷的身份（复制问卷/规则时使用）。
-#[wasm_bindgen]
-#[must_use]
-pub fn renew_document_ids(document_json: &str) -> String {
-    let result = (|| {
-        let mut document: Document = decode(document_json, "document_json")?;
-        document.renew_ids();
-        Ok(document)
     })();
     envelope_generic(result)
 }
@@ -207,14 +204,12 @@ pub struct FlowSession {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl FlowSession {
-    /// 解析文档、接管所有权并创建空会话；失败时返回 JSON 错误字符串（非信封）。
+    /// 解析文档、接管所有权并创建空会话；失败时抛出携带 `{"error":…}` 信封 JSON
+    /// 的字符串（与其它导出同一信封形状）。
     #[wasm_bindgen(constructor)]
     pub fn new(document_json: String) -> Result<FlowSession, JsValue> {
-        let document: Document = serde_json::from_str(&document_json).map_err(|error| {
-            JsValue::from_str(&envelope_generic::<Value>(Err(boundary_error(format!(
-                "document_json 不是合法 JSON：{error}"
-            )))))
-        })?;
+        let document: Document = decode(&document_json, "document_json")
+            .map_err(|error| JsValue::from_str(&envelope_generic::<Value>(Err(error))))?;
         let session = CoreFlowSession::from_document(document).map_err(|error| {
             JsValue::from_str(&envelope_generic::<Value>(Err(domain_error(error))))
         })?;

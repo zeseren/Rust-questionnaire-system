@@ -993,3 +993,12 @@ fn 均值更新在异号大数之间不溢出() {
     assert!(极值.is_finite(), "异号累加不能溢出为无穷：{极值}");
     assert_eq!(极值, 0.0);
 }
+
+#[test]
+fn 均值更新在两次同号最大值之间保持有限() {
+    let mut 均值 = 0.0;
+    update_mean(&mut 均值, f64::MAX, 1);
+    update_mean(&mut 均值, f64::MAX, 2);
+    assert!(均值.is_finite(), "同号最大值不能溢出为无穷：{均值}");
+    assert_eq!(均值, f64::MAX);
+}

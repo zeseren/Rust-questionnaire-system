@@ -72,11 +72,12 @@ function inspect() {
   try {
     inspection.value = inspectLogicText(text.value, props.questions)
   } catch (reason) {
-    inspection.value = {
-      bindings: [],
-      error: reason instanceof LogicError ? reason : new LogicError('invalid_syntax', '$', null),
-      line: null,
-      column: null,
+    if (reason instanceof LogicError) {
+      inspection.value = { bindings: [], error: reason, line: null, column: null }
+    } else {
+      inspection.value = null
+      checked.value = false
+      importError.value = message(reason, '文本无法应用')
     }
   }
 }
@@ -112,6 +113,10 @@ function generate() {
     inspect()
   } catch (reason) {
     importError.value = message(reason, '请先修复可视化配置，再生成文本。')
+    text.value = ''
+    baseline.value = ''
+    inspection.value = null
+    checked.value = false
   }
 }
 function restore() {
@@ -124,7 +129,7 @@ function discard() {
   generate()
 }
 function apply() {
-  if (props.disabled) return false
+  if (props.disabled || importError.value) return false
   const result = check()
   if (!result) return false
   logic.value = result
@@ -217,7 +222,7 @@ onBeforeUnmount(() => {
           @cursor="updateCursor"
         />
         <div class="dsl-statusbar">
-          <span>
+          <span :class="{ 'has-issue': checked && validation, 'is-pending': !checked }">
             {{ checked ? (validation ? '发现 1 处问题' : '语法与规则检查通过') : '正在检查…' }}
           </span>
           <span>第 {{ cursor.line }} 行，第 {{ cursor.column }} 列</span>
@@ -234,8 +239,8 @@ onBeforeUnmount(() => {
         />
         <div class="dsl-reference-list">
           <button
-            v-for="binding in visibleBindings"
-            :key="`${binding.category}-${binding.alias}`"
+            v-for="(binding, index) in visibleBindings"
+            :key="`${binding.category}-${binding.alias}-${index}`"
             type="button"
             :disabled="disabled"
             :title="binding.label"

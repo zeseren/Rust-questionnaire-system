@@ -1,7 +1,6 @@
 //! 新题目与复制题目生成独立身份，调整顺序不改变已有身份。
 import { copy } from './json.ts'
 import { newId } from './uuid.ts'
-import { renewDocumentIds } from './wasm/index.ts'
 import type { FlowNode, Question, SurveyDocument } from './types.ts'
 type PageNode = Extract<FlowNode, { type: 'page' }>
 // 与后端文本答案容量一致；新题默认使用上限，发布者可以调低。
@@ -58,13 +57,6 @@ export function duplicateQuestion(question: Question, document: SurveyDocument) 
     })
   duplicateQuestionRule(document, question, duplicated)
   return duplicated
-}
-
-/** 整卷复制：身份重写交给 wasm 引擎，题目、选项、计算变量与流程节点的
- * 全部引用同步更新；来源文档不被修改。 */
-export function duplicateSurveyDocument(document: SurveyDocument): SurveyDocument {
-  // renewDocumentIds 只读取入参并返回新文档，无需先深拷贝。
-  return renewDocumentIds(document)
 }
 
 /** 将流程页面中的题目归属同步为 `document.questions` 的全局顺序。

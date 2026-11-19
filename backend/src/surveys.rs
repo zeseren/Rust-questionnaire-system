@@ -9,9 +9,9 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseTransaction, EntityTrait,
-    FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
-    TransactionTrait, sea_query::Expr,
+    AccessMode, ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseTransaction,
+    EntityTrait, FromQueryResult, IsolationLevel, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, Statement, TransactionOptions, TransactionTrait, sea_query::Expr,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
@@ -791,11 +791,17 @@ async fn delete_survey(state: &AppState, owner_id: Uuid, id: Uuid) -> AppResult<
     let tx = state.db.begin().await?;
     // 删除响应是 204，只需元数据判断是否从未发布，不读取草稿。
     let meta = repository::lock_owned_survey_meta(&tx, owner_id, id).await?;
-    if meta.status != SurveyStatus::Unpublished {
-        return Err(AppError::conflict(
-            "survey_published",
-            "发布过的问卷不能删除，请使用归档",
-        ));
+    match meta.status {
+        SurveyStatus::Unpublished => {}
+        SurveyStatus::Archived => {
+            return Err(AppError::conflict("survey_archived", "已归档问卷不可删除"));
+        }
+        _ => {
+            return Err(AppError::conflict(
+                "survey_published",
+                "发布过的问卷不能删除，请使用归档",
+            ));
+        }
     }
     survey::Entity::delete_by_id(id).exec(&tx).await?;
     tx.commit().await?;
@@ -826,7 +832,7 @@ async fn publish_survey(
         let current = version::Entity::find_by_id(current_id)
             .one(&tx)
             .await?
-            .ok_or_else(|| AppError::internal("current version is missing"))?;
+            .ok_or_else(|| AppError::internal("当前发布版本缺失"))?;
         if current.document == draft {
             let result = PublishedSurvey {
                 survey: survey_detail(record, Document::deserialize(&draft)?, now),
@@ -919,22 +925,25 @@ async fn update_collection(
     ensure_editable(&meta)?;
     validate_mode_change(meta.current_version_id, meta.mode, input.mode)?;
     let deadline_changed = input.deadline.is_some();
-    let mut active = survey::ActiveModel {
-        id: Set(id),
-        updated_at: Set(now),
-        ..Default::default()
-    };
-    if let Some(mode) = input.mode {
-        meta.mode = Some(mode);
-        active.mode = Set(Some(mode));
+    // 两个字段都省略时不写库，也不推进 updated_at；响应直接使用当前元数据。
+    if input.mode.is_some() || input.deadline.is_some() {
+        let mut active = survey::ActiveModel {
+            id: Set(id),
+            updated_at: Set(now),
+            ..Default::default()
+        };
+        if let Some(mode) = input.mode {
+            meta.mode = Some(mode);
+            active.mode = Set(Some(mode));
+        }
+        if let Some(deadline) = input.deadline {
+            meta.deadline = deadline;
+            active.deadline = Set(deadline);
+        }
+        // 不取回整行：避免把未改动的 1 MiB 草稿经 RETURNING 搬回内存。
+        active.update_without_returning(&tx).await?;
+        meta.updated_at = now;
     }
-    if let Some(deadline) = input.deadline {
-        meta.deadline = deadline;
-        active.deadline = Set(deadline);
-    }
-    // 不取回整行：避免把未改动的 1 MiB 草稿经 RETURNING 搬回内存。
-    active.update_without_returning(&tx).await?;
-    meta.updated_at = now;
     // 只有写入新截止时间时才可能产生新到期；它永远不会把 closed 改成 collecting。
     let meta = if deadline_changed {
         repository::expire_survey(&tx, meta, now).await?
@@ -991,9 +1000,18 @@ async fn list_versions(
     pagination: Pagination,
 ) -> AppResult<Page<VersionSummary>> {
     let bounds = pagination.bounds()?;
-    let meta = repository::owned_survey_meta(&state.db, owner_id, id).await?;
+    // 同一只读快照内读取元数据、总数与分页行，保证 is_current 与返回版本一致。
+    let tx = state
+        .db
+        .begin_with_options(TransactionOptions {
+            isolation_level: Some(IsolationLevel::RepeatableRead),
+            access_mode: Some(AccessMode::ReadOnly),
+            ..Default::default()
+        })
+        .await?;
+    let meta = repository::owned_survey_meta(&tx, owner_id, id).await?;
     let query = version::Entity::find().filter(version::Column::SurveyId.eq(meta.id));
-    let total = query.clone().count(&state.db).await?;
+    let total = query.clone().count(&tx).await?;
     let rows = query
         .select_only()
         .columns([
@@ -1005,7 +1023,7 @@ async fn list_versions(
         .offset(bounds.offset)
         .limit(bounds.limit)
         .into_model::<VersionListRow>()
-        .all(&state.db)
+        .all(&tx)
         .await?;
     let items = rows
         .into_iter()
@@ -1016,6 +1034,7 @@ async fn list_versions(
             is_current: meta.current_version_id == Some(row.id),
         })
         .collect();
+    tx.commit().await?;
     Ok(Page::new(items, total, bounds))
 }
 

@@ -44,6 +44,9 @@ static PRECEDENCE: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
         .op(Op::prefix(negation) | Op::prefix(unary_minus))
 });
 
+/// 文本源码与格式化输出的字节上限；格式化结果必须仍能通过同一预检。
+const MAX_LOGIC_TEXT_BYTES: usize = 1_048_576;
+
 /// 文本错误携带源位置，语义错误同时保留原 AST 路径。
 #[derive(Debug, thiserror::Error, Serialize)]
 #[error("{error}（第 {line} 行，第 {column} 列）")]
@@ -98,14 +101,16 @@ fn string(source: &str, pair: &Pair<'_, Rule>) -> Result<String, LogicTextError>
 }
 
 pub(crate) fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
-    if source.len() > 1_048_576 {
+    if source.len() > MAX_LOGIC_TEXT_BYTES {
         return Err(failure(source, 0, LogicErrorCode::LimitExceeded));
     }
     let lexicon = next(&mut parse(source, Rule::lexicon)?);
     // 每层记录尚未结束的前缀运算；括号、函数、! 与一元 - 共用递归深度预算。
     let mut prefixes = vec![0_usize];
     let mut depth = 1;
-    // 三元条件没有显式闭合符号，按语句累积；嵌套的 if 同样参与解析递归预算。
+    // 三元条件没有显式闭合符号，按括号层统计未结束的 if：逗号结束本层的条件，
+    // 分号结束整条语句；各层计数之和与 `depth` 一起参与解析递归预算。
+    let mut condition_levels = vec![0_usize];
     let mut conditions = 0_usize;
     // 区分二元与一元 `-`：只有紧接完整操作数之后的减号才是中缀运算符。
     let mut ends_primary = false;
@@ -123,6 +128,7 @@ pub(crate) fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
             match token.as_str() {
                 // 条件与两个分支关键字之后都重新开始一个表达式，不能当作操作数结尾。
                 "if" => {
+                    *condition_levels.last_mut().expect("始终保留表达式外层") += 1;
                     conditions += 1;
                     ends_primary = false;
                 }
@@ -143,18 +149,26 @@ pub(crate) fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
                     *prefixes.last_mut().expect("始终保留表达式外层") += 1;
                     depth += 1;
                 }
-                "(" => {
+                "(" | "[" => {
                     prefixes.push(0);
+                    condition_levels.push(0);
                     depth += 1;
                 }
-                ")" if prefixes.len() > 1 => {
+                ")" | "]" if prefixes.len() > 1 => {
                     depth -= 1 + prefixes.pop().expect("已检查存在内层");
+                    conditions -= condition_levels.pop().expect("已检查存在内层");
                 }
                 "&&" | "||" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "/"
                 | "," | ";" | "->" | "}" => {
                     depth -= std::mem::take(prefixes.last_mut().expect("始终保留表达式外层"));
+                    // 逗号结束本层未闭合的三元条件；分号结束整条语句的条件。
                     if token.as_str() == ";" {
                         conditions = 0;
+                        condition_levels.fill(0);
+                    } else if token.as_str() == "," {
+                        conditions -= std::mem::take(
+                            condition_levels.last_mut().expect("始终保留表达式外层"),
+                        );
                     }
                 }
                 _ => {}
@@ -180,6 +194,8 @@ enum Category {
 struct Binding {
     category: Category,
     id: Uuid,
+    /// `bind` 声明在源码中的字节偏移，绑定校验据此定位到具体语句。
+    offset: usize,
 }
 
 /// 规则包中需要回映射源位置的路径片段；仅在编译失败时格式化为字符串。
@@ -269,6 +285,8 @@ impl Budget {
 struct Compiler<'a> {
     source: &'a str,
     bindings: BTreeMap<&'a str, Binding>,
+    /// 按源码顺序记录别名；绑定校验不受别名排序影响。
+    binding_order: Vec<&'a str>,
     rule_indices: BTreeMap<Uuid, usize>,
     locations: Vec<(Location, usize)>,
 }
@@ -543,7 +561,7 @@ impl<'a> Compiler<'a> {
         program: Pair<'a, Rule>,
         questions: &[Question],
     ) -> Result<DocumentLogic, LogicTextError> {
-        let (first_offset, declarations, mut logic) = self.header(program)?;
+        let (declarations, mut logic) = self.header(program)?;
         let mut bound_ids = BTreeSet::new();
         let mut definitions = BTreeSet::new();
         let mut nodes = Vec::new();
@@ -585,7 +603,12 @@ impl<'a> Compiler<'a> {
                                     LogicErrorCode::InvalidReference,
                                 ));
                             }
-                            entry.insert(Binding { category, id });
+                            entry.insert(Binding {
+                                category,
+                                id,
+                                offset,
+                            });
+                            self.binding_order.push(alias.as_str());
                         }
                     }
                 }
@@ -714,18 +737,17 @@ impl<'a> Compiler<'a> {
             })?;
             logic.flow = Some(FlowDefinition { entry, nodes });
         }
-        self.validate_bindings(first_offset, questions, &definitions)?;
+        self.validate_bindings(questions, &definitions)?;
         self.finish(logic, questions)
     }
 
-    /// 读取版本头，返回头部起始位置、剩余声明和初始规则包。
+    /// 读取版本头，返回剩余声明和初始规则包。
     fn header(
         &self,
         program: Pair<'a, Rule>,
-    ) -> Result<(usize, Pairs<'a, Rule>, DocumentLogic), LogicTextError> {
+    ) -> Result<(Pairs<'a, Rule>, DocumentLogic), LogicTextError> {
         let mut declarations = program.into_inner();
         let header = next(&mut declarations);
-        let first_offset = header.as_span().start();
         let mut header = header.into_inner();
         next(&mut header);
         let dsl = next(&mut header);
@@ -744,13 +766,12 @@ impl<'a> Compiler<'a> {
             rules: Vec::new(),
             flow: None,
         };
-        Ok((first_offset, declarations, logic))
+        Ok((declarations, logic))
     }
 
-    /// 校验每个别名都绑定到文档中真实存在的题目、选项、变量或流程节点。
+    /// 按源码顺序校验每个别名都绑定到文档中真实存在的题目、选项、变量或流程节点。
     fn validate_bindings(
         &self,
-        first_offset: usize,
         questions: &[Question],
         definitions: &BTreeSet<Uuid>,
     ) -> Result<(), LogicTextError> {
@@ -763,7 +784,9 @@ impl<'a> Compiler<'a> {
                 option_ids.extend(options.iter().map(|option| option.id));
             }
         }
-        for binding in self.bindings.values() {
+        // 源码顺序与别名排序无关；第一条非法绑定决定诊断位置。
+        for alias in &self.binding_order {
+            let binding = self.bindings.get(*alias).expect("顺序表只记录已插入的别名");
             let valid = match binding.category {
                 Category::Question => question_ids.contains(&binding.id),
                 Category::Option => option_ids.contains(&binding.id),
@@ -772,7 +795,7 @@ impl<'a> Compiler<'a> {
             if !valid {
                 return Err(failure(
                     self.source,
-                    first_offset,
+                    binding.offset,
                     LogicErrorCode::InvalidReference,
                 ));
             }
@@ -819,6 +842,7 @@ pub fn parse_logic_text(
     Compiler {
         source,
         bindings: BTreeMap::new(),
+        binding_order: Vec::new(),
         rule_indices: BTreeMap::new(),
         locations: Vec::new(),
     }
@@ -1019,11 +1043,9 @@ fn read_string(source: &str, index: usize) -> Option<(&str, usize)> {
     None
 }
 
-/// 二元运算符由 (op, 名称) 反查符号；与 TS 端 `binary` 表一一对应。
+/// 二元运算符由 (op, 名称) 反查符号；`all` / `any` 由表达式分支单独处理。
 fn binary_symbol(op: &str, name: &str) -> Option<&'static str> {
     match (op, name) {
-        ("any", _) => Some("||"),
-        ("all", _) => Some("&&"),
         ("compare", "eq") => Some("=="),
         ("compare", "ne") => Some("!="),
         ("compare", "lt") => Some("<"),
@@ -1055,10 +1077,15 @@ impl Formatter {
         }
     }
 
-    fn bind(&mut self, category: &str, id: Uuid, alias: String) {
+    fn bind(&mut self, category: &str, id: Uuid, alias: String) -> Result<(), LogicError> {
+        // 题目与选项身份相撞时不能静默覆盖已有别名，否则文本会丢失一条绑定。
+        if self.aliases.contains_key(&id) {
+            return Err(error(LogicErrorCode::InvalidReference, "$", None));
+        }
         self.output.push('\n');
         write!(self.output, "bind {category} {alias} = \"{id}\";").expect("写入 String 不会失败");
         self.aliases.insert(id, alias);
+        Ok(())
     }
 
     fn write_variable(&mut self, variable: &ComputedVariable) -> Result<(), LogicError> {
@@ -1158,6 +1185,22 @@ fn reference<'a>(aliases: &'a BTreeMap<Uuid, String>, id: &Value) -> Result<&'a 
         .and_then(crate::identity::parse)
         .ok_or_else(|| error(LogicErrorCode::InvalidReference, "$", None))
         .and_then(|id| alias(aliases, id))
+}
+
+/// 写入运算符操作数：三元条件没有显式闭合符号，必须整体加括号，
+/// 否则重新解析时 `else` 分支会吞掉相邻运算符。
+fn write_operand(
+    aliases: &BTreeMap<Uuid, String>,
+    output: &mut String,
+    raw: &Value,
+) -> Result<(), LogicError> {
+    if raw.get("op").and_then(Value::as_str) == Some("if") {
+        output.push('(');
+        write_expression(aliases, output, raw)?;
+        output.push(')');
+        return Ok(());
+    }
+    write_expression(aliases, output, raw)
 }
 
 /// 递归写入表达式节点；未知结构返回 `invalid_syntax`，运算符按 TS `binary` 表反查。
@@ -1278,11 +1321,11 @@ fn write_expression(
             };
             let operator = binary_symbol(op, name).ok_or_else(invalid_syntax)?;
             output.push('(');
-            write_expression(aliases, output, field("left")?)?;
+            write_operand(aliases, output, field("left")?)?;
             output.push(' ');
             output.push_str(operator);
             output.push(' ');
-            write_expression(aliases, output, field("right")?)?;
+            write_operand(aliases, output, field("right")?)?;
             output.push(')');
         }
     }
@@ -1300,23 +1343,23 @@ pub fn format_logic_text(
     logic.compile(questions)?;
     let mut formatter = Formatter::new(&logic.dsl_version, &logic.semantics_version);
     for (index, question) in questions.iter().enumerate() {
-        formatter.bind("question", question.id, format!("q{}", index + 1));
+        formatter.bind("question", question.id, format!("q{}", index + 1))?;
         if let Some(options) = question.kind.options() {
             for (order, option) in options.iter().enumerate() {
                 formatter.bind(
                     "option",
                     option.id,
                     format!("q{}_o{}", index + 1, order + 1),
-                );
+                )?;
             }
         }
     }
     for (index, variable) in logic.variables.iter().enumerate() {
-        formatter.bind("variable", variable.id, format!("v{}", index + 1));
+        formatter.bind("variable", variable.id, format!("v{}", index + 1))?;
     }
     if let Some(flow) = &logic.flow {
         for (index, node) in flow.nodes.iter().enumerate() {
-            formatter.bind("node", node.id(), format!("n{}", index + 1));
+            formatter.bind("node", node.id(), format!("n{}", index + 1))?;
         }
     }
     // 绑定与定义之间、以及输出末尾各保留一个空行，对应原实现的 `lines.join("\n")`。
@@ -1339,5 +1382,9 @@ pub fn format_logic_text(
         formatter.write_flow(flow)?;
     }
     formatter.output.push('\n');
+    // 解析预检与格式化共用同一上限，保证生成的文本一定能被解析。
+    if formatter.output.len() > MAX_LOGIC_TEXT_BYTES {
+        return Err(error(LogicErrorCode::LimitExceeded, "$", None));
+    }
     Ok(formatter.output)
 }

@@ -213,11 +213,12 @@ async fn 信任代理时按转发头分桶() {
         ),
     )
     .expect("缺少 X-Forwarded-For 时回退到 X-Real-IP");
-    // 首个非空且合法的转发地址生效：前导空白与非法值都被跳过。
-    security::check(&state, &请求("not-an-ip, 203.0.113.9")).expect("首个有效转发地址决定分桶");
-    security::check(&state, &请求("not-an-ip, 203.0.113.9")).expect("同一有效转发地址共享分桶");
-    let error = security::check(&state, &请求("not-an-ip, 203.0.113.9"))
-        .expect_err("同一有效转发地址的第三次请求必须限流");
+    // 最右侧的有效转发地址生效：左侧是客户端可追加伪造的内容，右侧才是可信代理写入的地址。
+    security::check(&state, &请求("203.0.113.7, 203.0.113.9")).expect("最右侧有效转发地址决定分桶");
+    security::check(&state, &请求("198.51.100.1, 203.0.113.9"))
+        .expect("同一最右侧转发地址共享分桶");
+    let error = security::check(&state, &请求("203.0.113.1, 203.0.113.9"))
+        .expect_err("同一最右侧转发地址的第三次请求必须限流");
     assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
 }
 
@@ -303,20 +304,25 @@ async fn 限流窗口满六十秒后重置() {
 }
 
 #[tokio::test]
-async fn 活跃桶达到上限且无可淘汰窗口时整体清空() {
+async fn 活跃桶达到上限时淘汰最早窗口() {
     let 基准 = Instant::now();
     let buckets = Mutex::new(std::collections::HashMap::new());
-    // 三个键都在同一窗口内活跃，`retain` 一条也删不掉。
-    for key in 0..3_u32 {
-        security::admit_bucket(&buckets, 3, key, 10, 基准).expect("常规请求必须放行");
+    // 三个键都在同一窗口内活跃，`retain` 一条也删不掉；started 递增表示最旧的是 0。
+    for (偏移, key) in [0_u32, 1, 2].into_iter().enumerate() {
+        security::admit_bucket(&buckets, 3, key, 1, 基准 + Duration::from_secs(偏移 as u64))
+            .expect("常规请求必须放行");
     }
     assert_eq!(buckets.lock().expect("加锁成功").len(), 3);
-    security::admit_bucket(&buckets, 3, 99, 10, 基准).expect("超限后仍必须放行本次请求");
-    let 剩余 = buckets.lock().expect("加锁成功").len();
-    assert_eq!(
-        剩余, 1,
-        "无可淘汰窗口时必须整体清空，仅保留当前请求桶，实际 {剩余}"
-    );
+    security::admit_bucket(&buckets, 3, 99, 1, 基准 + Duration::from_secs(3))
+        .expect("淘汰最早窗口后仍必须放行本次请求");
+    // 已存在的键即使桶已满也按自己的窗口计数，新键涌入不能把它重置。
+    let 超限 = security::admit_bucket(&buckets, 3, 2, 1, 基准 + Duration::from_secs(4))
+        .expect_err("超过上限的旧键必须继续被拒绝");
+    assert_eq!(error_json(超限).await.0, StatusCode::TOO_MANY_REQUESTS);
+    let 剩余 = buckets.lock().expect("加锁成功");
+    assert_eq!(剩余.len(), 3, "容量必须保持不变");
+    assert!(!剩余.contains_key(&0), "最旧的窗口必须被淘汰");
+    assert!(剩余.contains_key(&99), "新键必须插入");
 }
 
 #[tokio::test]

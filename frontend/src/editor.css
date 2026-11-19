@@ -10,26 +10,12 @@
  */
 .editor-heading {
   position: sticky;
-  top: 56px;
+  top: 58px;
   z-index: 16;
   background: color-mix(in srgb, var(--bg-canvas) 94%, transparent);
   backdrop-filter: blur(8px);
   padding: 12px 0;
   border-bottom: 1px solid var(--border-hairline);
-}
-.editor-header-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  width: 100%;
-}
-.editor-header-bar > :first-child {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 .editor-entity-actions {
   display: flex;
@@ -206,6 +192,11 @@
   border: 1px solid var(--accent-border);
 }
 .template-icon.violet {
+  color: var(--indigo);
+  background: var(--indigo-soft);
+  border-color: var(--indigo-border);
+}
+.template-icon.blue {
   color: var(--indigo);
   background: var(--indigo-soft);
   border-color: var(--indigo-border);
@@ -620,7 +611,7 @@
 /* DSL 文本工作台：松烟墨编辑部控制台风格 */
 .dsl-workbench {
   padding: 0;
-  overflow: hidden;
+  overflow: clip;
   border-color: var(--border-strong);
   box-shadow: var(--shadow-float);
 }
@@ -740,6 +731,12 @@
 .dsl-statusbar > span:first-child {
   color: #8fd19e;
 }
+.dsl-statusbar > span.has-issue {
+  color: #e2a54f;
+}
+.dsl-statusbar > span.is-pending {
+  color: #a8a298;
+}
 .dsl-reference {
   padding: 18px 14px;
   border-left: 1px solid var(--border-hairline);
@@ -833,6 +830,9 @@
 .dsl-actions .hint {
   color: #a8a298;
 }
+.dsl-actions .text-button {
+  color: #a8a298;
+}
 .dsl-actions > div:first-child {
   display: grid;
   gap: 6px;
@@ -856,10 +856,6 @@
   }
 }
 @media (max-width: 900px) {
-  /* 移动端顶栏更矮，编辑器固定栏跟随其高度 */
-  .editor-heading {
-    top: 52px;
-  }
   .question-outline {
     display: none;
   }
@@ -874,6 +870,10 @@
   }
 }
 @media (max-width: 760px) {
+  /* 与 styles.css 的移动端顶栏（56px）保持一致。 */
+  .editor-heading {
+    top: 56px;
+  }
   .workspace-nav {
     padding: 6px;
     gap: 8px;

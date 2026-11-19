@@ -57,8 +57,14 @@ const loginRequired = computed(() => meta.value?.mode === 'login_once' && !auth.
 const draftKey = computed(() =>
   survey.value ? `${STORAGE_PREFIX}${id}:${survey.value.version_id}` : '',
 )
+/** 未决提交按问卷保存，载荷内自带版本号；重试时沿用原来的幂等键。 */
+const pendingKey = `${STORAGE_PREFIX}${id}:pending`
 function flowChanged(count: number) {
   flowAnswered.value = count
+  errors.value = {}
+  scheduleSave()
+}
+function fieldsChanged() {
   errors.value = {}
   scheduleSave()
 }
@@ -84,11 +90,47 @@ function writeDraft() {
   const draft: FillDraft = {}
   if (survey.value?.document.logic) draft.events = flowFields.value?.events() ?? []
   else draft.values = values.value
+  const empty = survey.value?.document.logic
+    ? !draft.events?.length
+    : !Object.values(draft.values ?? {}).some(isAnswered)
+  if (empty) {
+    clearDraft()
+    return
+  }
   try {
     localStorage.setItem(draftKey.value, JSON.stringify(draft))
   } catch {
     // 隐私模式等存储不可用时静默跳过，填写本身不受影响。
   }
+}
+function readPending(): Submission | null {
+  try {
+    const raw = localStorage.getItem(pendingKey)
+    if (!raw) return null
+    const submission = decode<Submission | null>(raw)
+    if (!submission || typeof submission !== 'object') return null
+    if (
+      typeof submission.version_id !== 'string' ||
+      typeof submission.idempotency_key !== 'string' ||
+      !Array.isArray(submission.answers)
+    )
+      return null
+    return submission
+  } catch {
+    return null
+  }
+}
+function writePending(submission: Submission) {
+  try {
+    localStorage.setItem(pendingKey, JSON.stringify(submission))
+  } catch {
+    // 存储不可用时只在本次会话内保留原载荷。
+  }
+}
+function clearPending() {
+  try {
+    localStorage.removeItem(pendingKey)
+  } catch {}
 }
 let saveTimer: ReturnType<typeof setTimeout> | undefined
 function scheduleSave() {
@@ -106,6 +148,7 @@ function clearDraft() {
 /** 流程页「清空重填」：同时丢弃已回放的进度，避免下次初始化又被恢复。 */
 function resetFlowDraft() {
   flowDraft.value = []
+  restored.value = false
   clearDraft()
 }
 function applyStoredDraft(result: PublicSurvey) {
@@ -119,6 +162,7 @@ function applyStoredDraft(result: PublicSurvey) {
     flowDraft.value = draft.events
   } else {
     if (!draft.values || typeof draft.values !== 'object') return
+    if (!Object.values(draft.values).some(isAnswered)) return
     values.value = draft.values
   }
   restored.value = true
@@ -146,11 +190,20 @@ async function loadSurvey() {
     const result = await api<PublicSurvey>(`/api/public/surveys/${id}`)
     survey.value = result
     versionChanged.value = false
+    uncertain.value = false
     pending.value = null
     receipt.value = null
     errors.value = {}
     flowAnswered.value = 0
     applyStoredDraft(result)
+    // 未决提交只在版本一致时回放，保证“重试原提交”沿用原来的幂等键。
+    const storedPending = readPending()
+    if (storedPending && storedPending.version_id === result.version_id) {
+      pending.value = storedPending
+      uncertain.value = true
+    } else if (storedPending) {
+      clearPending()
+    }
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) loginNeeded.value = true
     else error.value = message(reason)
@@ -159,7 +212,7 @@ async function loadSurvey() {
   }
 }
 function resetFill() {
-  if (busy.value || !answered.value) return
+  if (busy.value || uncertain.value || versionChanged.value || !answered.value) return
   if (!window.confirm('确定清空当前已填写的回答吗？')) return
   error.value = ''
   values.value = {}
@@ -215,6 +268,8 @@ async function submit(flowAnswers?: Answer[]) {
     loginNeeded.value = true
     return
   }
+  // 请求发出前先冻结载荷：请求途中关闭页面也能用原幂等键重试。
+  if (pending.value) writePending(pending.value)
   busy.value = true
   try {
     const result = await api<Receipt>(`/api/public/surveys/${id}/responses`, 'POST', pending.value)
@@ -225,6 +280,7 @@ async function submit(flowAnswers?: Answer[]) {
     uncertain.value = false
     restored.value = false
     clearDraft()
+    clearPending()
     window.scrollTo({ top: 0 })
     await nextTick()
     receiptPanel.value?.focus()
@@ -243,7 +299,12 @@ async function submit(flowAnswers?: Answer[]) {
         reason.status === 401 ||
         reason.code === 'idempotency_conflict'
     } else uncertain.value = true
-    if (!uncertain.value) pending.value = null
+    if (uncertain.value) {
+      if (pending.value) writePending(pending.value)
+    } else {
+      pending.value = null
+      clearPending()
+    }
   } finally {
     busy.value = false
     await nextTick()
@@ -252,7 +313,7 @@ async function submit(flowAnswers?: Answer[]) {
 }
 function leave(event: BeforeUnloadEvent) {
   writeDraft()
-  if (!receipt.value && (answered.value > 0 || uncertain.value)) {
+  if (!receipt.value && (busy.value || answered.value > 0 || uncertain.value)) {
     event.preventDefault()
     event.returnValue = ''
   }
@@ -261,7 +322,7 @@ onBeforeRouteLeave(() => {
   writeDraft()
   return (
     !!receipt.value ||
-    (!answered.value && !uncertain.value) ||
+    (!busy.value && !answered.value && !uncertain.value) ||
     window.confirm('离开后可在同一版本继续填写，是否离开？')
   )
 })
@@ -347,7 +408,14 @@ onBeforeUnmount(() => {
       <form v-else-if="survey" novalidate @submit.prevent="submit()">
         <div v-if="restored" class="notice mt">
           <div class="grow">已恢复上次未提交的填写进度，可继续填写或清空重试。</div>
-          <button type="button" class="text-button" @click="resetFill">清空重填</button>
+          <button
+            type="button"
+            class="text-button"
+            :disabled="busy || uncertain || versionChanged"
+            @click="resetFill"
+          >
+            清空重填
+          </button>
         </div>
         <div v-if="versionChanged" class="notice mt">
           <div>
@@ -380,7 +448,7 @@ onBeforeUnmount(() => {
           :document="survey.document"
           :errors="errors"
           :disabled="busy || uncertain || versionChanged"
-          @change="scheduleSave()"
+          @change="fieldsChanged"
         />
         <div
           v-if="!survey.document.logic || uncertain || versionChanged"

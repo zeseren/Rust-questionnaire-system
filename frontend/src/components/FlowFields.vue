@@ -110,7 +110,11 @@ function commit(id: string) {
   inputs.commit(id)
   refresh()
 }
-watch([() => props.document, () => props.restore], initSession, { immediate: true })
+watch(
+  [() => [props.document, props.document.logic, props.document.questions], () => props.restore],
+  initSession,
+  { immediate: true },
+)
 const pageDocument = computed(() => {
   const current = props.document.logic?.flow?.nodes.find(
     (node) => node.id === snapshot.value?.current_node,
@@ -124,12 +128,24 @@ const pageDocument = computed(() => {
       .map((q) => ({ ...q, required: snapshot.value?.required.includes(q.id) ?? q.required })),
   }
 })
+const numbers = computed<Record<string, number>>(() => {
+  const result: Record<string, number> = {}
+  props.document.questions.forEach((question, index) => {
+    result[question.id] = index + 1
+  })
+  return result
+})
 const fieldErrors = computed<Record<string, string>>(() => {
   const result: Record<string, string> = {}
   for (const q of pageDocument.value.questions) {
     const raw = values.value[q.id]
-    // 数字尚在过渡前缀时按“输入中”处理，不显示上一轮遗留的校验错误。
-    if (typeof raw === 'string' && transitionalNumber(numberInput(raw))) continue
+    // 数字题尚在过渡前缀时按“输入中”处理，不显示上一轮遗留的校验错误。
+    if (
+      (q.type === 'number' || q.type === 'rating') &&
+      typeof raw === 'string' &&
+      transitionalNumber(numberInput(raw))
+    )
+      continue
     const code = snapshot.value?.errors[q.id]
     const text =
       props.errors[q.id] ||
@@ -211,6 +227,7 @@ async function focusQuestion(id: string) {
   while (!pageDocument.value.questions.some((q) => q.id === id) || snapshot.value?.outcome) {
     if ((snapshot.value?.history.length ?? 0) <= 1) break
     inputs.previous()
+    recorded.push({ type: 'previous' })
     refresh()
   }
   attempted.value = true
@@ -229,6 +246,7 @@ defineExpose({ submissionAnswers, focusQuestion, reset, events })
         <SurveyFields
           v-model="values"
           :document="pageDocument"
+          :numbers="numbers"
           :errors="fieldErrors"
           :disabled="disabled"
           @change="change"

@@ -11,7 +11,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, QuerySelect, Set,
-    TransactionTrait, sea_query::LockType,
+    SqlErr, TransactionTrait, sea_query::LockType,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -300,18 +300,7 @@ async fn submit_response(
     let scope = locked
         .respondent_id
         .map_or_else(|| "anonymous".to_owned(), |id| id.to_string());
-    let previous = response::Entity::find()
-        .select_only()
-        .column(response::Column::Id)
-        .column(response::Column::VersionId)
-        .column(response::Column::PayloadHash)
-        .column(response::Column::Outcome)
-        .filter(response::Column::SurveyId.eq(id))
-        .filter(response::Column::Scope.eq(&scope))
-        .filter(response::Column::KeyHash.eq(&key_hash))
-        .into_tuple::<(Uuid, Uuid, String, Outcome)>()
-        .one(&locked.tx)
-        .await?;
+    let previous = find_previous(&locked.tx, id, &scope, &key_hash).await?;
     if let Some((_, original_version, _, _)) = &previous
         && *original_version != request.version_id
     {
@@ -343,19 +332,10 @@ async fn submit_response(
     let evaluated = published.prepared.evaluate_submission(request.answers)?;
     let outcome = Outcome::from(evaluated.outcome);
     let payload_hash = submission_payload_hash(request.version_id, &evaluated.answers)?;
-    if let Some((receipt_id, _, original_hash, original_outcome)) = previous {
-        if original_hash != payload_hash {
-            return Err(idempotency_conflict());
-        }
+    if let Some(previous) = previous {
+        let receipt = replay_receipt(previous, &payload_hash)?;
         locked.tx.commit().await?;
-        return Ok((
-            StatusCode::OK,
-            SubmissionReceipt {
-                status: SubmissionStatus::Submitted,
-                receipt_id,
-                outcome: original_outcome,
-            },
-        ));
+        return Ok((StatusCode::OK, receipt));
     }
 
     let receipt_id = Uuid::now_v7();
@@ -369,30 +349,102 @@ async fn submit_response(
             .map(|(question_id, value)| (question_id.to_string(), value))
             .collect(),
     );
-    response::Entity::insert(response::ActiveModel {
+    let inserted = response::Entity::insert(response::ActiveModel {
         id: Set(receipt_id),
         survey_id: Set(id),
         version_id: Set(request.version_id),
         respondent_id: Set(locked.respondent_id),
-        scope: Set(scope),
-        key_hash: Set(key_hash),
-        payload_hash: Set(payload_hash),
+        scope: Set(scope.clone()),
+        key_hash: Set(key_hash.clone()),
+        payload_hash: Set(payload_hash.clone()),
         answers: Set(answers_json),
         outcome: Set(outcome),
         question_states: Set(serde_json::to_value(evaluated.question_states)?),
         submitted_at: Set(submitted_at),
     })
     .exec_without_returning(&locked.tx)
-    .await?;
-    locked.tx.commit().await?;
-    Ok((
-        StatusCode::CREATED,
-        SubmissionReceipt {
-            status: SubmissionStatus::Submitted,
-            receipt_id,
-            outcome,
+    .await;
+    match inserted {
+        Ok(_) => {
+            locked.tx.commit().await?;
+            Ok((
+                StatusCode::CREATED,
+                SubmissionReceipt {
+                    status: SubmissionStatus::Submitted,
+                    receipt_id,
+                    outcome,
+                },
+            ))
+        }
+        // 前置查询之后可能有并发提交抢先落库：PostgreSQL 事务已中止，不能继续使用，
+        // 回滚后从连接池重新判定幂等重放与登录限次。
+        Err(error) => match error.sql_err() {
+            Some(SqlErr::UniqueConstraintViolation(_)) => {
+                locked.tx.rollback().await?;
+                resolve_insert_conflict(state, id, &scope, &key_hash, &payload_hash).await
+            }
+            _ => Err(AppError::from(error)),
         },
-    ))
+    }
+}
+
+/// 唯一约束冲突后的重判：同幂等键记录存在则按重放语义返回，否则是登录限次已占用。
+async fn resolve_insert_conflict(
+    state: &AppState,
+    survey_id: Uuid,
+    scope: &str,
+    key_hash: &str,
+    payload_hash: &str,
+) -> AppResult<(StatusCode, SubmissionReceipt)> {
+    match find_previous(&state.db, survey_id, scope, key_hash).await? {
+        Some(previous) => {
+            replay_receipt(previous, payload_hash).map(|receipt| (StatusCode::OK, receipt))
+        }
+        None => Err(already_submitted()),
+    }
+}
+
+/// 查询同一作用域与幂等键的历史回执；新提交与并发冲突后的重判共用。
+async fn find_previous(
+    db: &impl ConnectionTrait,
+    survey_id: Uuid,
+    scope: &str,
+    key_hash: &str,
+) -> AppResult<Option<(Uuid, Uuid, String, Outcome)>> {
+    Ok(response::Entity::find()
+        .select_only()
+        .column(response::Column::Id)
+        .column(response::Column::VersionId)
+        .column(response::Column::PayloadHash)
+        .column(response::Column::Outcome)
+        .filter(response::Column::SurveyId.eq(survey_id))
+        .filter(response::Column::Scope.eq(scope))
+        .filter(response::Column::KeyHash.eq(key_hash))
+        .into_tuple::<(Uuid, Uuid, String, Outcome)>()
+        .one(db)
+        .await?)
+}
+
+/// 成功重试的公共语义：同载荷返回原回执，不同载荷返回幂等冲突。
+fn replay_receipt(
+    (receipt_id, _, original_hash, original_outcome): (Uuid, Uuid, String, Outcome),
+    payload_hash: &str,
+) -> AppResult<SubmissionReceipt> {
+    if original_hash != payload_hash {
+        return Err(idempotency_conflict());
+    }
+    Ok(SubmissionReceipt {
+        status: SubmissionStatus::Submitted,
+        receipt_id,
+        outcome: original_outcome,
+    })
+}
+
+fn already_submitted() -> AppError {
+    AppError::conflict(
+        "already_submitted",
+        "此账号已经提交过本问卷，跨发布版本也不能重复提交",
+    )
 }
 
 async fn lock_public_survey(
@@ -461,10 +513,7 @@ async fn ensure_not_submitted(
         .one(db)
         .await?;
     if receipt.is_some() {
-        return Err(AppError::conflict(
-            "already_submitted",
-            "此账号已经提交过本问卷，跨发布版本也不能重复提交",
-        ));
+        return Err(already_submitted());
     }
     Ok(())
 }

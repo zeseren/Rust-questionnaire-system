@@ -319,3 +319,171 @@ fn 共享格式化样例逐字节一致且二次解析与格式化幂等() {
         assert_eq!(once, twice, "{name} 二次解析与一次解析不等值");
     }
 }
+
+#[test]
+fn 三元条件作为二元操作数时加括号并往返一致() {
+    // 左右操作数都必须是三元条件：否则 else 分支会吞掉相邻运算符。
+    let logic: DocumentLogic = serde_json::from_value(json!({
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+            {
+                "id": "00000000-0000-4000-8000-000000004001",
+                "value_type": "number",
+                "expression": {
+                    "op": "arithmetic",
+                    "operator": "add",
+                    "left": {
+                        "op": "if",
+                        "condition": {"op": "boolean", "value": true},
+                        "then_branch": {"op": "number", "value": "1"},
+                        "else_branch": {"op": "number", "value": "2"}
+                    },
+                    "right": {"op": "number", "value": "3"}
+                }
+            },
+            {
+                "id": "00000000-0000-4000-8000-000000004002",
+                "value_type": "number",
+                "expression": {
+                    "op": "arithmetic",
+                    "operator": "subtract",
+                    "left": {"op": "number", "value": "9"},
+                    "right": {
+                        "op": "if",
+                        "condition": {"op": "boolean", "value": false},
+                        "then_branch": {"op": "number", "value": "1"},
+                        "else_branch": {"op": "number", "value": "2"}
+                    }
+                }
+            },
+            {
+                "id": "00000000-0000-4000-8000-000000004003",
+                "value_type": "boolean",
+                "expression": {
+                    "op": "compare",
+                    "comparison": "eq",
+                    "left": {
+                        "op": "if",
+                        "condition": {"op": "boolean", "value": true},
+                        "then_branch": {"op": "boolean", "value": true},
+                        "else_branch": {"op": "boolean", "value": false}
+                    },
+                    "right": {"op": "boolean", "value": true}
+                }
+            }
+        ],
+        "rules": []
+    }))
+    .unwrap();
+    let formatted = format_logic_text(&logic, &[]).unwrap();
+    assert!(
+        formatted.contains("((if true then number(\"1\") else number(\"2\")) + number(\"3\"))"),
+        "{formatted}"
+    );
+    assert!(
+        formatted.contains("(number(\"9\") - (if false then number(\"1\") else number(\"2\")))"),
+        "{formatted}"
+    );
+    assert!(
+        formatted.contains("((if true then true else false) == true)"),
+        "{formatted}"
+    );
+    // 往返后必须得到同一棵 AST，而不是分支被相邻运算符改写。
+    assert_eq!(parse_logic_text(&formatted, &[]).unwrap(), logic);
+}
+
+#[test]
+fn 并列三元条件不触发解析嵌套预算且往返一致() {
+    // 63 个并列 if 只占 `all` 的参数层，不得按语句累加成 63 层嵌套。
+    let expressions: Vec<Value> = (0..63)
+        .map(|_| {
+            json!({
+                "op": "if",
+                "condition": {"op": "boolean", "value": true},
+                "then_branch": {"op": "boolean", "value": true},
+                "else_branch": {"op": "boolean", "value": false}
+            })
+        })
+        .collect();
+    let logic: DocumentLogic = serde_json::from_value(json!({
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [{
+            "id": "00000000-0000-4000-8000-000000004004",
+            "value_type": "boolean",
+            "expression": {"op": "all", "expressions": expressions}
+        }],
+        "rules": []
+    }))
+    .unwrap();
+    let formatted = format_logic_text(&logic, &[]).unwrap();
+    assert_eq!(parse_logic_text(&formatted, &[]).unwrap(), logic);
+}
+
+#[test]
+fn 绑定校验按源码顺序定位到具体语句() {
+    // 第 2 行绑定了不存在的题目，错误必须定位到该 bind 行而不是头部。
+    let source = concat!(
+        "dsl 1 semantics 1;\n",
+        "bind question ghost = \"00000000-0000-4000-8000-0000000000ff\";\n",
+    );
+    let error = parse_program(source, &[]).unwrap_err();
+    assert_eq!(error.error.code, LogicErrorCode::InvalidReference);
+    assert_eq!(error.line, 2);
+    assert_eq!(error.column, 1);
+    let offset = source.find("bind question ghost").unwrap();
+    assert_eq!(inspect_logic_text(source, &[]).error_offset, Some(offset));
+}
+
+#[test]
+fn 数字字面量原文超过字节上限时拒绝() {
+    // 数字字面量原文最多 64 字节，边界值仍可编译，超长原文按无效数字拒绝。
+    let declaration = |literal: &str| {
+        format!(
+            "dsl 1 semantics 1;\n\
+             bind variable v = \"00000000-0000-4000-8000-000000006001\";\n\
+             let v: number = number(\"{literal}\");"
+        )
+    };
+    let boundary = "1".repeat(64);
+    assert!(
+        parse_program(&declaration(&boundary), &[]).is_ok(),
+        "64 字节的原文仍在预算内"
+    );
+    let error = parse_program(&declaration(&"1".repeat(65)), &[]).unwrap_err();
+    assert_eq!(error.error.code, LogicErrorCode::InvalidNumber);
+    assert_eq!(error.line, 3);
+}
+
+#[test]
+fn 题目与选项身份撞车时拒绝格式化() {
+    // 第二个题目的身份与第一个题目的选项相同，生成别名时不得静默覆盖。
+    let questions: Vec<Question> = serde_json::from_value(json!([
+        {
+            "id": "00000000-0000-4000-8000-000000005001",
+            "title": "选项",
+            "required": false,
+            "type": "single_choice",
+            "options": [{"id": "00000000-0000-4000-8000-000000005002", "label": "甲"}]
+        },
+        {
+            "id": "00000000-0000-4000-8000-000000005002",
+            "title": "碰撞",
+            "required": false,
+            "type": "text",
+            "max_length": 10
+        }
+    ]))
+    .unwrap();
+    let logic = DocumentLogic {
+        dsl_version: 1_u32.into(),
+        semantics_version: 1_u32.into(),
+        variables: Vec::new(),
+        rules: Vec::new(),
+        flow: None,
+    };
+    let error = format_logic_text(&logic, &questions).unwrap_err();
+    assert_eq!(error.code, LogicErrorCode::InvalidReference);
+    assert_eq!(error.path, "$");
+}

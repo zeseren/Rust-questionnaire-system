@@ -28,7 +28,7 @@ export class FlowSession {
         let deferred2_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
-            const ptr0 = passStringToWasm0(event_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            const ptr0 = passStringToWasm0(event_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
             wasm.flowsession_dispatch(retptr, this.__wbg_ptr, ptr0, len0);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
@@ -38,7 +38,7 @@ export class FlowSession {
             return getStringFromWasm0(r0, r1);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred2_0, deferred2_1, 1);
+            wasm.__wbindgen_export3(deferred2_0, deferred2_1, 1);
         }
     }
     /**
@@ -57,7 +57,7 @@ export class FlowSession {
         let deferred2_1;
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
-            const ptr0 = passStringToWasm0(answers_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            const ptr0 = passStringToWasm0(answers_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
             wasm.flowsession_evaluate_answers(retptr, this.__wbg_ptr, ptr0, len0);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
@@ -67,17 +67,18 @@ export class FlowSession {
             return getStringFromWasm0(r0, r1);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred2_0, deferred2_1, 1);
+            wasm.__wbindgen_export3(deferred2_0, deferred2_1, 1);
         }
     }
     /**
-     * 解析文档、接管所有权并创建空会话；失败时返回 JSON 错误字符串（非信封）。
+     * 解析文档、接管所有权并创建空会话；失败时抛出携带 `{"error":…}` 信封 JSON
+     * 的字符串（与其它导出同一信封形状）。
      * @param {string} document_json
      */
     constructor(document_json) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
-            const ptr0 = passStringToWasm0(document_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            const ptr0 = passStringToWasm0(document_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
             wasm.flowsession_new(retptr, ptr0, len0);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
@@ -110,7 +111,7 @@ export class FlowSession {
             return getStringFromWasm0(r0, r1);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export5(deferred1_0, deferred1_1, 1);
+            wasm.__wbindgen_export3(deferred1_0, deferred1_1, 1);
         }
     }
 }
@@ -132,13 +133,13 @@ export function compile_document_logic(logic_json, questions_json) {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
         let ptr0, len0, ptr1, len1;
         try {
-            ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len0 = WASM_VECTOR_LEN;
-            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len1 = WASM_VECTOR_LEN;
         } catch (e) {
-            if (ptr1) { wasm.__wbindgen_export5(ptr1, len1 * 1, 1); }
-            if (ptr0) { wasm.__wbindgen_export5(ptr0, len0 * 1, 1); }
+            if (ptr1) { wasm.__wbindgen_export3(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_export3(ptr0, len0 * 1, 1); }
             throw e;
         }
         wasm.compile_document_logic(retptr, ptr0, len0, ptr1, len1);
@@ -149,12 +150,12 @@ export function compile_document_logic(logic_json, questions_json) {
         return getStringFromWasm0(r0, r1);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export5(deferred3_0, deferred3_1, 1);
+        wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
     }
 }
 
 /**
- * 编译单个表达式包：`{"value_type":…,"dependencies":[…]}`，供表达式编辑器提示。
+ * 编译单个表达式包：`{"value_type":…,"dependencies":[…]}`，供双端语义契约测试使用。
  * @param {string} raw_json
  * @param {string} questions_json
  * @returns {string}
@@ -166,13 +167,13 @@ export function compile_expression(raw_json, questions_json) {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
         let ptr0, len0, ptr1, len1;
         try {
-            ptr0 = passStringToWasm0(raw_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr0 = passStringToWasm0(raw_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len0 = WASM_VECTOR_LEN;
-            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len1 = WASM_VECTOR_LEN;
         } catch (e) {
-            if (ptr1) { wasm.__wbindgen_export5(ptr1, len1 * 1, 1); }
-            if (ptr0) { wasm.__wbindgen_export5(ptr0, len0 * 1, 1); }
+            if (ptr1) { wasm.__wbindgen_export3(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_export3(ptr0, len0 * 1, 1); }
             throw e;
         }
         wasm.compile_expression(retptr, ptr0, len0, ptr1, len1);
@@ -183,7 +184,7 @@ export function compile_expression(raw_json, questions_json) {
         return getStringFromWasm0(r0, r1);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export5(deferred3_0, deferred3_1, 1);
+        wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
     }
 }
 
@@ -204,16 +205,16 @@ export function evaluate_document_logic(logic_json, questions_json, answers_json
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
         let ptr0, len0, ptr1, len1, ptr2, len2;
         try {
-            ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len0 = WASM_VECTOR_LEN;
-            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len1 = WASM_VECTOR_LEN;
-            ptr2 = passStringToWasm0(answers_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr2 = passStringToWasm0(answers_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len2 = WASM_VECTOR_LEN;
         } catch (e) {
-            if (ptr2) { wasm.__wbindgen_export5(ptr2, len2 * 1, 1); }
-            if (ptr1) { wasm.__wbindgen_export5(ptr1, len1 * 1, 1); }
-            if (ptr0) { wasm.__wbindgen_export5(ptr0, len0 * 1, 1); }
+            if (ptr2) { wasm.__wbindgen_export3(ptr2, len2 * 1, 1); }
+            if (ptr1) { wasm.__wbindgen_export3(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_export3(ptr0, len0 * 1, 1); }
             throw e;
         }
         wasm.evaluate_document_logic(retptr, ptr0, len0, ptr1, len1, ptr2, len2);
@@ -224,7 +225,7 @@ export function evaluate_document_logic(logic_json, questions_json, answers_json
         return getStringFromWasm0(r0, r1);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export5(deferred4_0, deferred4_1, 1);
+        wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
     }
 }
 
@@ -248,16 +249,16 @@ export function evaluate_expression(raw_json, questions_json, answers_json) {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
         let ptr0, len0, ptr1, len1, ptr2, len2;
         try {
-            ptr0 = passStringToWasm0(raw_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr0 = passStringToWasm0(raw_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len0 = WASM_VECTOR_LEN;
-            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len1 = WASM_VECTOR_LEN;
-            ptr2 = passStringToWasm0(answers_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr2 = passStringToWasm0(answers_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len2 = WASM_VECTOR_LEN;
         } catch (e) {
-            if (ptr2) { wasm.__wbindgen_export5(ptr2, len2 * 1, 1); }
-            if (ptr1) { wasm.__wbindgen_export5(ptr1, len1 * 1, 1); }
-            if (ptr0) { wasm.__wbindgen_export5(ptr0, len0 * 1, 1); }
+            if (ptr2) { wasm.__wbindgen_export3(ptr2, len2 * 1, 1); }
+            if (ptr1) { wasm.__wbindgen_export3(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_export3(ptr0, len0 * 1, 1); }
             throw e;
         }
         wasm.evaluate_expression(retptr, ptr0, len0, ptr1, len1, ptr2, len2);
@@ -268,7 +269,7 @@ export function evaluate_expression(raw_json, questions_json, answers_json) {
         return getStringFromWasm0(r0, r1);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export5(deferred4_0, deferred4_1, 1);
+        wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
     }
 }
 
@@ -285,13 +286,13 @@ export function format_logic_text(logic_json, questions_json) {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
         let ptr0, len0, ptr1, len1;
         try {
-            ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len0 = WASM_VECTOR_LEN;
-            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len1 = WASM_VECTOR_LEN;
         } catch (e) {
-            if (ptr1) { wasm.__wbindgen_export5(ptr1, len1 * 1, 1); }
-            if (ptr0) { wasm.__wbindgen_export5(ptr0, len0 * 1, 1); }
+            if (ptr1) { wasm.__wbindgen_export3(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_export3(ptr0, len0 * 1, 1); }
             throw e;
         }
         wasm.format_logic_text(retptr, ptr0, len0, ptr1, len1);
@@ -302,7 +303,7 @@ export function format_logic_text(logic_json, questions_json) {
         return getStringFromWasm0(r0, r1);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export5(deferred3_0, deferred3_1, 1);
+        wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
     }
 }
 
@@ -322,13 +323,13 @@ export function inspect_logic_text(source, questions_json) {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
         let ptr0, len0, ptr1, len1;
         try {
-            ptr0 = passStringToWasm0(source, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr0 = passStringToWasm0(source, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len0 = WASM_VECTOR_LEN;
-            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len1 = WASM_VECTOR_LEN;
         } catch (e) {
-            if (ptr1) { wasm.__wbindgen_export5(ptr1, len1 * 1, 1); }
-            if (ptr0) { wasm.__wbindgen_export5(ptr0, len0 * 1, 1); }
+            if (ptr1) { wasm.__wbindgen_export3(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_export3(ptr0, len0 * 1, 1); }
             throw e;
         }
         wasm.inspect_logic_text(retptr, ptr0, len0, ptr1, len1);
@@ -339,7 +340,7 @@ export function inspect_logic_text(source, questions_json) {
         return getStringFromWasm0(r0, r1);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export5(deferred3_0, deferred3_1, 1);
+        wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
     }
 }
 
@@ -356,13 +357,13 @@ export function parse_logic_text(source, questions_json) {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
         let ptr0, len0, ptr1, len1;
         try {
-            ptr0 = passStringToWasm0(source, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr0 = passStringToWasm0(source, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len0 = WASM_VECTOR_LEN;
-            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
+            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             len1 = WASM_VECTOR_LEN;
         } catch (e) {
-            if (ptr1) { wasm.__wbindgen_export5(ptr1, len1 * 1, 1); }
-            if (ptr0) { wasm.__wbindgen_export5(ptr0, len0 * 1, 1); }
+            if (ptr1) { wasm.__wbindgen_export3(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_export3(ptr0, len0 * 1, 1); }
             throw e;
         }
         wasm.parse_logic_text(retptr, ptr0, len0, ptr1, len1);
@@ -373,43 +374,12 @@ export function parse_logic_text(source, questions_json) {
         return getStringFromWasm0(r0, r1);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export5(deferred3_0, deferred3_1, 1);
-    }
-}
-
-/**
- * 重写整份问卷的身份（复制问卷/规则时使用）。
- * @param {string} document_json
- * @returns {string}
- */
-export function renew_document_ids(document_json) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
-        const ptr0 = passStringToWasm0(document_json, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
-        const len0 = WASM_VECTOR_LEN;
-        wasm.renew_document_ids(retptr, ptr0, len0);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        deferred2_0 = r0;
-        deferred2_1 = r1;
-        return getStringFromWasm0(r0, r1);
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export5(deferred2_0, deferred2_1, 1);
+        wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
     }
 }
 export function __wbg___wbindgen_throw_4c88d8bf264fd984(arg0, arg1) {
     throw new Error(getStringFromWasm0(arg0, arg1));
 }
-export function __wbg_getRandomValues_8b6f1f663e6f188d() { return handleError(function (arg0, arg1) {
-    globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
-}, arguments); }
-export function __wbg_now_a96bc7f13b7f2a32() { return handleError(function () {
-    const ret = Date.now();
-    return ret;
-}, arguments); }
 export function __wbindgen_generic_0000000000000001(arg0, arg1) {
     // Cast intrinsic for `Ref(String) -> Externref`.
     const ret = getStringFromWasm0(arg0, arg1);
@@ -426,17 +396,6 @@ export function __wbindgen_init_externref_table() {
 const FlowSessionFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_flowsession_free(ptr, 1));
-
-function addToExternrefTable0(obj) {
-    const idx = wasm.__wbindgen_export2();
-    wasm.__wbindgen_externrefs.set(idx, obj);
-    return idx;
-}
-
-function getArrayU8FromWasm0(ptr, len) {
-    ptr = ptr >>> 0;
-    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
-}
 
 let cachedDataViewMemory0 = null;
 function getDataViewMemory0() {
@@ -457,15 +416,6 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
-}
-
-function handleError(f, args) {
-    try {
-        return f.apply(this, args);
-    } catch (e) {
-        const idx = addToExternrefTable0(e);
-        wasm.__wbindgen_export(idx);
-    }
 }
 
 function passStringToWasm0(arg, malloc, realloc) {
@@ -507,7 +457,7 @@ function passStringToWasm0(arg, malloc, realloc) {
 
 function takeFromExternrefTable0(idx) {
     const value = wasm.__wbindgen_externrefs.get(idx);
-    wasm.__wbindgen_export6(idx);
+    wasm.__wbindgen_export4(idx);
     return value;
 }
 

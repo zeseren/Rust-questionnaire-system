@@ -2,6 +2,11 @@
 <!-- [用户在第 1 步后悔了怎么删/退] 顶部右侧常驻低饱和「移除页面流程」幽灵按钮可整体退回单页；每个节点右侧的「删除节点」悬停变红并二次确认，随时可撤销单点改动。 -->
 <!-- [主提交通道在哪] 流程编辑不设主按钮，修改即时写回；顶部唯一主按钮仍是编辑器固定栏的「发布问卷」。 -->
 <!-- 页面顺序和出口由作者显式配置，结构变化后保留失效引用供定位修复。 -->
+<script lang="ts">
+// 分支对象会因提高优先级而换位，用对象身份分配稳定 key，避免 Vue 复用错误的 DOM。
+const branchKeys = new WeakMap<object, number>()
+let branchKeySeq = 0
+</script>
 <script setup lang="ts">
 import { computed, nextTick } from 'vue'
 import { insertFlowNode } from '../flow-tools'
@@ -42,7 +47,9 @@ async function locate(id: string) {
 }
 function addNode(index: number, type: FlowNode['type']) {
   if (!flow.value) return
+  // 结束节点之后没有可接管的出口，插入会被拒绝。
   const id = insertFlowNode(flow.value, index, type)
+  if (!id) return
   void locate(id)
 }
 function move(index: number, direction: number) {
@@ -58,14 +65,62 @@ function raiseBranch(branches: FlowBranch[], index: number) {
   if (!moved) return
   branches.splice(index - 1, 0, moved)
 }
+function pageNodes() {
+  return (flow.value?.nodes ?? []).filter(
+    (node): node is Extract<FlowNode, { type: 'page' }> => node.type === 'page',
+  )
+}
+/** 页面拼接后的题目顺序必须等于全局题目顺序：只有移到相邻页面的接缝处才合法。 */
+function assignablePages(questionId: string) {
+  const pages = pageNodes()
+  const current = pages.find((node) => node.question_ids.includes(questionId))
+  if (!current) return new Set<string>()
+  const legal = new Set([current.id])
+  // 移走页面里唯一的题目会留下空页面，Rust 流程校验会拒绝。
+  if (current.question_ids.length > 1) {
+    const index = pages.indexOf(current)
+    const position = current.question_ids.indexOf(questionId)
+    const previous = pages[index - 1]
+    const next = pages[index + 1]
+    if (position === 0 && previous) legal.add(previous.id)
+    if (position === current.question_ids.length - 1 && next) legal.add(next.id)
+  }
+  return legal
+}
+function assignOptions(questionId: string) {
+  const legal = assignablePages(questionId)
+  return [
+    { value: '', label: '未分配', disabled: true },
+    ...(flow.value?.nodes ?? []).flatMap((node, index) =>
+      node.type === 'page'
+        ? [{ value: node.id, label: `${index + 1}. 页面`, disabled: !legal.has(node.id) }]
+        : [],
+    ),
+  ]
+}
 function assign(questionId: string, pageId: string) {
+  if (!assignablePages(questionId).has(pageId)) return
+  const pages = pageNodes()
+  const current = pages.find((node) => node.question_ids.includes(questionId))
+  const target = pages.find((node) => node.id === pageId)
+  if (!current || !target || current === target) return
   const order = new Map(props.questions.map((question, position) => [question.id, position]))
-  for (const node of flow.value?.nodes ?? [])
-    if (node.type === 'page') {
-      node.question_ids = node.question_ids.filter((id) => id !== questionId)
-      if (node.id === pageId) node.question_ids.push(questionId)
-      node.question_ids.sort((a, b) => (order.get(a) ?? -1) - (order.get(b) ?? -1))
-    }
+  current.question_ids = current.question_ids.filter((id) => id !== questionId)
+  target.question_ids.push(questionId)
+  target.question_ids.sort((a, b) => (order.get(a) ?? -1) - (order.get(b) ?? -1))
+}
+function questionTitle(id: string) {
+  const question = props.questions.find((item) => item.id === id)
+  if (!question) return '题目已删除'
+  return question.title || '未命名题目'
+}
+function branchKey(branch: FlowBranch) {
+  let key = branchKeys.get(branch)
+  if (key === undefined) {
+    key = ++branchKeySeq
+    branchKeys.set(branch, key)
+  }
+  return key
 }
 function pageOf(id: string) {
   return (
@@ -148,12 +203,7 @@ function removeFlow() {
           <SearchSelect
             :model-value="pageOf(question.id)"
             :label="`第 ${index + 1} 题归属页面`"
-            :options="[
-              { value: '', label: '未分配' },
-              ...flow.nodes.flatMap((node, i) =>
-                node.type === 'page' ? [{ value: node.id, label: `${i + 1}. 页面` }] : [],
-              ),
-            ]"
+            :options="assignOptions(question.id)"
             @update:model-value="assign(question.id, $event)"
           />
         </label>
@@ -208,7 +258,7 @@ function removeFlow() {
               :key="questionId"
               class="page-question-chip"
             >
-              {{ questions.find((question) => question.id === questionId)?.title || '题目已删除' }}
+              {{ questionTitle(questionId) }}
             </span>
             <span v-if="!node.question_ids.length" class="hint">
               空页面，请在题目归属中分配题目。
@@ -234,7 +284,7 @@ function removeFlow() {
           <p class="hint">从上到下检查条件，第一个成立的出口生效。</p>
           <section
             v-for="(branch, branchIndex) in node.branches"
-            :key="branchIndex"
+            :key="branchKey(branch)"
             class="branch-condition form-stack"
           >
             <div class="actions between">
@@ -296,7 +346,7 @@ function removeFlow() {
             筛选结束同样返回回执并计入总收卷，但不计入各题统计与分母。
           </p>
         </template>
-        <div class="node-insert actions">
+        <div v-if="node.type !== 'end'" class="node-insert actions">
           <span class="hint">在后面插入</span>
           <button
             v-for="(label, type) in { page: '页面', branch: '分支', end: '结束' }"

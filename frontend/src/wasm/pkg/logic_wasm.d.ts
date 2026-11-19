@@ -28,7 +28,8 @@ export class FlowSession {
      */
     evaluate_answers(answers_json: string): string;
     /**
-     * 解析文档、接管所有权并创建空会话；失败时返回 JSON 错误字符串（非信封）。
+     * 解析文档、接管所有权并创建空会话；失败时抛出携带 `{"error":…}` 信封 JSON
+     * 的字符串（与其它导出同一信封形状）。
      */
     constructor(document_json: string);
     /**
@@ -46,7 +47,7 @@ export class FlowSession {
 export function compile_document_logic(logic_json: string, questions_json: string): string;
 
 /**
- * 编译单个表达式包：`{"value_type":…,"dependencies":[…]}`，供表达式编辑器提示。
+ * 编译单个表达式包：`{"value_type":…,"dependencies":[…]}`，供双端语义契约测试使用。
  */
 export function compile_expression(raw_json: string, questions_json: string): string;
 
@@ -86,8 +87,3 @@ export function inspect_logic_text(source: string, questions_json: string): stri
  * 解析文本 DSL；失败信封额外携带 `line` / `column`。
  */
 export function parse_logic_text(source: string, questions_json: string): string;
-
-/**
- * 重写整份问卷的身份（复制问卷/规则时使用）。
- */
-export function renew_document_ids(document_json: string): string;

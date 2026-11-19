@@ -467,7 +467,9 @@ impl Document {
         &self,
         answers: Vec<Answer>,
     ) -> Result<BTreeMap<Uuid, Value>, ValidationError> {
-        // 提交只复用规则的编译结果与同一段流程求值；发布态文案校验只发生在发布时。
+        // 提交先校验草稿结构与容量，再复用规则的编译结果与同一段流程求值；
+        // 发布态文案校验只发生在发布时。
+        self.validate_draft_fields()?;
         let logic = self
             .compile_logic()
             .map_err(|error| ValidationError::new(error.question_id, error.to_string()))?;

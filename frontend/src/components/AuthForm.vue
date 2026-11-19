@@ -21,6 +21,7 @@ const busy = ref(false)
 const registered = ref(false)
 const visible = ref(false)
 async function submit() {
+  if (busy.value) return
   error.value = ''
   if (!/^[A-Za-z0-9_]{3,32}$/.test(username.value)) {
     error.value = '用户名需为 3–32 个字母、数字或下划线。'
@@ -54,6 +55,7 @@ async function submit() {
   }
 }
 function switchAccount() {
+  if (busy.value) return
   registered.value = false
   error.value = ''
   password.value = ''
@@ -119,6 +121,7 @@ function switchAccount() {
         v-if="registered"
         type="button"
         class="text-button danger-text"
+        :disabled="busy"
         @click="switchAccount"
       >
         更换账号重新注册

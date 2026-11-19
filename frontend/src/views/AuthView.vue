@@ -36,6 +36,10 @@ const backLink = computed<BackTarget | null>(() => {
 function success() {
   router.replace(safeReturn(route.query.redirect))
 }
+async function retryRestore() {
+  await auth.restore()
+  if (auth.user) router.replace(safeReturn(route.query.redirect))
+}
 </script>
 <template>
   <div class="auth-layout">
@@ -80,7 +84,7 @@ function success() {
       <p class="subtle mb">
         {{ register ? '让你的第一个好问题，从这里开始。' : '登录后，继续你未完成的发现。' }}
       </p>
-      <ErrorNotice :message="auth.restoreError" />
+      <ErrorNotice :message="auth.restoreError" retry @retry="retryRestore" />
       <AuthForm :mode="register ? 'register' : 'login'" @success="success" />
       <div v-if="backLink" class="actions mt">
         <RouterLink class="text-button" :to="backLink.to">{{ backLink.label }}</RouterLink>

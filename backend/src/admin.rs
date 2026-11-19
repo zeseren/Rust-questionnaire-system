@@ -110,6 +110,14 @@ async fn change_user(
         .one(&tx)
         .await?
         .ok_or_else(AppError::not_found)?;
+    // 管理员不能改变自己的账号状态，避免治理权限被自己锁死。
+    if id == actor.id {
+        return Err(AppError::validation("不能修改自己的账号状态"));
+    }
+    // 状态没变化就不写审计、也不再删会话；请求按无操作拒绝。
+    if target.disabled == input.disabled {
+        return Err(AppError::validation("账号状态未变化"));
+    }
     let mut update = target.into_active_model();
     update.disabled = Set(input.disabled);
     update.update(&tx).await?;
@@ -304,7 +312,11 @@ async fn change_survey(
     reason(&input.reason)?;
     let tx = state.db.begin().await?;
     // 直接锁定目标问卷元数据行：归属不再需要预读，下架与回收写入仍按同一行串行。
-    repository::lock_survey_meta(&tx, id).await?;
+    let meta = repository::lock_survey_meta(&tx, id).await?;
+    // 状态没变化就不写审计；请求按无操作拒绝。
+    if meta.taken_down == input.taken_down {
+        return Err(AppError::validation("问卷状态未变化"));
+    }
     let now = repository::now_micros();
     survey::ActiveModel {
         id: Set(id),

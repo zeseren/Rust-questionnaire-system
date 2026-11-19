@@ -1,9 +1,9 @@
 <!-- [入口在哪] 应用外壳进入工作台/问卷/归档/设置；standalone 路由使用公共顶栏 -->
-<!-- [用户在第 1 步后悔了怎么删/退] 已登录用户在公共顶栏可返回工作台，工作台顶栏与移动导航常驻退出登录；会话过期弹窗底栏左侧提供“退出并稍后处理” -->
+<!-- [用户在第 1 步后悔了怎么删/退] 已登录用户在公共顶栏可返回工作台，工作台侧栏账户区与移动导航常驻退出登录；会话过期弹窗底栏左侧提供“退出并稍后处理” -->
 <!-- [主提交通道在哪] 各视图页头右侧与固定底栏右侧的唯一主按钮；重新登录弹窗由表单主按钮提交 -->
 <!-- 纸本与松烟墨布局共用浅深主题；会话过期时保留当前页面与未保存输入。 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useAppearance, useAuth, useNotice, type Theme } from './stores'
 import { message } from './api'
@@ -19,15 +19,25 @@ const notice = useNotice()
 const mobileOpen = ref(false)
 const mobileDialog = ref<HTMLDialogElement>()
 const standalone = computed(() => Boolean(route.meta.standalone))
-/** 引擎状态来自真实加载结果；按需动态导入，登录页不为侧边栏提前拉取 wasm。 */
+/** 引擎状态来自真实加载结果；只在工作台外壳按需动态导入，登录页等 standalone 路由不为侧边栏提前拉取 wasm。 */
 const wasmReady = ref(false)
-onMounted(async () => {
+let engineLoaded = false
+async function loadEngineStatus() {
+  if (engineLoaded) return
+  engineLoaded = true
   try {
     wasmReady.value = (await import('./wasm/index')).wasmReady
   } catch {
     wasmReady.value = false
   }
-})
+}
+watch(
+  standalone,
+  (value) => {
+    if (!value) loadEngineStatus()
+  },
+  { immediate: true },
+)
 // 公共顶栏只在已登录时提供返回工作台；匿名受访者在 /s/:id 不会被引向登录页。
 const showWorkspaceExit = computed(() => Boolean(auth.user))
 const links = computed(() => [

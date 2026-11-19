@@ -52,7 +52,7 @@ test('safeReturn 只放行以单个斜杠开头的站内路径', () => {
   for (const value of accepted) assert.equal(safeReturn(value), value, value)
 })
 
-test('safeReturn 拒绝非字符串、相对、协议相对与反斜杠路径', () => {
+test('safeReturn 拒绝非字符串、相对、协议相对、反斜杠与换行路径', () => {
   const rejected = [
     undefined,
     'surveys',
@@ -60,6 +60,8 @@ test('safeReturn 拒绝非字符串、相对、协议相对与反斜杠路径', 
     // 反斜杠会被浏览器规范化成协议相对地址。
     String.raw`\evil`,
     String.raw`/\evil`,
+    // `$` 会放过末尾换行，路径必须显式拒绝。
+    '/surveys\n',
   ]
   for (const value of rejected) assert.equal(safeReturn(value), '/', String(value))
 })

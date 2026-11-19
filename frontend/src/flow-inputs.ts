@@ -1,18 +1,16 @@
 //! 界面保留原始输入，流程只接收正确 JSON 类型。
 import { FlowSession } from './wasm/index.ts'
 import { LogicError } from './logic.ts'
-import { numberError, numberInput } from './numbers.ts'
+import { isNumberLiteral, numberError, numberInput } from './numbers.ts'
 import type { Inputs, InputValue } from './answers.ts'
 import type { Answer, FlowSnapshot, SurveyDocument } from './types.ts'
 
-/** 完整有限数字的文本形式；`12.` 与 `1e` 在补全前都不算完整。 */
-const COMPLETE_NUMBER = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/
 /** 可继续补全为数字的过渡前缀：单独负号、`12.`、`1e`、`1e-` 等。 */
 const NUMBER_PREFIX = /^(?:-|-?\.\d*|-?\d+(?:\.\d*)?|-?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d*)$/
 
 /** 输入尚未完成但仍是合法数字前缀；此时不把原文交给引擎判为无效答案。 */
 export function transitionalNumber(raw: string): boolean {
-  return !COMPLETE_NUMBER.test(raw) && NUMBER_PREFIX.test(raw)
+  return !isNumberLiteral(raw) && NUMBER_PREFIX.test(raw)
 }
 
 export class FlowInputs {

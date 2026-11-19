@@ -407,7 +407,15 @@ pub(crate) fn invalid_credentials() -> AppError {
     )
 }
 
+/// Argon2 每次派生都占用数十 MiB；限制同时进行的派生数，避免并发登录耗尽内存。
+static ARGON2_PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
 pub(crate) async fn hash_password(password: String) -> AppResult<String> {
+    // permit 持有到阻塞任务结束，确保同时在跑的 Argon2 不超过上限。
+    let _permit = ARGON2_PERMITS
+        .acquire()
+        .await
+        .map_err(|error| AppError::internal(error))?;
     tokio::task::spawn_blocking(move || {
         // Argon2id v19 自动生成随机盐；随机源失败仍通过统一错误出口返回。
         let hash: PasswordHash = Argon2::default()
@@ -420,6 +428,11 @@ pub(crate) async fn hash_password(password: String) -> AppResult<String> {
 }
 
 pub(crate) async fn verify_password(password: String, encoded_hash: String) -> AppResult<bool> {
+    // 与哈希共用同一个上限：验证同样消耗 Argon2 的内存带宽。
+    let _permit = ARGON2_PERMITS
+        .acquire()
+        .await
+        .map_err(|error| AppError::internal(error))?;
     tokio::task::spawn_blocking(move || {
         let hash = PasswordHash::new(&encoded_hash).map_err(|error| AppError::internal(error))?;
         match Argon2::default().verify_password(password.as_bytes(), &hash) {
@@ -472,7 +485,11 @@ pub(crate) fn hash_secret(token: &str) -> String {
 pub(crate) fn session_token(headers: &HeaderMap) -> Option<&str> {
     let mut found = None;
     for header in headers.get_all(header::COOKIE) {
-        for cookie in Cookie::split_parse(header.to_str().ok()?) {
+        // 非 ASCII 的 Cookie 头只跳过这一个头，不影响其余头里的合法会话。
+        let Ok(text) = header.to_str() else {
+            continue;
+        };
+        for cookie in Cookie::split_parse(text) {
             let Ok(cookie) = cookie else {
                 continue;
             };

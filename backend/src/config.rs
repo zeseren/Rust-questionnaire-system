@@ -47,7 +47,7 @@ impl Config {
     where
         F: Fn(&str) -> Result<String, env::VarError>,
     {
-        let database_url = lookup("DATABASE_URL").context("请设置 DATABASE_URL")?;
+        let database_url = required(&lookup, "DATABASE_URL")?;
         let database = url::Url::parse(&database_url).context("DATABASE_URL 格式错误")?;
         if !matches!(database.scheme(), "postgres" | "postgresql") {
             bail!("DATABASE_URL 必须使用 PostgreSQL");
@@ -113,6 +113,18 @@ impl Config {
             bail!("会话有效期须为 1..=2592000 秒，限流次数必须大于零");
         }
         Ok(config)
+    }
+}
+
+/// 必填变量：未设置与不可解码分别给出明确提示；缺失时才提示补上变量。
+pub(crate) fn required<F>(lookup: &F, name: &str) -> anyhow::Result<String>
+where
+    F: Fn(&str) -> Result<String, env::VarError>,
+{
+    match lookup(name) {
+        Ok(value) => Ok(value),
+        Err(env::VarError::NotPresent) => bail!("请设置 {name}"),
+        Err(error) => Err(error).with_context(|| format!("{name} 不是有效文本")),
     }
 }
 

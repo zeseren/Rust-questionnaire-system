@@ -39,7 +39,6 @@ interface WasmEngine {
   compile_expression(raw_json: string, questions_json: string): string
   evaluate_expression(raw_json: string, questions_json: string, answers_json: string): string
   evaluate_document_logic(logic_json: string, questions_json: string, answers_json: string): string
-  renew_document_ids(document_json: string): string
   FlowSession: new (document_json: string) => WasmFlowSession
 }
 interface WasmFlowSession {
@@ -211,7 +210,7 @@ export function compileDocumentLogic(
   }
 }
 
-/** 编译单个表达式包；类型与依赖供表达式编辑器提示。 */
+/** 编译单个表达式包，供双端语义契约测试使用。 */
 export function compileExpression(
   raw: unknown,
   questions: readonly Question[],
@@ -227,11 +226,6 @@ export function compileExpression(
     evaluate: (answers) =>
       unwrap<LogicValue>(engine.evaluate_expression(rawJson, questionsJson, encode(answers))),
   }
-}
-
-/** 重写整份问卷身份：复制问卷/规则时生成独立 ID 并同步全部引用。 */
-export function renewDocumentIds(document: SurveyDocument): SurveyDocument {
-  return unwrap<SurveyDocument>(engine.renew_document_ids(encode(document)))
 }
 
 /** 有状态填写会话：状态留在 wasm 线性内存，接口与删除前的 TS 类一致。 */

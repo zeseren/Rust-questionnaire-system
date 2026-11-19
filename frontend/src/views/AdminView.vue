@@ -42,7 +42,7 @@ const applied = ref({
   target_id: '',
 })
 function applyFilters() {
-  if (invalidUuid(auditActor.value) || invalidUuid(auditTarget.value)) {
+  if (tab.value === 'audits' && (invalidUuid(auditActor.value) || invalidUuid(auditTarget.value))) {
     filterError.value = '账号 ID 与目标 ID 需要是 36 位连字符 UUID；留空表示不筛选。'
     return
   }
@@ -141,6 +141,7 @@ const inspectError = ref('')
 watch(tab, () => {
   page.value = 1
   error.value = ''
+  filterError.value = ''
 })
 function choose(value: NonNullable<typeof selected.value>) {
   selected.value = value
@@ -149,6 +150,7 @@ function choose(value: NonNullable<typeof selected.value>) {
 }
 async function govern() {
   if (!selected.value || !reason.value.trim() || busy.value) return
+  if (selected.value.kind === 'users' && selected.value.item.id === auth.user?.id) return
   busy.value = true
   error.value = ''
   try {
@@ -161,6 +163,8 @@ async function govern() {
     notice.show(`${operation.value}成功，操作已记录。`)
     selected.value = null
     await list.refresh()
+    const total = list.data.value?.total
+    if (total != null) page.value = Math.min(page.value, Math.max(1, Math.ceil(total / 20)))
   } catch (failure) {
     error.value = message(failure)
   } finally {

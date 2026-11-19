@@ -109,6 +109,8 @@ export async function download(path: string, filename: string): Promise<void> {
   let blob: Blob
   try {
     blob = await response.blob()
+  } catch {
+    throw new ApiError(0, 'network_error', '下载未完成，请检查网络后重试。')
   } finally {
     window.clearTimeout(timer)
   }

@@ -8,8 +8,13 @@ import type { Inputs, InputValue } from '../answers'
 const values = defineModel<Inputs>({ required: true })
 const emit = defineEmits<{ change: [id: string, value: InputValue]; commit: [id: string] }>()
 withDefaults(
-  defineProps<{ document: SurveyDocument; errors?: Record<string, string>; disabled?: boolean }>(),
-  { errors: () => ({}) },
+  defineProps<{
+    document: SurveyDocument
+    errors?: Record<string, string>
+    disabled?: boolean
+    numbers?: Record<string, number>
+  }>(),
+  { errors: () => ({}), numbers: () => ({}) },
 )
 function textValue(question: Question) {
   return String(values.value[question.id] ?? '')
@@ -53,7 +58,7 @@ function scores(question: Question) {
       :aria-describedby="errors[question.id] ? `error-${question.id}` : undefined"
     >
       <legend :id="`label-${question.id}`" class="question-legend">
-        <span>{{ String(index + 1).padStart(2, '0') }}</span>
+        <span>{{ String(numbers[question.id] ?? index + 1).padStart(2, '0') }}</span>
         <span class="grow">{{ question.title || '未填写题目标题' }}</span>
         <span class="required">{{ question.required ? '必填' : '选填' }}</span>
       </legend>

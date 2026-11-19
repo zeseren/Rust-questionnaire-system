@@ -16,6 +16,8 @@ use crate::domain::{
 
 const MAX_NODES: usize = 256;
 const MAX_DEPTH: usize = 16;
+/// 数字字面量原文的字节上限，与共享规则包的预算一致。
+const MAX_NUMBER_LITERAL_BYTES: usize = 64;
 
 /// 两端共享的稳定错误分类；文案不参与分支判断。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -585,6 +587,10 @@ pub(crate) fn reference(raw: &str, path: &str) -> Result<Uuid, LogicError> {
 }
 
 pub(crate) fn numeric(raw: &str) -> Option<f64> {
+    // 原文超过字节上限时直接拒绝，不再进入 JSON 解析。
+    if raw.len() > MAX_NUMBER_LITERAL_BYTES {
+        return None;
+    }
     // 数字常量只能是无空白的 JSON 数字；借用既有精度规则，不改变答案契约。
     if raw.trim() != raw {
         return None;

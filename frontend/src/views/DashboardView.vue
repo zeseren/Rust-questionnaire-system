@@ -24,9 +24,13 @@ const route = useRoute()
 const router = useRouter()
 const notice = useNotice()
 const archived = computed(() => route.name === 'archive')
+const PAGE_SIZE = 12
 const page = ref(1)
 const filter = ref<Status | ''>(archived.value ? 'archived' : '')
 const keyword = ref('')
+const filtered = computed(
+  () => Boolean(keyword.value) || (!archived.value && Boolean(filter.value)),
+)
 const title = ref('')
 const view = ref<'grid' | 'list'>('list')
 const creating = ref(false)
@@ -43,7 +47,7 @@ const statuses: Status[] = ['unpublished', 'collecting', 'closed', 'archived']
 const list = useResource(
   () =>
     api<Page<SurveySummary>>(
-      `/api/surveys${query({ title: keyword.value, status: filter.value, page: page.value, page_size: 12 })}`,
+      `/api/surveys${query({ title: keyword.value, status: filter.value, page: page.value, page_size: PAGE_SIZE })}`,
     ),
   [page, filter, keyword],
 )
@@ -60,9 +64,8 @@ function search() {
   keyword.value = title.value.trim()
   page.value = 1
 }
-function refresh() {
-  list.refresh()
-  counts.refresh()
+async function refresh() {
+  await Promise.all([list.refresh(), counts.refresh()])
 }
 function openCreate() {
   actionError.value = ''
@@ -121,7 +124,9 @@ async function performAction() {
     else await api<SurveyDetail>(`/api/surveys/${survey.id}/${act}`, 'POST')
     notice.show(act === 'delete' ? '草稿已删除。' : `${SURVEY_ACTION_NAMES[act]}成功。`)
     pendingAction.value = null
-    refresh()
+    await refresh()
+    const total = list.data.value?.total
+    if (total != null) page.value = Math.min(page.value, Math.max(1, Math.ceil(total / PAGE_SIZE)))
   } catch (error) {
     actionError.value = message(error)
   } finally {
@@ -133,7 +138,7 @@ async function copySurveyLink(survey: SurveySummary) {
     await navigator.clipboard.writeText(shareLink(survey.id))
     notice.show('填写链接已复制。')
   } catch {
-    notice.show('请选中链接后手动复制。')
+    notice.show(`复制失败，请手动复制：${shareLink(survey.id)}`)
   }
 }
 </script>
@@ -260,7 +265,7 @@ async function copySurveyLink(survey: SurveySummary) {
         >
           <div class="card-top">
             <span class="survey-icon" aria-hidden="true">
-              {{ String((page - 1) * 12 + index + 1).padStart(2, '0') }}
+              {{ String((page - 1) * PAGE_SIZE + index + 1).padStart(2, '0') }}
             </span>
             <span
               class="status"
@@ -373,16 +378,24 @@ async function copySurveyLink(survey: SurveySummary) {
       </div>
       <div v-else class="empty-state">
         <Icon name="forms" />
-        <h3>{{ keyword || filter ? '没有匹配的问卷' : '第一个好问题，从这里开始' }}</h3>
+        <h3>
+          {{ filtered ? '没有匹配的问卷' : archived ? '暂无归档问卷' : '第一个好问题，从这里开始' }}
+        </h3>
         <p>
-          {{ keyword || filter ? '试试其他关键词或问卷状态。' : '创建问卷，收集你关心的答案。' }}
+          {{
+            filtered
+              ? '试试其他关键词或问卷状态。'
+              : archived
+                ? '归档后的问卷会出现在这里。'
+                : '创建问卷，收集你关心的答案。'
+          }}
         </p>
-        <button v-if="!keyword && !filter" class="button" @click="openCreate">新建问卷</button>
+        <button v-if="!archived && !filtered" class="button" @click="openCreate">新建问卷</button>
       </div>
       <Pagination
         :page="page"
         :total="list.data.value.total"
-        :page-size="12"
+        :page-size="PAGE_SIZE"
         :disabled="list.loading.value"
         @change="page = $event"
       />

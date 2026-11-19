@@ -124,15 +124,14 @@ frontend/
 
 ## 6. WASM DSL 引擎接入与重建
 
-`frontend/src/wasm/index.ts` 在模块顶层通过 `await loadEngine()` 完成 WASM 实例化，对外同步暴露 6 个接口：
+`frontend/src/wasm/index.ts` 在模块顶层通过 `await loadEngine()` 完成 WASM 实例化，对外同步暴露 5 个接口：
 
 | 导出项 | 职责 |
 | --- | --- |
 | `parseLogicText(source, questions)` | 将文本 DSL 解析并编译为 `DocumentLogic`；失败抛出带行列号的 `LogicTextError` |
 | `formatLogicText(logic, questions)` | 将 `DocumentLogic` 格式化为确定性文本 DSL（与后端逐字节一致） |
 | `compileDocumentLogic(logic, questions)` | 校验整份规则模型，返回变量拓扑顺序 `variableOrder` 与求值器 |
-| `compileExpression(raw, questions)` | 编译单条表达式，返回静态类型 `valueType`、依赖集合与求值函数 |
-| `renewDocumentIds(document)` | 复制问卷时重写题目、选项、变量、规则与流程节点的全部 UUID 引用 |
+| `compileExpression(raw, questions)` | 编译单条表达式，返回静态类型 `valueType`、依赖集合与求值函数；供双端语义契约测试使用 |
 | `FlowSession` | 有状态流程会话类：支持 `snapshot()`、`dispatch(event)` 与 `evaluateAnswers(answers)` |
 
 - **双环境兼容**：Vite 浏览器构建使用 `pkg/logic_wasm.js` bundler 胶水；Node 测试环境（`node --test`）通过 `pkg/logic_wasm_bg.js` 配合 `readFileSync` 加载本地 `logic_wasm_bg.wasm`。

@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 /// 固定窗口长度：一分钟内的同一桶最多 `maximum` 次。
 const WINDOW: Duration = Duration::from_secs(60);
-/// 单桶映射的条目上限；超过后先淘汰过期窗口，仍超出时整体清空，避免内存无界增长。
+/// 单桶映射的条目上限；超过后先淘汰过期窗口，仍超出时淘汰最早开始的那个窗口，避免内存无界增长。
 const MAX_TRACKED_BUCKETS: usize = 10_000;
 
 pub(crate) struct Limits {
@@ -63,17 +63,13 @@ impl Limits {
 
     /// 当日随机盐：跨自然日（UTC）重新生成并清空全部旧桶。
     fn daily_salt(&self) -> AppResult<[u8; 32]> {
-        let (bytes, rotated) = {
-            let mut salt = self.salt.lock().unwrap_or_else(PoisonError::into_inner);
-            let today = Utc::now().date_naive();
-            let rotated = salt.day != today;
-            if rotated {
-                getrandom::fill(&mut salt.bytes).map_err(|error| AppError::internal(error))?;
-                salt.day = today;
-            }
-            (salt.bytes, rotated)
-        };
-        if rotated {
+        let mut salt = self.salt.lock().unwrap_or_else(PoisonError::into_inner);
+        let today = Utc::now().date_naive();
+        if salt.day != today {
+            getrandom::fill(&mut salt.bytes).map_err(|error| AppError::internal(error))?;
+            salt.day = today;
+            // 换日与清桶在同一临界区完成：并发的首请求不会拿到新盐却仍复用旧桶键。
+            // `admit_bucket` 只拿桶锁、不再获取盐锁，因此这里不会死锁。
             self.auth
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -83,7 +79,7 @@ impl Limits {
                 .unwrap_or_else(PoisonError::into_inner)
                 .clear();
         }
-        Ok(bytes)
+        Ok(salt.bytes)
     }
 }
 
@@ -108,6 +104,7 @@ fn bucket_key(salt: &[u8; 32], client: Option<IpAddr>) -> [u8; 32] {
 }
 
 /// 只在本实例确实位于可信反向代理之后时读取转发头，否则客户端可伪造 IP 绕过限流。
+/// `X-Forwarded-For` 取最右侧的有效地址：追加式代理链里只有它由最近的、可信的代理写入。
 fn client_ip(request: &Request, trust_proxy: bool) -> Option<IpAddr> {
     if trust_proxy {
         let forwarded = request
@@ -119,6 +116,7 @@ fn client_ip(request: &Request, trust_proxy: bool) -> Option<IpAddr> {
                     .split(',')
                     .map(str::trim)
                     .filter(|part| !part.is_empty())
+                    .rev()
                     .find_map(|part| part.parse::<IpAddr>().ok())
             });
         if forwarded.is_some() {
@@ -171,12 +169,18 @@ pub(crate) fn admit_bucket<K: Copy + Eq + Hash>(
     now: Instant,
 ) -> AppResult<()> {
     let mut buckets = buckets.lock().unwrap_or_else(PoisonError::into_inner);
-    // 先淘汰过期窗口；若 60 秒内仍被活跃键占满（大量随机 IPv6 或问卷 ID），必须整体清空，
-    // 否则映射会突破上限无界增长。清空只重置计数，不影响任何请求的合法性判定。
-    if buckets.len() >= capacity {
+    // 只有新键才需要腾位置：已存在的键继续按自己的窗口计数，不会被淘汰重置。
+    if !buckets.contains_key(&key) && buckets.len() >= capacity {
         buckets.retain(|_, window| now.saturating_duration_since(window.started) < WINDOW);
-        if buckets.len() >= capacity {
-            buckets.clear();
+        // 60 秒内仍被活跃键占满（大量随机 IPv6 或问卷 ID）时淘汰最早开始的窗口，
+        // 既保持映射不突破上限，也不重置其它仍在生效的计数。
+        if buckets.len() >= capacity
+            && let Some(oldest) = buckets
+                .iter()
+                .min_by_key(|(_, window)| window.started)
+                .map(|(key, _)| *key)
+        {
+            buckets.remove(&oldest);
         }
     }
     let window = buckets.entry(key).or_insert(Window {

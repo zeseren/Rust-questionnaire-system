@@ -79,9 +79,6 @@ a:focus-visible {
 a:hover {
   color: var(--accent);
 }
-.block {
-  display: block;
-}
 .grow {
   flex: 1;
   min-width: 0;
@@ -112,9 +109,6 @@ a:hover {
 }
 /* 静态红色警告文本（span/p）保持朱红；按钮上的幽灵破坏态由 styles.css 更高特异性规则接管 */
 .danger-text {
-  color: var(--rose);
-}
-[data-theme='dark'] .danger-text {
   color: var(--rose);
 }
 .eyebrow {
@@ -201,9 +195,6 @@ a:hover {
   font-size: 12px;
   color: var(--rose);
 }
-[data-theme='dark'] .field-error {
-  color: var(--rose);
-}
 .notice {
   display: flex;
   align-items: flex-start;
@@ -225,12 +216,6 @@ a:hover {
   margin-top: 2px;
 }
 .notice-error {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: var(--accent-border);
-  border-left-color: var(--accent);
-}
-[data-theme='dark'] .notice-error {
   background: var(--accent-soft);
   color: var(--accent);
   border-color: var(--accent-border);
@@ -375,7 +360,7 @@ a:hover {
 /* Rule 1：预览页顶栏固定，实体状态与唯一主操作常驻可见 */
 .preview-toolbar {
   position: sticky;
-  top: 56px;
+  top: 0;
   z-index: 15;
   display: flex;
   align-items: center;
@@ -608,11 +593,6 @@ a:hover {
 .add-question:hover {
   background: var(--accent-soft);
   border-color: var(--accent);
-}
-.aside-actions {
-  display: grid;
-  gap: 9px;
-  margin-top: 18px;
 }
 .share-box {
   margin-top: 16px;

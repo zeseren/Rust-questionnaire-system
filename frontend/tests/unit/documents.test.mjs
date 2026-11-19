@@ -1,10 +1,9 @@
-//! 问卷编辑原语：新题默认值、身份重写与删除后的引用清理。
+//! 问卷编辑原语：新题默认值、题目身份重写与删除后的引用清理。
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   TEXT_ANSWER_LIMITS,
   duplicateQuestion,
-  duplicateSurveyDocument,
   moveQuestion,
   newQuestion,
   removeQuestion,
@@ -74,27 +73,6 @@ test('duplicateQuestion 重写身份且不污染原题', () => {
     assert.ok(!originalIds.has(id), '复制出的题目与选项必须使用全新身份')
   duplicated.options[0].label = '改写'
   assert.equal(source.options[0].label, '甲', '复制结果必须与原题完全隔离')
-})
-
-test('duplicateSurveyDocument 同步重写整卷全部引用', () => {
-  const source = readFlowDocument('diamond')
-  const before = structuredClone(source)
-  const duplicated = duplicateSurveyDocument(source)
-  assert.deepEqual(source, before, '来源文档不得被修改')
-  assert.equal(duplicated.questions.length, source.questions.length)
-  const originalIds = [
-    ...source.questions.flatMap((question) => [
-      question.id,
-      ...(question.options ?? []).map((option) => option.id),
-    ]),
-    ...source.logic.variables.map((variable) => variable.id),
-    ...source.logic.flow.nodes.map((node) => node.id),
-  ]
-  const serialized = JSON.stringify(duplicated)
-  for (const id of originalIds) assert.ok(!serialized.includes(id), `复制不得遗留 ${id}`)
-  assert.equal(duplicated.logic.flow.entry, duplicated.logic.flow.nodes[0].id)
-  const compiled = compileDocumentLogic(duplicated.logic, duplicated.questions)
-  assert.equal(compiled.variableOrder.length, 2, '菱形文档声明两个计算变量')
 })
 
 test('moveQuestion 同步流程页面与题目顺序', () => {

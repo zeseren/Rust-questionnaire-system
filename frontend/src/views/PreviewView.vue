@@ -1,6 +1,6 @@
-<!-- [入口在哪] 编辑器固定栏「预览已保存草稿」或问卷卡片「查看答卷」进入，只读服务器已保存内容。 -->
-<!-- [用户在第 1 步后悔了怎么删/退] 顶部固定工具栏左侧常驻「← 返回编辑」，底部固定栏左侧同样常驻返回入口，任何位置都能退出预览。 -->
-<!-- [主提交通道在哪] 预览不产生正式答卷；顶部右侧「返回列表」是次级出口，底部固定栏右侧「体验填写校验」是页面唯一主按钮。 -->
+<!-- [入口在哪] 只有编辑器固定栏「预览已保存草稿」进入；问卷卡片「查看答卷」实际进入 /reports 答卷页。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 顶部固定工具栏左侧「← 返回编辑」常驻；无规则且有题目时底部固定栏左侧同样有返回入口；规则问卷使用 FlowFields 自带底栏。 -->
+<!-- [主提交通道在哪] 预览不产生正式答卷；非规则问卷底部固定栏右侧「体验填写校验」是页面唯一主按钮，顶部右侧「返回列表」是次级出口。 -->
 <!-- 预览读取已保存草稿，只在当前页面校验，不产生正式答卷。 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
@@ -20,6 +20,11 @@ const errors = ref<Record<string, string>>({})
 const mobile = ref(false)
 const feedback = ref('')
 const answeredCount = computed(() => Object.values(values.value).filter(isAnswered).length)
+/** 改动答案后旧的校验结论失效，避免把上一次的错误留在题面上。 */
+function clearValidation() {
+  errors.value = {}
+  feedback.value = ''
+}
 function validate() {
   if (preview.data.value?.document.logic || !preview.data.value?.document.questions.length) return
   if (!preview.data.value?.publishable) {
@@ -73,6 +78,7 @@ function validate() {
           v-model="values"
           :document="preview.data.value.document"
           :errors="errors"
+          @change="clearValidation"
         />
         <div v-else class="empty-state">
           <h3>还没有题目</h3>

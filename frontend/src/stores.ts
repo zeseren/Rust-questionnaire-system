@@ -18,11 +18,14 @@ export const useAuth = defineStore('auth', () => {
       try {
         user.value = await api<User>('/api/auth/me')
         restoreError.value = ''
-      } catch (error) {
-        if (!(error instanceof ApiError && error.status === 401))
-          restoreError.value = message(error)
-      } finally {
         initialized = true
+      } catch (error) {
+        // 只有明确的未登录才是终态；瞬时故障保留未初始化，下次导航或重试会再请求。
+        if (error instanceof ApiError && error.status === 401) {
+          initialized = true
+          restoreError.value = ''
+        } else restoreError.value = message(error)
+      } finally {
         restoring = null
       }
     })()
@@ -42,7 +45,7 @@ export const useAuth = defineStore('auth', () => {
   return { user, expired, restoreError, restore, login, logout }
 })
 
-// 与 styles.css 的 --canvas 一一对应；改动主题底色时同步 index.html 的首绘脚本。
+// 与 styles.css 的 --bg-canvas 一一对应；改动主题底色时同步 index.html 的首绘脚本。
 const CANVAS_COLORS = { light: '#f5f2eb', dark: '#121210' } as const
 
 export type Theme = 'light' | 'dark' | 'system'

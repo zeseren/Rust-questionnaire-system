@@ -802,7 +802,9 @@ impl CompiledPlan {
 
     /// 处理单题：可见性、动态必填、答案规范化与自定义校验。
     ///
-    /// 校验失败只撤销本题答案并失效依赖变量，保留既有错误供修正。
+    /// 同一题的错误按先到先得记录：`required_if` 求值失败时规则不可信，直接记录
+    /// 该错误码并跳过规范化与校验；其余失败只撤销本题答案并失效依赖变量，
+    /// 保留既有错误供修正。
     fn project_question(
         &self,
         document: &Document,
@@ -841,22 +843,36 @@ impl CompiledPlan {
                 },
             )
         };
-        if matches!(&required, Ok(LogicValue::Boolean(true))) {
+        let required = match required {
+            Ok(value) => value,
+            Err(failure) => {
+                // required_if 本身不可信：直接记录错误，跳过本题的规范化与自定义校验。
+                result.errors.insert(id, failure.code);
+                return;
+            }
+        };
+        if matches!(&required, LogicValue::Boolean(true)) {
             result.required.push(id);
         }
         let Ok(value) = question.normalize_answer(inputs.get(&id)) else {
-            result.errors.insert(id, LogicErrorCode::InvalidAnswer);
+            result
+                .errors
+                .entry(id)
+                .or_insert(LogicErrorCode::InvalidAnswer);
             return;
         };
         match required {
-            Ok(LogicValue::Boolean(true)) if value.is_none() => {
-                result.errors.insert(id, LogicErrorCode::RequiredAnswer);
+            LogicValue::Boolean(true) if value.is_none() => {
+                result
+                    .errors
+                    .entry(id)
+                    .or_insert(LogicErrorCode::RequiredAnswer);
             }
-            Ok(LogicValue::Missing) => {
-                result.errors.insert(id, LogicErrorCode::UnknownCondition);
-            }
-            Err(failure) => {
-                result.errors.insert(id, failure.code);
+            LogicValue::Missing => {
+                result
+                    .errors
+                    .entry(id)
+                    .or_insert(LogicErrorCode::UnknownCondition);
             }
             _ => {}
         }
@@ -871,13 +887,19 @@ impl CompiledPlan {
             {
                 Ok(LogicValue::Boolean(true)) => {}
                 Ok(LogicValue::Missing) => {
-                    result.errors.insert(id, LogicErrorCode::UnknownCondition);
+                    result
+                        .errors
+                        .entry(id)
+                        .or_insert(LogicErrorCode::UnknownCondition);
                 }
                 Ok(_) => {
-                    result.errors.insert(id, LogicErrorCode::ConstraintFailed);
+                    result
+                        .errors
+                        .entry(id)
+                        .or_insert(LogicErrorCode::ConstraintFailed);
                 }
                 Err(failure) => {
-                    result.errors.insert(id, failure.code);
+                    result.errors.entry(id).or_insert(failure.code);
                 }
             }
         }
