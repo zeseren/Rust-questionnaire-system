@@ -216,6 +216,19 @@ function resetFill() {
   restored.value = false
   clearDraft()
 }
+/** 放弃冻结的未决提交并解锁表单；只在用户明确接受重复提交风险后执行。 */
+function abandonPending() {
+  if (
+    !window.confirm(
+      '如果上次提交其实已经成功，放弃后重新填写可能再提交一次（登录限次问卷仍只计入首次）。确定放弃吗？',
+    )
+  )
+    return
+  pending.value = null
+  uncertain.value = false
+  error.value = ''
+  clearPending()
+}
 async function loginSuccess() {
   loginNeeded.value = false
   error.value = ''
@@ -280,6 +293,11 @@ async function submit(flowAnswers?: Answer[]) {
     receiptPanel.value?.focus()
   } catch (reason) {
     error.value = message(reason)
+    // 同一幂等键连同原载荷已经落库：这是明确结果，不再按“结果未知”锁定表单。
+    const conflict = reason instanceof ApiError && reason.code === 'idempotency_conflict'
+    if (conflict)
+      error.value =
+        '这次提交的标识此前已记录过另一份回答，原提交不会重复计入。请核对答案后重新提交。'
     if (reason instanceof ApiError) {
       if (reason.question_id) {
         errors.value = { [reason.question_id]: reason.message }
@@ -287,12 +305,13 @@ async function submit(flowAnswers?: Answer[]) {
       }
       if (reason.status === 401) loginNeeded.value = true
       if (reason.code === 'version_changed') versionChanged.value = true
-      uncertain.value =
-        reason.status === 0 ||
-        reason.status >= 500 ||
-        reason.status === 401 ||
-        reason.code === 'idempotency_conflict'
-    } else uncertain.value = true
+    }
+    // 只有拿不到明确结果（网络中断、服务端故障、重新登录中）才锁定并保留冻结载荷。
+    uncertain.value =
+      !conflict &&
+      (reason instanceof ApiError
+        ? reason.status === 0 || reason.status >= 500 || reason.status === 401
+        : true)
     // 结果未知时保留请求前已写入的冻结载荷；明确失败才丢弃。
     if (!uncertain.value) {
       pending.value = null
@@ -420,7 +439,17 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div v-if="uncertain && !loginNeeded" class="notice mt">
-          尚未确认原提交结果。当前回答已暂时锁定，点击“重试原提交”获取结果，避免重复提交。
+          <div class="grow">
+            上一次提交没有得到确认（网络或服务中断），回答已暂时锁定，避免重复提交。点「重试原提交」获取结果，或放弃这次提交重新填写。
+          </div>
+          <button
+            type="button"
+            class="text-button danger-text"
+            :disabled="busy"
+            @click="abandonPending"
+          >
+            放弃并重新填写
+          </button>
         </div>
         <FlowFields
           v-if="survey.document.logic"
