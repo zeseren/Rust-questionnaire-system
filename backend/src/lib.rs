@@ -85,6 +85,10 @@ pub async fn run() -> anyhow::Result<()> {
     migration::Migrator::up(&db, None)
         .await
         .context("数据库迁移失败")?;
+    // 结构漂移必须在启动时暴露，不能等到写答卷时才变成 500。
+    migration::verify_schema(&db)
+        .await
+        .context("数据库结构校验失败")?;
 
     let mut args = std::env::args().skip(1);
     let command = args.next().unwrap_or_else(|| "serve".to_owned());

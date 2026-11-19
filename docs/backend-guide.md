@@ -116,11 +116,11 @@ $Stats | Select-Object version_number, total_count, timezone
 | 表名 | 核心字段与数据库级约束 |
 | --- | --- |
 | `users` | `id` (UUID PK)、唯一小写 `username`、Argon2id `password_hash`、`role` (`user`/`admin`)、`disabled`、`created_at` |
-| `sessions` | `id_hash` (SHA-256 PK)、`user_id` (FK → `users`)、`expires_at`、`created_at` |
+| `sessions` | `id_hash` (SHA-256 PK)、`user_id` (FK → `users`，级联删除)、`expires_at` |
 | `surveys` | `id` (UUID PK)、`owner_id` (FK → `users`)、`status` (`unpublished`/`collecting`/`closed`/`archived`)、`mode` (`anonymous`/`login_once`)、`deadline`、`taken_down`、`draft` (JSONB)、`revision` (乐观锁版本号)、`current_version_id` |
 | `versions` | `id` (UUID PK)、`survey_id` (FK → `surveys`)、`number` (递增版本号，`(survey_id, number)` 唯一)、不可变快照 `document` (JSONB)、`published_at`；与 `surveys(id, current_version_id)` 构成复合外键 |
-| `responses` | `id` (回执 UUID PK)、`survey_id`、`version_id`（复合外键 → `versions(survey_id, id)`）、`respondent_id`（部分唯一索引 `responses_once_per_account(survey_id, respondent_id) WHERE respondent_id IS NOT NULL`）、`scope`、`key_hash`（`responses_idempotency_unique(survey_id, scope, key_hash)`）、`payload_hash`、`answers` (JSONB)、`submitted_at` |
-| `audits` | `id` (UUID PK)、`actor_id`、`action`、`target_type`、`target_id`、`reason` (1–500 字符)、`created_at` |
+| `responses` | `id` (回执 UUID PK)、`survey_id`、`version_id`（复合外键 → `versions(survey_id, id)`）、`respondent_id`（部分唯一索引 `responses_once_per_account(survey_id, respondent_id) WHERE respondent_id IS NOT NULL`）、`scope`、`key_hash`（`UNIQUE (survey_id, scope, key_hash)`）、`payload_hash`、`answers` (JSONB)、`outcome`（`complete`/`screen_out`）、`question_states` (JSONB 三态)、`submitted_at` |
+| `audits` | `id` (UUID PK)、`actor_id`、`action` (`disable_user`/`enable_user`/`take_down`/`restore_survey`)、`target_id`、`reason` (1–500 字符)、`created_at` |
 
 ### 3.2 草稿 `revision` 与发布版本 `version`
 
@@ -144,6 +144,20 @@ $Stats | Select-Object version_number, total_count, timezone
 3. 若无历史记录，则校验问卷当前可回收状态、`version_id == current_version_id`（不一致返回 `409 version_changed`）及登录限次唯一资格；若已有历史记录且 `version_id` 一致，则允许进入重放比对（即使问卷此后已关闭或切换了新版本）。
 4. 使用目标版本的不可变 `Document` 校验并规范化答案（带规则版本通过 `FlowEvaluator` 从入口重建有效路径），计算规范化载荷哈希 `payload_hash`。
 5. 若命中历史记录且 `payload_hash` 一致，返回 `200 OK` 与原 `receipt_id`；若 `payload_hash` 不同，返回 `409 idempotency_conflict`；若为首次提交，则插入 `responses` 并返回 `201 Created`。
+
+### 3.5 结构指纹与启动期校验
+
+`backend/src/schema.sql` 是唯一权威 DDL，但 `CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列。因此迁移在首次建库时把 `schema.sql` 的归一化 SHA-256（去掉 `--` 注释与空行）写入 `schema_meta` 表，之后**每次启动**（`serve`、`migrate`、`create-admin`）在 `Migrator::up` 之后由 `migration::verify_schema` 比对一次：
+
+| 情形 | 行为 |
+| --- | --- |
+| 指纹一致 | 正常启动 |
+| `schema.sql` 已变更，指纹不一致 | 启动失败，提示重建开发库或重新基线 |
+| 库由旧版本创建，缺少 `schema_meta` | 启动失败，提示对齐后重新基线或重建 |
+
+处理办法：开发库直接执行 `./start.ps1 -ResetDb` 重建；确实要保留数据时，先手动把结构对齐（或确认当前结构就是目标结构），再以 `SCHEMA_REBASELINE=1` 启动一次，让迁移记录新指纹并输出一条 `WARN` 日志。
+
+`migration.rs` 的单元测试锁定“注释与空行变化不影响指纹、结构变化必然改变指纹”，因此调整 `schema.sql` 的排版不会误报。
 
 ---
 
