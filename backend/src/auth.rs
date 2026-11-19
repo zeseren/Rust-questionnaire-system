@@ -411,12 +411,13 @@ pub(crate) fn invalid_credentials() -> AppError {
 static ARGON2_PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
 pub(crate) async fn hash_password(password: String) -> AppResult<String> {
-    // permit 持有到阻塞任务结束，确保同时在跑的 Argon2 不超过上限。
-    let _permit = ARGON2_PERMITS
+    // permit 移进阻塞任务：请求被取消时 spawn_blocking 仍在计算，permit 必须跟随计算本身释放。
+    let permit = ARGON2_PERMITS
         .acquire()
         .await
         .map_err(|error| AppError::internal(error))?;
     tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         // Argon2id v19 自动生成随机盐；随机源失败仍通过统一错误出口返回。
         let hash: PasswordHash = Argon2::default()
             .hash_password(password.as_bytes())
@@ -428,12 +429,13 @@ pub(crate) async fn hash_password(password: String) -> AppResult<String> {
 }
 
 pub(crate) async fn verify_password(password: String, encoded_hash: String) -> AppResult<bool> {
-    // 与哈希共用同一个上限：验证同样消耗 Argon2 的内存带宽。
-    let _permit = ARGON2_PERMITS
+    // 与哈希共用同一个上限，permit 同样随阻塞任务释放。
+    let permit = ARGON2_PERMITS
         .acquire()
         .await
         .map_err(|error| AppError::internal(error))?;
     tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         let hash = PasswordHash::new(&encoded_hash).map_err(|error| AppError::internal(error))?;
         match Argon2::default().verify_password(password.as_bytes(), &hash) {
             Ok(()) => Ok(true),
