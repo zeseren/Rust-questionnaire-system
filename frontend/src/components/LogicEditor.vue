@@ -6,6 +6,7 @@
 import { computed, nextTick, ref } from 'vue'
 import type { DocumentLogic, Question, QuestionRule } from '../types'
 import { logicDiagnostic } from '../editor-logic'
+import { numberedQuestionLabel } from '../flow-tools'
 import ExpressionEditor from './ExpressionEditor.vue'
 import ConditionBuilder from './ConditionBuilder.vue'
 import FlowEditor from './FlowEditor.vue'
@@ -262,7 +263,7 @@ function discardText() {
                       :options="
                         questions.map((question, i) => ({
                           value: question.id,
-                          label: `${i + 1}. ${question.title || '未命名题目'}`,
+                          label: numberedQuestionLabel(question, i),
                           disabled:
                             configuredRuleIds.has(question.id) && question.id !== rule.question_id,
                         }))

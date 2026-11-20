@@ -4,7 +4,15 @@
 <!-- 页面顺序和出口由作者显式配置，结构变化后保留失效引用供定位修复。 -->
 <script setup lang="ts">
 import { computed, nextTick } from 'vue'
-import { assignablePageIds, assignQuestion, insertFlowNode, insertionExit } from '../flow-tools'
+import {
+  assignablePageIds,
+  assignQuestion,
+  insertFlowNode,
+  insertionExit,
+  nodeTypeNames,
+  nodeTypeShortNames,
+  questionLabel,
+} from '../flow-tools'
 import { newId } from '../uuid'
 import type { ComputedVariable, FlowBranch, FlowDefinition, FlowNode, Question } from '../types'
 import ConditionBuilder from './ConditionBuilder.vue'
@@ -77,8 +85,7 @@ function assign(questionId: string, pageId: string) {
 }
 function questionTitle(id: string) {
   const question = props.questions.find((item) => item.id === id)
-  if (!question) return '题目已删除'
-  return question.title || '未命名题目'
+  return question ? questionLabel(question) : '题目已删除'
 }
 // 分支对象会因提高优先级而换位，用对象身份分配稳定 key，避免 Vue 把编辑状态套到另一条分支上。
 const branchKeys = new WeakMap<FlowBranch, number>()
@@ -167,7 +174,7 @@ function removeFlow() {
         <label v-for="(question, index) in questions" :key="question.id" class="membership-row">
           <span>
             <span class="accent">{{ String(index + 1).padStart(2, '0') }}</span>
-            {{ question.title || '未命名题目' }}
+            {{ questionLabel(question) }}
           </span>
           <SearchSelect
             :model-value="pageOf(question.id)"
@@ -188,7 +195,7 @@ function removeFlow() {
         <div class="actions between">
           <h3>
             <span class="node-index">{{ index + 1 }}</span>
-            {{ node.type === 'page' ? '页面' : node.type === 'branch' ? '条件分支' : '结束' }}
+            {{ nodeTypeNames[node.type] }}
           </h3>
           <div class="actions">
             <button
@@ -320,7 +327,7 @@ function removeFlow() {
             {{ insertionExit(node) ? '在后面插入' : '先为此节点设置出口，才能在后面插入' }}
           </span>
           <button
-            v-for="(label, type) in { page: '页面', branch: '分支', end: '结束' }"
+            v-for="(label, type) in nodeTypeShortNames"
             :key="type"
             type="button"
             class="text-button"

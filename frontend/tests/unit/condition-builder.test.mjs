@@ -18,40 +18,33 @@ import {
 const describe = (operators) => operators.map((entry) => entry.value)
 
 test('conditionOperators 按题型提供可用运算符', () => {
-  assert.deepEqual(describe(conditionOperators()), ['answered', 'not_answered'])
-  assert.deepEqual(describe(conditionOperators(singleChoiceQuestion())), [
-    'answered',
-    'not_answered',
-    'selected',
-    'not_selected',
-  ])
-  assert.deepEqual(describe(conditionOperators(textQuestion())), [
-    'answered',
-    'not_answered',
-    'eq',
-    'ne',
-  ])
-  assert.deepEqual(describe(conditionOperators(numberQuestion())), [
-    'answered',
-    'not_answered',
-    'eq',
-    'ne',
-    'gt',
-    'ge',
-    'lt',
-    'le',
-  ])
-  assert.deepEqual(describe(conditionOperators(ratingQuestion())), [
-    'answered',
-    'not_answered',
-    'eq',
-    'ne',
-    'gt',
-    'ge',
-    'lt',
-    'le',
-  ])
-  assert.deepEqual(conditionOperators(textQuestion())[2], { value: 'eq', label: '等于' })
+  const text = textQuestion()
+  const cases = [
+    { name: '未指定题型', question: undefined, operators: ['answered', 'not_answered'] },
+    {
+      name: '单选题',
+      question: singleChoiceQuestion(),
+      operators: ['answered', 'not_answered', 'selected', 'not_selected'],
+    },
+    {
+      name: '单行文本',
+      question: text,
+      operators: ['answered', 'not_answered', 'eq', 'ne'],
+    },
+    {
+      name: '数字题',
+      question: numberQuestion(),
+      operators: ['answered', 'not_answered', 'eq', 'ne', 'gt', 'ge', 'lt', 'le'],
+    },
+    {
+      name: '评分题',
+      question: ratingQuestion(),
+      operators: ['answered', 'not_answered', 'eq', 'ne', 'gt', 'ge', 'lt', 'le'],
+    },
+  ]
+  for (const { name, question, operators } of cases)
+    assert.deepEqual(describe(conditionOperators(question)), operators, name)
+  assert.deepEqual(conditionOperators(text)[2], { value: 'eq', label: '等于' })
 })
 
 test('changeConditionOperator 清空不适用的操作数并保留兼容值', () => {

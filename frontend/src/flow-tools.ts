@@ -1,9 +1,27 @@
-//! 流程编辑器的拓扑工具：插入节点、调整题目的页面归属。
+//! 流程编辑器的拓扑与展示工具：插入节点、调整题目的页面归属，并统一节点与题目文案。
 //! 只做结构改写，不校验语义；语义由 wasm 引擎在编译/求值时报错并定位。
 import type { FlowDefinition, FlowNode, Question } from './types.ts'
 import { newId } from './uuid.ts'
 
 type PageNode = Extract<FlowNode, { type: 'page' }>
+
+/** 流程节点的完整名称；概览出口行沿用更短的「分支」，其余文案保持一致。 */
+export const nodeTypeNames = {
+  page: '页面',
+  branch: '条件分支',
+  end: '结束',
+} as const
+export const nodeTypeShortNames = { ...nodeTypeNames, branch: '分支' } as const
+
+/** 题目标题缺失时的统一占位文案。 */
+export function questionLabel(question: Question | undefined): string {
+  return question?.title || '未命名题目'
+}
+
+/** 带全局题目序号前缀的选项文案。 */
+export function numberedQuestionLabel(question: Question, index: number): string {
+  return `${index + 1}. ${questionLabel(question)}`
+}
 
 /** 在该节点后插入时由新节点接管的出口；结束节点与尚未接出口的节点返回 null。 */
 export function insertionExit(node: FlowNode): string | null {

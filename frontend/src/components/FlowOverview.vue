@@ -1,13 +1,14 @@
 <!-- 流程缩略图展示真实出口，点击节点回到对应配置，不把排列顺序误当执行路径。 -->
 <script setup lang="ts">
 import type { FlowDefinition, Question } from '../types'
+import { nodeTypeNames, nodeTypeShortNames, questionLabel } from '../flow-tools'
 const props = defineProps<{ flow: FlowDefinition; questions: Question[] }>()
 defineEmits<{ select: [id: string] }>()
 function target(id: string) {
   const index = props.flow.nodes.findIndex((node) => node.id === id)
   if (index < 0) return '未设置出口'
   const node = props.flow.nodes[index]!
-  return `${index + 1}. ${node.type === 'page' ? '页面' : node.type === 'branch' ? '分支' : '结束'}`
+  return `${index + 1}. ${nodeTypeShortNames[node.type]}`
 }
 </script>
 <template>
@@ -23,7 +24,7 @@ function target(id: string) {
       <span class="actions between">
         <strong>
           {{ index + 1 }} ·
-          {{ node.type === 'page' ? '页面' : node.type === 'branch' ? '条件分支' : '结束' }}
+          {{ nodeTypeNames[node.type] }}
         </strong>
         <span v-if="flow.entry === node.id" class="flow-entry">入口</span>
       </span>
@@ -31,7 +32,7 @@ function target(id: string) {
         <span class="flow-mini-description">
           {{
             node.question_ids
-              .map((id) => questions.find((question) => question.id === id)?.title || '未命名题目')
+              .map((id) => questionLabel(questions.find((question) => question.id === id)))
               .join(' / ') || '尚未分配题目'
           }}
         </span>

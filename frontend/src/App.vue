@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { useAppearance, useAuth, useNotice, type Theme } from './stores'
+import { themeOptions, useAppearance, useAuth, useNotice } from './stores'
 import { message } from './api'
 import Icons from './components/Icons.vue'
 import Icon from './components/Icon.vue'
@@ -48,11 +48,7 @@ const links = computed(() => [
   ...(auth.user?.role === 'admin' ? [{ to: '/admin', label: '平台管理', icon: 'people' }] : []),
   { to: '/settings', label: '账户设置', icon: 'person' },
 ])
-const themes: { value: Theme; label: string; icon: string }[] = [
-  { value: 'light', label: '浅色', icon: 'sun' },
-  { value: 'dark', label: '深色', icon: 'moon' },
-  { value: 'system', label: '系统', icon: 'desktop' },
-]
+const themes = themeOptions('系统')
 function selected(path: string) {
   return path === '/' ? route.path === '/' : route.path.startsWith(path)
 }

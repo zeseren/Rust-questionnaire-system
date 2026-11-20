@@ -12,13 +12,19 @@ import { useNotice } from '../stores'
 import type { Page, Status, SurveyCounts, SurveyDetail, SurveySummary } from '../types'
 import Icon from '../components/Icon.vue'
 import Modal from '../components/Modal.vue'
+import SurveyActionDialog from '../components/SurveyActionDialog.vue'
 import ErrorNotice from '../components/ErrorNotice.vue'
 import LoadingState from '../components/LoadingState.vue'
 import Pagination from '../components/Pagination.vue'
 import SurveyTemplatePicker from '../components/SurveyTemplatePicker.vue'
 import { createSurveyTemplate, surveyTemplates } from '../survey-templates'
 import type { SurveyTemplateId } from '../survey-templates'
-import { SURVEY_ACTION_DESCRIPTIONS, SURVEY_ACTION_NAMES, type CardAction } from '../survey-actions'
+import {
+  deleteSurvey,
+  surveyActionMessage,
+  transitionSurvey,
+  type CardAction,
+} from '../survey-actions'
 import '../editor.css'
 const route = useRoute()
 const router = useRouter()
@@ -120,9 +126,9 @@ async function performAction() {
   busy.value = true
   actionError.value = ''
   try {
-    if (act === 'delete') await api(`/api/surveys/${survey.id}`, 'DELETE')
-    else await api<SurveyDetail>(`/api/surveys/${survey.id}/${act}`, 'POST')
-    notice.show(act === 'delete' ? '草稿已删除。' : `${SURVEY_ACTION_NAMES[act]}成功。`)
+    if (act === 'delete') await deleteSurvey(survey.id)
+    else await transitionSurvey(survey.id, act)
+    notice.show(surveyActionMessage(act))
     pendingAction.value = null
     await refresh()
     const total = list.data.value?.total
@@ -434,31 +440,14 @@ async function copySurveyLink(survey: SurveySummary) {
       </div>
     </form>
   </Modal>
-  <Modal
+  <SurveyActionDialog
     v-if="pendingAction"
-    :title="SURVEY_ACTION_NAMES[pendingAction.action]"
-    :dismissible="!busy"
+    :action="pendingAction.action"
+    :busy="busy"
+    :error="actionError"
+    @confirm="performAction"
     @close="closeAction"
   >
-    <ErrorNotice :message="actionError" />
-    <p class="subtle mb">{{ SURVEY_ACTION_DESCRIPTIONS[pendingAction.action] }}</p>
     <p class="subtle mb">问卷：{{ pendingAction.survey.title || '无标题问卷' }}</p>
-    <div class="actions between">
-      <button class="button" :disabled="busy" @click="closeAction">取消</button>
-      <button
-        class="button"
-        :class="
-          pendingAction.action === 'delete' ||
-          pendingAction.action === 'archive' ||
-          pendingAction.action === 'close'
-            ? 'button-danger'
-            : 'button-primary'
-        "
-        :disabled="busy"
-        @click="performAction"
-      >
-        {{ busy ? '正在处理…' : `确认${SURVEY_ACTION_NAMES[pendingAction.action]}` }}
-      </button>
-    </div>
-  </Modal>
+  </SurveyActionDialog>
 </template>

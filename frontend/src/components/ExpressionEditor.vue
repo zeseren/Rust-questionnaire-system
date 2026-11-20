@@ -5,7 +5,9 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
 import type { ComputedVariable, Question } from '../types'
+import { comparisonNames, inputValue, selectValue } from '../condition-builder'
 import { editorDisabledKey } from '../editor-context'
+import { numberedQuestionLabel } from '../flow-tools'
 import SearchSelect from './SearchSelect.vue'
 const props = withDefaults(
   defineProps<{
@@ -52,6 +54,15 @@ const ops = {
   starts_with: '前缀匹配',
   arithmetic: '算术',
 }
+// 高级编辑沿用原有「小于等于/大于等于」措辞；其余标签复用简洁条件的 comparisonNames。
+const comparisonLabels = {
+  eq: comparisonNames.eq,
+  ne: comparisonNames.ne,
+  lt: comparisonNames.lt,
+  le: '小于等于',
+  gt: comparisonNames.gt,
+  ge: '大于等于',
+} as const
 const children = computed<readonly (readonly [string, string])[]>(() => {
   switch (node.value.op) {
     case 'not':
@@ -184,12 +195,6 @@ function toggleOption(id: string) {
   const ids = selectedOptionIds.value
   update('option_ids', ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id])
 }
-function selectValue(event: Event) {
-  return event.currentTarget instanceof HTMLSelectElement ? event.currentTarget.value : ''
-}
-function inputValue(event: Event) {
-  return event.currentTarget instanceof HTMLInputElement ? event.currentTarget.value : ''
-}
 </script>
 <template>
   <div class="expression-editor">
@@ -227,7 +232,10 @@ function inputValue(event: Event) {
         :options="
           referenceQuestions.map((question) => ({
             value: question.id,
-            label: `${questions.findIndex((item) => item.id === question.id) + 1}. ${question.title || '未命名题目'}`,
+            label: numberedQuestionLabel(
+              question,
+              questions.findIndex((item) => item.id === question.id),
+            ),
           }))
         "
         @update:model-value="changeQuestion"
@@ -286,18 +294,7 @@ function inputValue(event: Event) {
         :disabled="locked"
         @change="update('comparison', selectValue($event))"
       >
-        <option
-          v-for="(label, key) in {
-            eq: '等于',
-            ne: '不等于',
-            lt: '小于',
-            le: '小于等于',
-            gt: '大于',
-            ge: '大于等于',
-          }"
-          :key="key"
-          :value="key"
-        >
+        <option v-for="(label, key) in comparisonLabels" :key="key" :value="key">
           {{ label }}
         </option>
       </select>

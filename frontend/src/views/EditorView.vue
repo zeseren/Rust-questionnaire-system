@@ -25,8 +25,9 @@ import {
   syncFlowOrder,
 } from '../documents'
 import {
-  SURVEY_ACTION_DESCRIPTIONS,
-  SURVEY_ACTION_NAMES,
+  deleteSurvey,
+  surveyActionMessage,
+  transitionSurvey,
   type SurveyLifecycleAction,
 } from '../survey-actions'
 import { useNotice } from '../stores'
@@ -40,6 +41,7 @@ import type {
 } from '../types'
 import Icon from '../components/Icon.vue'
 import Modal from '../components/Modal.vue'
+import SurveyActionDialog from '../components/SurveyActionDialog.vue'
 import ErrorNotice from '../components/ErrorNotice.vue'
 import LoadingState from '../components/LoadingState.vue'
 import QuestionEditor from '../components/QuestionEditor.vue'
@@ -95,7 +97,14 @@ const deadline = ref('')
 const editorForm = ref<HTMLFormElement>()
 const action = ref<SurveyLifecycleAction | null>(null)
 const textPending = ref(false)
-const workspace = ref<'questions' | 'logic' | 'preview' | 'settings'>('questions')
+type WorkspaceId = 'questions' | 'logic' | 'preview' | 'settings'
+const workspaceTabs: { id: WorkspaceId; label: string; icon: string }[] = [
+  { id: 'questions', label: '题目设计', icon: 'document' },
+  { id: 'logic', label: '规则与跳题', icon: 'grid' },
+  { id: 'preview', label: '试填预览', icon: 'play' },
+  { id: 'settings', label: '回收设置', icon: 'settings' },
+]
+const workspace = ref<WorkspaceId>('questions')
 const logicEditor = ref<InstanceType<typeof LogicEditor>>()
 const editorKey = ref(0)
 const templateDialog = ref(false)
@@ -290,14 +299,14 @@ async function performAction() {
   error.value = ''
   try {
     if (requested === 'delete') {
-      await api(`/api/surveys/${id}`, 'DELETE')
+      await deleteSurvey(id)
       draft.value = null
       survey.value = null
       action.value = null
       // 草稿已不存在，清掉未保存标记，避免离开时再提示未保存的修改。
       textPending.value = false
       markSaved()
-      notice.show('草稿已删除。')
+      notice.show(surveyActionMessage('delete'))
       await router.push('/surveys')
     } else if (requested === 'publish') {
       const result = await api<{ survey: SurveyDetail; version: Version }>(
@@ -311,9 +320,9 @@ async function performAction() {
         `版本 V${result.version.number} 已发布${result.survey.status === 'closed' ? '，问卷仍保持关闭。' : '，现在可以分享问卷。'}`,
       )
     } else {
-      applySurveyDetail(await api<SurveyDetail>(`/api/surveys/${id}/${requested}`, 'POST'))
+      applySurveyDetail(await transitionSurvey(id, requested))
       action.value = null
-      notice.show(`${SURVEY_ACTION_NAMES[requested]}成功。`)
+      notice.show(surveyActionMessage(requested))
     }
   } catch (reason) {
     await handleError(reason)
@@ -454,14 +463,6 @@ onBeforeUnmount(() => {
           归档问卷
         </button>
         <button type="button" class="text-button" @click="exportDraft">导出草稿</button>
-        <RouterLink
-          class="text-button"
-          :to="`/surveys/${id}/preview`"
-          target="_blank"
-          rel="noopener"
-        >
-          预览已保存草稿
-        </RouterLink>
         <button
           v-if="survey.current_version_id && survey.status !== 'unpublished'"
           type="button"
@@ -524,34 +525,18 @@ onBeforeUnmount(() => {
     <nav v-if="survey && draft" class="workspace-nav" aria-label="问卷编辑工作区">
       <div class="workspace-tabs" role="group" aria-label="编辑步骤">
         <button
+          v-for="tab in workspaceTabs"
+          :key="tab.id"
           type="button"
-          :aria-pressed="workspace === 'questions'"
-          @click="workspace = 'questions'"
+          :aria-pressed="workspace === tab.id"
+          @click="workspace = tab.id"
         >
-          <Icon name="document" />
-          <span>题目设计</span>
-          <span class="workspace-count">{{ draft.questions.length }}</span>
-        </button>
-        <button type="button" :aria-pressed="workspace === 'logic'" @click="workspace = 'logic'">
-          <Icon name="grid" />
-          <span>规则与跳题</span>
-          <span v-if="draft.logic" class="workspace-indicator"></span>
-        </button>
-        <button
-          type="button"
-          :aria-pressed="workspace === 'preview'"
-          @click="workspace = 'preview'"
-        >
-          <Icon name="play" />
-          <span>试填预览</span>
-        </button>
-        <button
-          type="button"
-          :aria-pressed="workspace === 'settings'"
-          @click="workspace = 'settings'"
-        >
-          <Icon name="settings" />
-          <span>回收设置</span>
+          <Icon :name="tab.icon" />
+          <span>{{ tab.label }}</span>
+          <span v-if="tab.id === 'questions'" class="workspace-count">
+            {{ draft.questions.length }}
+          </span>
+          <span v-else-if="tab.id === 'logic' && draft.logic" class="workspace-indicator"></span>
         </button>
       </div>
       <button
@@ -810,30 +795,15 @@ onBeforeUnmount(() => {
       </button>
     </div>
   </Modal>
-  <Modal
+  <SurveyActionDialog
     v-if="action"
-    :title="SURVEY_ACTION_NAMES[action]"
-    :dismissible="!busy"
+    :action="action"
+    :busy="busy"
+    @confirm="performAction"
     @close="action = null"
   >
-    <p class="subtle mb">{{ SURVEY_ACTION_DESCRIPTIONS[action] }}</p>
     <p v-if="action === 'publish'" class="notice">
       将发布修订 {{ revision }}，共 {{ draft?.questions.length }} 道题。
     </p>
-    <div class="actions between">
-      <button class="button" :disabled="busy" @click="action = null">取消</button>
-      <button
-        class="button"
-        :class="
-          action === 'delete' || action === 'archive' || action === 'close'
-            ? 'button-danger'
-            : 'button-primary'
-        "
-        :disabled="busy"
-        @click="performAction"
-      >
-        {{ busy ? '正在处理…' : `确认${SURVEY_ACTION_NAMES[action]}` }}
-      </button>
-    </div>
-  </Modal>
+  </SurveyActionDialog>
 </template>

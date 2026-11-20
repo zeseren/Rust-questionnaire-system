@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { api, message } from '../api'
-import { useAuth } from '../stores'
+import { passwordProblem, useAuth } from '../stores'
 import ErrorNotice from './ErrorNotice.vue'
 const props = withDefaults(
   defineProps<{ mode?: 'login' | 'register'; initialUsername?: string }>(),
@@ -27,11 +27,15 @@ async function submit() {
     error.value = '用户名需为 3–32 个字母、数字或下划线。'
     return
   }
-  if ([...password.value].length < 8 || [...password.value].length > 128) {
+  const problem = passwordProblem(
+    password.value,
+    props.mode === 'register' && !registered.value ? confirmation.value : undefined,
+  )
+  if (problem === 'length') {
     error.value = '密码长度需为 8–128 个字符。'
     return
   }
-  if (props.mode === 'register' && !registered.value && password.value !== confirmation.value) {
+  if (problem === 'mismatch') {
     error.value = '两次输入的密码不一致。'
     return
   }

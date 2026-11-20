@@ -6,7 +6,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, message } from '../api'
-import { useAppearance, useAuth, useNotice, type Theme } from '../stores'
+import { passwordProblem, themeOptions, useAppearance, useAuth, useNotice } from '../stores'
 import Icon from '../components/Icon.vue'
 import ErrorNotice from '../components/ErrorNotice.vue'
 const auth = useAuth()
@@ -19,11 +19,7 @@ const confirmation = ref('')
 const error = ref('')
 const accountError = ref('')
 const busy = ref(false)
-const themes: { value: Theme; label: string; icon: string }[] = [
-  { value: 'light', label: '浅色', icon: 'sun' },
-  { value: 'dark', label: '深色', icon: 'moon' },
-  { value: 'system', label: '跟随系统', icon: 'desktop' },
-]
+const themes = themeOptions('跟随系统')
 function resetForm() {
   oldPassword.value = ''
   newPassword.value = ''
@@ -42,11 +38,12 @@ async function logoutCurrent() {
 }
 async function changePassword() {
   error.value = ''
-  if ([...newPassword.value].length < 8 || [...newPassword.value].length > 128) {
+  const problem = passwordProblem(newPassword.value, confirmation.value)
+  if (problem === 'length') {
     error.value = '新密码长度需为 8–128 个字符。'
     return
   }
-  if (newPassword.value !== confirmation.value) {
+  if (problem === 'mismatch') {
     error.value = '两次输入的新密码不一致。'
     return
   }

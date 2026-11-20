@@ -41,6 +41,13 @@ export const comparisonOperators = [
 function isComparisonOperator(value: string): value is (typeof comparisonOperators)[number] {
   return comparisonOperators.some((operator) => operator === value)
 }
+/** 简洁与高级条件编辑器共用的事件取值，元素类型不符时返回空串。 */
+export function selectValue(event: Event): string {
+  return event.currentTarget instanceof HTMLSelectElement ? event.currentTarget.value : ''
+}
+export function inputValue(event: Event): string {
+  return event.currentTarget instanceof HTMLInputElement ? event.currentTarget.value : ''
+}
 
 export function changeConditionOperator(
   condition: SimpleCondition,

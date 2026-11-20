@@ -18,83 +18,86 @@ const FIXED_IDS = Object.freeze({
   }),
 })
 
+/** 全部题目共用的身份、文案与必答字段；`fields` 为题型专属字段，`overrides` 最后合并。 */
+function fixedQuestion(id, title, type, fields, overrides) {
+  return { id, title, required: true, type, ...fields, ...overrides }
+}
+
 export function singleChoiceQuestion(overrides = {}) {
-  return {
-    id: FIXED_IDS.question.single_choice,
-    title: '单选题',
-    required: true,
-    type: 'single_choice',
-    options: [
-      { id: FIXED_IDS.option.a, label: '甲' },
-      { id: FIXED_IDS.option.b, label: '乙' },
-    ],
-    ...overrides,
-  }
+  return fixedQuestion(
+    FIXED_IDS.question.single_choice,
+    '单选题',
+    'single_choice',
+    {
+      options: [
+        { id: FIXED_IDS.option.a, label: '甲' },
+        { id: FIXED_IDS.option.b, label: '乙' },
+      ],
+    },
+    overrides,
+  )
 }
 
 export function multipleChoiceQuestion(overrides = {}) {
-  return {
-    id: FIXED_IDS.question.multiple_choice,
-    title: '多选题',
-    required: true,
-    type: 'multiple_choice',
-    options: [
-      { id: FIXED_IDS.option.c, label: '丙' },
-      { id: FIXED_IDS.option.d, label: '丁' },
-    ],
-    min_choices: 1,
-    max_choices: 2,
-    ...overrides,
-  }
+  return fixedQuestion(
+    FIXED_IDS.question.multiple_choice,
+    '多选题',
+    'multiple_choice',
+    {
+      options: [
+        { id: FIXED_IDS.option.c, label: '丙' },
+        { id: FIXED_IDS.option.d, label: '丁' },
+      ],
+      min_choices: 1,
+      max_choices: 2,
+    },
+    overrides,
+  )
 }
 
 export function textQuestion(overrides = {}) {
-  return {
-    id: FIXED_IDS.question.text,
-    title: '单行文本',
-    required: true,
-    type: 'text',
-    max_length: 200,
-    ...overrides,
-  }
+  return fixedQuestion(FIXED_IDS.question.text, '单行文本', 'text', { max_length: 200 }, overrides)
 }
 
 export function textareaQuestion(overrides = {}) {
-  return {
-    id: FIXED_IDS.question.textarea,
-    title: '多行文本',
-    required: true,
-    type: 'textarea',
-    max_length: 1000,
-    ...overrides,
-  }
+  return fixedQuestion(
+    FIXED_IDS.question.textarea,
+    '多行文本',
+    'textarea',
+    {
+      max_length: 1000,
+    },
+    overrides,
+  )
 }
 
 export function numberQuestion(overrides = {}) {
-  return {
-    id: FIXED_IDS.question.number,
-    title: '数字题',
-    required: true,
-    type: 'number',
-    integer: false,
-    min: null,
-    max: null,
-    ...overrides,
-  }
+  return fixedQuestion(
+    FIXED_IDS.question.number,
+    '数字题',
+    'number',
+    {
+      integer: false,
+      min: null,
+      max: null,
+    },
+    overrides,
+  )
 }
 
 export function ratingQuestion(overrides = {}) {
-  return {
-    id: FIXED_IDS.question.rating,
-    title: '评分题',
-    required: true,
-    type: 'rating',
-    min: 1,
-    max: 5,
-    min_label: '很不满意',
-    max_label: '非常满意',
-    ...overrides,
-  }
+  return fixedQuestion(
+    FIXED_IDS.question.rating,
+    '评分题',
+    'rating',
+    {
+      min: 1,
+      max: 5,
+      min_label: '很不满意',
+      max_label: '非常满意',
+    },
+    overrides,
+  )
 }
 
 /** 最小合法问卷：只固定与逻辑无关的文案字段。 */

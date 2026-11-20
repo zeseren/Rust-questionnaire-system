@@ -49,6 +49,15 @@ export const useAuth = defineStore('auth', () => {
 const CANVAS_COLORS = { light: '#f5f2eb', dark: '#121210' } as const
 
 export type Theme = 'light' | 'dark' | 'system'
+export type ThemeOption = { value: Theme; label: string; icon: string }
+/** 侧栏与账户设置共享浅色/深色选项；系统项文案由各自入口保留。 */
+export function themeOptions(systemLabel: string): ThemeOption[] {
+  return [
+    { value: 'light', label: '浅色', icon: 'sun' },
+    { value: 'dark', label: '深色', icon: 'moon' },
+    { value: 'system', label: systemLabel, icon: 'desktop' },
+  ]
+}
 export const useAppearance = defineStore('appearance', () => {
   const preference = ref<Theme>('system')
   const systemDark = ref(matchMedia('(prefers-color-scheme: dark)').matches)
@@ -92,3 +101,12 @@ export const useNotice = defineStore('notice', () => {
   }
   return { text, show }
 })
+
+export type PasswordProblem = 'length' | 'mismatch'
+/** 登录、注册与改密共用的密码规则；具体错误文案由各表单按场景提供。 */
+export function passwordProblem(password: string, confirmation?: string): PasswordProblem | null {
+  const length = [...password].length
+  if (length < 8 || length > 128) return 'length'
+  if (confirmation !== undefined && password !== confirmation) return 'mismatch'
+  return null
+}

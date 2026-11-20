@@ -9,10 +9,13 @@ import {
   changeConditionOperator,
   conditionOperators,
   groupExpression,
+  inputValue,
   readConditionGroup,
+  selectValue,
 } from '../condition-builder'
 import type { ConditionGroup, SimpleCondition } from '../condition-builder'
 import { editorDisabledKey } from '../editor-context'
+import { numberedQuestionLabel } from '../flow-tools'
 import ExpressionEditor from './ExpressionEditor.vue'
 import SearchSelect from './SearchSelect.vue'
 import Icon from './Icon.vue'
@@ -29,7 +32,7 @@ const group = computed(() => readConditionGroup(expression.value))
 const questionOptions = computed(() =>
   props.questions.map((question, index) => ({
     value: question.id,
-    label: `${index + 1}. ${question.title || '未命名题目'}`,
+    label: numberedQuestionLabel(question, index),
   })),
 )
 const questionOf = (condition: SimpleCondition) =>
@@ -68,12 +71,6 @@ function operator(index: number, value: string) {
   const next = candidates.find((item) => item.value === value)
   if (!next) return
   edit(index, changeConditionOperator(condition, next.value, questionOf(condition)))
-}
-function selectValue(event: Event) {
-  return event.currentTarget instanceof HTMLSelectElement ? event.currentTarget.value : ''
-}
-function inputValue(event: Event) {
-  return event.currentTarget instanceof HTMLInputElement ? event.currentTarget.value : ''
 }
 function add() {
   if (group.value)
