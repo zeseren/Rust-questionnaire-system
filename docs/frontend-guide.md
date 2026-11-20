@@ -10,15 +10,14 @@
 | --- | --- | --- |
 | `/`、`/surveys`、`/archive` | `DashboardView.vue` | **工作台与案卷库**：展示核心指标账本栏（全部、回收中、草稿、已归档）、案卷列表/卡片视图切换、按状态与标题搜索、新建问卷（空白或三套内置规则模板）、复制问卷 |
 | `/login`、`/register` | `AuthView.vue` | **认证入口**：普通用户注册、全角色统一登录（管理员登录后侧边栏自动展示「平台管理」入口），支持安全站内跳转 `redirect` |
-| `/surveys/:id/edit` | `EditorView.vue` | **四工作区编纂台**：<br>1. **题目设计**：问卷标题、说明、收集目的、结束语及六类题型配置；<br>2. **规则与跳题**：可视化条件/变量/页面流程编辑与松烟墨文本 DSL 控制台双向切换；<br>3. **试填预览**：基于内存会话直接试填当前未保存草稿；<br>4. **回收设置**：填写模式（公开匿名 / 登录限次）、截止时间、发布、关闭/恢复、归档、删除草稿与分享链接复制 |
-| `/surveys/:id/preview` | `PreviewView.vue` | **服务端草稿预览**：读取服务端已保存草稿与发布校验结果，支持桌面/手机宽度切换，不产生正式答卷 |
-| `/s/:id` | `FillView.vue` | **受访者沉浸填写页**：公开匿名直接作答，登录限次模式先认证；有规则问卷通过 WASM `FlowSession` 分步渲染、回退自动清理失效分支答案、完成后进入核对页确认提交；内置 UUIDv4 幂等重试保护 |
+| `/surveys/:id/edit` | `EditorView.vue` | **四工作区编纂台**：<br>1. **题目设计**：问卷标题、说明、收集目的、结束语及六类题型配置；<br>2. **规则与跳题**：可视化条件/变量/页面流程编辑与松烟墨文本 DSL 控制台双向切换；<br>3. **试填预览**：基于内存会话直接试填当前未保存草稿，可切换桌面/手机宽度；<br>4. **回收设置**：填写模式（公开匿名 / 登录限次）、截止时间、发布、关闭/恢复、归档、删除草稿与分享链接复制 |
+| `/s/:id` | `FillView.vue` | **受访者沉浸填写页**：公开匿名直接作答，登录限次模式先认证；所有问卷统一由 WASM `FlowSession` 驱动，普通问卷为隐式单页、无核对页、一步提交，有规则问卷分步渲染、回退自动清理失效分支答案、抵达终点后进入核对页确认提交；内置 UUIDv4 幂等重试保护 |
 | `/surveys/:id/reports` | `ReportsView.vue` | **分版本报表与导出**：按发布版本与北京时间 `[from, to)` 范围筛选；展示回收汇总、自然日趋势、各题三态计数（已答 / 适用未答 / 规则跳过）、选项占比、评分分布、数值统计、答卷明细弹窗与 CSV 下载 |
 | `/admin` | `AdminView.vue` | **平台治理**（仅管理员）：用户分页列表与禁用/启用、问卷治理列表与下架/恢复（可查看当前已发布题面，不暴露他人答卷）、操作审计日志列表 |
 | `/settings` | `SettingsView.vue` | **账户设置**：查看账户角色、切换外观主题（浅色 / 深色 / 跟随系统）、修改密码（成功后全设备会话失效并跳转登录） |
 | `/:pathMatch(.*)*` | `NotFoundView.vue` | **404 页面**：提供返回工作台出口 |
 
-> 前端路由守卫（`router.ts`）仅控制界面导航体验，所有接口的数据归属与角色权限均由后端严格裁决。
+> 前端路由守卫（`router.ts`）仅控制界面导航体验，所有接口的数据归属与角色权限均由后端严格裁决。服务器 `GET /api/surveys/{id}/preview` 仍用于发布前校验已保存草稿（修订号与可发布性），但不再对应独立预览页面；未保存草稿的试填留在编辑器内，同样可切换桌面/手机宽度。
 
 ---
 
@@ -52,7 +51,7 @@ frontend/
     ├── json.ts / types.ts      # JSON 编解码助手与完整 API / 领域 TypeScript 类型定义
     ├── value-contract.ts       # Unicode 空白判定（U+0085 为空白、U+FEFF 为内容）与标量计数校验
     ├── numbers.ts / format.ts  # 数字输入清洗与本地格式提示；北京时间格式化、状态名与分享链接
-    ├── documents.ts / answers.ts # 新题与复制题身份生成、文本上限常量、无规则问卷本地作答校验
+    ├── documents.ts / answers.ts # 新题与复制题身份生成、文本上限常量；作答输入类型、是否已答判定与本地提交载荷校验
     ├── survey-templates.ts     # 三套内置规则问卷模板（满意度回访、产品体验调研、活动报名）
     ├── logic.ts                # LogicError / LogicTextError 错误类型与中文文案映射
     ├── editor-context.ts / editor-logic.ts # 编辑器禁用态注入与引擎编译错误到 UI 节点的定位映射
@@ -63,7 +62,7 @@ frontend/
     ├── styles.css              # Editorial Craft 设计令牌、字体阶梯、侧边栏、刊头与概览卡片样式
     ├── application.css         # 表单控件、面板、公开填写纸张舞台、报表图表、治理表格与认证页样式
     ├── editor.css              # 四工作区切换栏、可视化规则卡片、流程概览节点与松烟墨 DSL 控制台样式
-    ├── views/                  # 9 个路由页面组件
+    ├── views/                  # 8 个路由页面组件
     └── components/             # 19 个业务与基础 UI 组件
 ```
 
@@ -89,7 +88,7 @@ frontend/
 
 ### 4.4 填写会话与幂等提交重试
 
-- **WASM 会话驱动**：带规则的问卷在填写页与预览页共用 `FlowFields.vue` + `FlowInputs` + WASM `FlowSession`。修改答案（`change`）会从入口重算有效路径并立即清理被跳过分支上的旧输入；抵达 `complete` 终点后展示核对清单，须显式确认才发起提交。
+- **WASM 会话驱动**：填写页与编辑器试填预览共用 `FlowFields.vue` + `FlowInputs` + WASM `FlowSession`。普通问卷以隐式单页呈现，提交时临时前进完成本页必填与格式校验，通过后直接提交、不进入核对页；有规则问卷修改答案（`change`）会从入口重算有效路径并立即清理被跳过分支上的旧输入，抵达 `complete` 终点后展示核对清单，须显式确认才发起提交。
 - **冻结载荷与幂等重放**：点击提交时生成一次 `crypto.randomUUID()` 作为 `idempotency_key`。若遇到网络中断、30 秒读取超时或 `5xx` 错误，页面将**冻结**原版本、原答案与原幂等键，仅展示「重试原提交」按钮（`login_once` 模式还会校验重试账号与首次提交账号一致），杜绝超时重发产生重复答卷。
 - **版本更新保护**：若提交时返回 `409 version_changed`，页面保留用户已填内容并提示在新窗口打开最新题面核对，绝不把旧答案静默映射到新版本。
 
@@ -124,16 +123,15 @@ frontend/
 
 ## 6. WASM DSL 引擎接入与重建
 
-`frontend/src/wasm/index.ts` 在模块顶层通过 `await loadEngine()` 完成 WASM 实例化，对外同步暴露 6 个接口：
+`frontend/src/wasm/index.ts` 在模块顶层通过 `await loadEngine()` 完成 WASM 实例化，对外同步暴露 5 个接口：
 
 | 导出项 | 职责 |
 | --- | --- |
 | `parseLogicText(source, questions)` | 将文本 DSL 解析并编译为 `DocumentLogic`；失败抛出带行列号的 `LogicTextError` |
 | `inspectLogicText(source, questions)` | 解析并返回绑定速查与诊断（不抛出），供规则文本编辑器使用 |
 | `formatLogicText(logic, questions)` | 将 `DocumentLogic` 格式化为确定性文本 DSL（与后端逐字节一致） |
-| `compileDocumentLogic(logic, questions)` | 校验整份规则模型，返回变量拓扑顺序 `variableOrder` 与求值器 |
-| `compileExpression(raw, questions)` | 编译单条表达式，返回静态类型 `valueType`、依赖集合与求值函数；供双端语义契约测试使用 |
-| `FlowSession` | 有状态流程会话类：支持 `snapshot()`、`dispatch(event)` 与 `evaluateAnswers(answers)` |
+| `compileDocumentLogic(logic, questions)` | 校验整份规则模型，返回计算变量拓扑顺序 `variableOrder` |
+| `FlowSession` | 有状态流程会话类：支持 `snapshot()` 与 `dispatch(event)` |
 
 - **双环境兼容**：Vite 浏览器构建使用 `pkg/logic_wasm.js` bundler 胶水；Node 测试环境（`node --test`）通过 `pkg/logic_wasm_bg.js` 配合 `readFileSync` 加载本地 `logic_wasm_bg.wasm`。
 - **重建命令**：修改 `logic-core/` 或 `logic-wasm/` 后，在 `frontend/` 下运行 `pnpm run wasm:build` 即可重新编译并更新 `src/wasm/pkg/` 下的五件套入库产物。
@@ -146,7 +144,7 @@ frontend/
 
 | 目录 / 文件 | 覆盖内容 |
 | --- | --- |
-| `tests/contract/` | 与 Rust 共读 `fixtures/survey-logic/` 的跨端语义契约：`documents`、`expressions`、`flows`、`input-contracts`、`submissions`、`texts` |
+| `tests/contract/` | 与 Rust 共读 `fixtures/survey-logic/` 中 `flows`、`input-contracts` 与 `texts` 三份夹具的跨端语义契约 |
 | `tests/unit/`（17 个模块） | 纯函数与基础设施契约：`value-contract`、`numbers`、`json`、`format`、`logic-errors`、`answers`、`documents`、`condition-builder`、`flow-tools`、`editor-logic`、`survey-templates`、`logic-text-tools`、`api`、`resource`、`stores`、`router`、`wasm-envelope` |
 | `tests/integration/` | 跨模块流程：`editor-workflow`、`flow-inputs`，组合编辑器工具、`FlowSession` 与页面级输入适配 |
 | `tests/helpers/fixtures.mjs` | `fixtures/survey-logic/` 的进程内只读缓存与命名夹具读取 |

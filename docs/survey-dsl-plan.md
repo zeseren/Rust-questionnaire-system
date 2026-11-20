@@ -19,8 +19,8 @@ logic-core/src/
 ```
 
 - **后端接入**：`backend/src/lib.rs` 通过 `pub use questionnaire_logic::domain;` 直接调用原生 Rust 函数。
-- **前端接入**：`logic-wasm/` 使用泛型 `Envelope<T>` 将结果单遍序列化为 JSON 字符串信封 `{"ok": …}` 或 `{"error": …}`，编译为 `frontend/src/wasm/pkg/` 入库产物，由 `frontend/src/wasm/index.ts` 封装为 `parseLogicText`、`inspectLogicText`、`formatLogicText`、`compileDocumentLogic`、`compileExpression` 与 `FlowSession`。
-- **双端契约回归**：`fixtures/survey-logic/` 下的 6 份 JSON 样例（`expressions.json`、`documents.json`、`flows.json`、`submissions.json`、`texts.json`、`input-contracts.json`）同时被 `cargo test --locked --workspace` 与前端 `pnpm run test:regression` 读取核对。
+- **前端接入**：`logic-wasm/` 使用泛型 `Envelope<T>` 将结果单遍序列化为 JSON 字符串信封 `{"ok": …}` 或 `{"error": …}`，编译为 `frontend/src/wasm/pkg/` 入库产物，由 `frontend/src/wasm/index.ts` 封装为 `parseLogicText`、`inspectLogicText`、`formatLogicText`、`compileDocumentLogic` 与 `FlowSession`。
+- **双端契约回归**：`fixtures/survey-logic/` 下的 6 份 JSON 样例（`expressions.json`、`documents.json`、`flows.json`、`submissions.json`、`texts.json`、`input-contracts.json`）由 `cargo test --locked --workspace` 全部读取核对；前端 `pnpm run test:regression` 的契约层读取其中 `flows.json`、`input-contracts.json` 与 `texts.json` 三份。
 
 ---
 

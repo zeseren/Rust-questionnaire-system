@@ -103,11 +103,11 @@ pnpm run wasm:build                                           # 仅在改动 log
 | 层级 | 位置 | 覆盖内容 |
 | --- | --- | --- |
 | `logic-core` 单元 | `logic-core/src/tests/{identity,domain,logic,logic_document,flow,logic_text}.rs` | 各模块内部不变量：身份严格解析、表达式、变量拓扑排序、流程状态机与文本 DSL |
-| `logic-core` 契约集成 | `logic-core/tests/{domain,logic,flow,logic_text}.rs` | 领域校验、三值逻辑、前向流程与文本 DSL 的跨模块契约，并与 `fixtures/survey-logic/` 共读人工预期 |
+| `logic-core` 契约集成 | `logic-core/tests/{domain,logic,flow,logic_text}.rs` | 领域校验、三值逻辑、前向流程与文本 DSL 的跨模块契约，并与 `fixtures/survey-logic/` 的六份夹具共读人工预期 |
 | `logic-wasm` 边界 | `logic-wasm/tests/smoke.rs` | JSON 字符串信封的成功/错误形状与错误分类穿透 |
 | `backend` 单元与 HTTP | `backend/src/tests/{config,error_and_http,security_and_router,auth_and_admin,surveys_and_submissions,reports}.rs` | 配置解析、错误信封与抽取器、CSRF/盲化 IP 限流/路由、认证与治理、问卷生命周期与提交、报表聚合与分批 CSV 导出 |
 | `backend` 真实 DB | `backend/tests/pg_integration.rs` | 由 `TEST_DATABASE_URL` 门控的真实 PostgreSQL 18 迁移、字面标题筛选、`login_once` + `screen_out` 并发唯一约束与三态持久化测试 |
-| `frontend` 契约 | `frontend/tests/contract/` | 与 Rust 共读 `fixtures/survey-logic/`（`documents`、`expressions`、`flows`、`input-contracts`、`submissions`、`texts`），断言两端语义一致 |
+| `frontend` 契约 | `frontend/tests/contract/` | 与 Rust 共读 `fixtures/survey-logic/` 的 `flows`、`input-contracts` 与 `texts` 三份夹具，断言两端语义一致 |
 | `frontend` 单元 | `frontend/tests/unit/` | 18 个模块：`value-contract`、`numbers`、`json`、`format`、`logic-errors`、`answers`、`documents`、`condition-builder`、`flow-tools`、`editor-logic`、`survey-templates`、`logic-text-tools`、`api`、`resource`、`stores`、`router`、`wasm-envelope`、`uuid` |
 | `frontend` 集成 | `frontend/tests/integration/` | `editor-workflow`、`flow-inputs`：编辑器工具与 `FlowSession` 输入适配的跨模块流程 |
 | 共享测试基建 | `backend/src/tests/support.rs`、`frontend/tests/helpers/` | 后端无连接 DB/原始 HTTP 测试桩 `support.rs`（由 `mod.rs` 聚合）；前端 `fixtures.mjs` 夹具缓存、`documents.mjs` 固定身份构造器、`browser.mjs` 按需安装且 `t.after` 自动清理的浏览器环境桩 |
