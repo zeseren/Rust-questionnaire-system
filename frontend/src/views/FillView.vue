@@ -18,7 +18,7 @@ import {
 import type { FrozenPending } from '../pending-submission'
 import { useAuth } from '../stores'
 import { newId } from '../uuid'
-import type { Answer, FlowEvent, PublicSurvey, PublicSurveyMeta, Receipt } from '../types'
+import type { Answer, PublicSurvey, PublicSurveyMeta, Receipt } from '../types'
 import FlowFields from '../components/FlowFields.vue'
 import AuthForm from '../components/AuthForm.vue'
 import Modal from '../components/Modal.vue'
@@ -30,11 +30,10 @@ const auth = useAuth()
 const id = String(route.params.id)
 /** 本地暂存按问卷与发布版本隔离，换版本后不会把旧输入带到新题面。 */
 interface FillDraft {
-  events?: FlowEvent[]
+  events?: unknown[]
 }
 /** 题面载入时的账号快照：草稿与未决提交都只使用这个作用域。 */
 interface LoadedScope {
-  accountId: string | null
   scope: string
   versionId: string
 }
@@ -42,7 +41,7 @@ const meta = shallowRef<PublicSurveyMeta | null>(null)
 const survey = shallowRef<PublicSurvey | null>(null)
 const receipt = shallowRef<Receipt | null>(null)
 const receiptPanel = ref<HTMLElement | null>(null)
-const flowDraft = ref<FlowEvent[]>([])
+const flowDraft = ref<unknown[]>([])
 const errors = ref<Record<string, string>>({})
 const error = ref('')
 const loading = ref(true)
@@ -57,6 +56,7 @@ const pending = shallowRef<FrozenPending | null>(null)
 const loadedScope = shallowRef<LoadedScope | null>(null)
 const flowFields = ref<InstanceType<typeof FlowFields>>()
 const flowAnswered = ref(0)
+let saveTimer: ReturnType<typeof setTimeout> | undefined
 /** 「登录限次」但当前没有会话：先展示上下文与登录引导，不直接撞 401。 */
 const loginRequired = computed(() => meta.value?.mode === 'login_once' && !auth.user)
 const draftKey = computed(() =>
@@ -66,12 +66,18 @@ const draftKey = computed(() =>
 function currentScope(): string | null {
   return scopeFor(survey.value?.mode, auth.user?.id ?? null)
 }
+/** 账号与冻结作用域不一致的唯一出口：保留原提交，锁定表单并引导切回原账号。 */
+function rejectAccount() {
+  accountMismatch.value = true
+  loginNeeded.value = true
+  error.value = '当前登录账号与原提交账号不一致，请切回原账号后重试；原回答与提交标识仍然保留。'
+}
 function flowChanged(count: number) {
   flowAnswered.value = count
   errors.value = {}
-  scheduleSave()
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(writeDraft, 400)
 }
-const answered = computed(() => flowAnswered.value)
 /** 0/0 表示本次没有可提示的暂存；全量、部分与全失败三种结果都必须明确告知。 */
 const replayNotice = computed(() => {
   const info = replayed.value
@@ -82,79 +88,57 @@ const replayNotice = computed(() => {
   return `已恢复上次未提交填写进度的前 ${info.applied} 项（共 ${info.total} 项），其余内容与当前题面不兼容，未恢复。可继续填写或清空重试。`
 })
 function replayedDraft(applied: number, total: number) {
-  if (!Number.isFinite(applied) || !Number.isFinite(total) || total <= 0) {
-    replayed.value = null
-    return
-  }
-  const totalCount = Math.floor(total)
-  replayed.value = {
-    applied: Math.min(Math.max(0, Math.floor(applied)), totalCount),
-    total: totalCount,
-  }
+  replayed.value = { applied, total }
 }
-function readDraft(key: string): FillDraft | null {
+/** 本地存储是浏览器侧的不可信边界：读写失败或内容损坏一律当作“没有”，不打断填写。 */
+function readStored(key: string): unknown {
   try {
     const raw = localStorage.getItem(key)
-    if (!raw) return null
-    const draft = decode<FillDraft | null>(raw)
-    if (!draft || typeof draft !== 'object') return null
-    return draft
+    return raw ? decode<unknown>(raw) : null
   } catch {
     return null
   }
 }
+function writeStored(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // 隐私模式等存储不可用时静默跳过，填写本身不受影响。
+  }
+}
+function removeStored(key: string) {
+  try {
+    localStorage.removeItem(key)
+  } catch {}
+}
+function readDraft(key: string): FillDraft | null {
+  const draft = readStored(key)
+  if (typeof draft !== 'object' || draft === null || !('events' in draft)) return null
+  return Array.isArray(draft.events) ? { events: draft.events } : null
+}
 /** 立即写入当前进度；提交成功后回执已存在，不再改写本地暂存。 */
 function writeDraft() {
   if (!draftKey.value || receipt.value) return
-  const draft: FillDraft = { events: flowFields.value?.events() ?? [] }
-  if (!draft.events?.length) {
+  const events = flowFields.value?.events() ?? []
+  if (!events.length) {
     // 恢复失败时保留原暂存，等用户明确清空；不能让重放后的空事件把它悄悄删掉。
     const failedReplay = replayed.value && replayed.value.applied < replayed.value.total
     if (!failedReplay) clearDraft()
     return
   }
-  try {
-    localStorage.setItem(draftKey.value, JSON.stringify(draft))
-  } catch {
-    // 隐私模式等存储不可用时静默跳过，填写本身不受影响。
-  }
+  writeStored(draftKey.value, { events })
 }
 function readPending(scope: string): FrozenPending | null {
-  try {
-    const raw = localStorage.getItem(pendingKeyFor(id, scope))
-    if (!raw) return null
-    // 作用域只来自存储键；本地载荷仍按不可信输入校验，形状完整才冻结。
-    return freezePending(decode<unknown>(raw), scope)
-  } catch {
-    return null
-  }
+  // 作用域只来自存储键；本地载荷仍按不可信输入校验，形状完整才冻结。
+  return freezePending(readStored(pendingKeyFor(id, scope)), scope)
 }
 function writePending(frozen: FrozenPending) {
-  try {
-    localStorage.setItem(pendingKeyFor(id, frozen.scope), JSON.stringify(frozen.payload))
-  } catch {
-    // 存储不可用时只在本次会话内保留原载荷。
-  }
-}
-function clearPending(scope: string) {
-  try {
-    localStorage.removeItem(pendingKeyFor(id, scope))
-  } catch {}
-}
-let saveTimer: ReturnType<typeof setTimeout> | undefined
-function scheduleSave() {
-  clearTimeout(saveTimer)
-  saveTimer = setTimeout(writeDraft, 400)
-}
-function removeDraft(key: string) {
-  try {
-    localStorage.removeItem(key)
-  } catch {}
+  writeStored(pendingKeyFor(id, frozen.scope), frozen.payload)
 }
 function clearDraft() {
   clearTimeout(saveTimer)
   saveTimer = undefined
-  if (draftKey.value) removeDraft(draftKey.value)
+  if (draftKey.value) removeStored(draftKey.value)
 }
 /** 流程页「清空重填」：同时丢弃已回放的进度，避免下次初始化又被恢复。 */
 function resetFlowDraft() {
@@ -166,7 +150,7 @@ function applyStoredDraft(result: PublicSurvey, scope: string) {
   flowDraft.value = []
   replayed.value = null
   const draft = readDraft(draftKeyFor(id, result.version_id, scope))
-  if (!draft || !Array.isArray(draft.events) || !draft.events.length) return
+  if (!draft?.events?.length) return
   // 只交付事件；是否真正恢复由 FlowFields 的 replayed 事件决定，父端不提前宣告成功。
   flowDraft.value = draft.events
 }
@@ -202,11 +186,7 @@ async function loadSurvey() {
       return
     }
     survey.value = result
-    loadedScope.value = {
-      accountId,
-      scope,
-      versionId: result.version_id,
-    }
+    loadedScope.value = { scope, versionId: result.version_id }
     versionChanged.value = false
     uncertain.value = false
     accountMismatch.value = false
@@ -221,7 +201,7 @@ async function loadSurvey() {
       pending.value = storedPending
       uncertain.value = true
     } else if (storedPending) {
-      clearPending(storedPending.scope)
+      removeStored(pendingKeyFor(id, storedPending.scope))
     }
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) loginNeeded.value = true
@@ -233,7 +213,7 @@ async function loadSurvey() {
 function resetFill() {
   if (busy.value || uncertain.value || versionChanged.value) return
   // 恢复提示存在时即使没有答案也允许明确清空损坏或不可恢复的暂存。
-  if (answered.value && !window.confirm('确定清空当前已填写的回答吗？')) return
+  if (flowAnswered.value && !window.confirm('确定清空当前已填写的回答吗？')) return
   error.value = ''
   errors.value = {}
   flowAnswered.value = 0
@@ -255,7 +235,7 @@ function abandonPending() {
   uncertain.value = false
   accountMismatch.value = false
   error.value = ''
-  if (scope) clearPending(scope)
+  if (scope) removeStored(pendingKeyFor(id, scope))
 }
 async function loginSuccess() {
   loginNeeded.value = false
@@ -266,9 +246,7 @@ async function loginSuccess() {
     pending.value.scope !== ANONYMOUS_SCOPE &&
     pending.value.scope !== auth.user?.id
   ) {
-    accountMismatch.value = true
-    loginNeeded.value = true
-    error.value = '当前登录账号与原提交账号不一致，请切回原账号后重试；原回答与提交标识仍然保留。'
+    rejectAccount()
     return
   }
   accountMismatch.value = false
@@ -277,7 +255,7 @@ async function loginSuccess() {
     return
   }
   // 登录限次换成另一个账号后重新载入题面，避免继续显示上一账号的草稿。
-  if (survey.value.mode === 'login_once' && loadedScope.value?.accountId !== auth.user?.id) {
+  if (loadedScope.value?.scope !== currentScope()) {
     writeDraft()
     await loadSurvey()
   }
@@ -295,19 +273,21 @@ async function submit(flowAnswers?: Answer[]) {
     return
   }
   const loaded = loadedScope.value
-  const scope = currentScope()
-  // 首次冻结只能使用题面载入时的作用域，并且当前账号必须仍是载入账号。
-  if (!loaded || !scope || loaded.scope !== scope) {
-    accountMismatch.value = true
-    loginNeeded.value = true
-    error.value = '当前登录账号与原提交账号不一致，请切回原账号后重试；原回答与提交标识仍然保留。'
+  // 冻结与发送只认题面载入时的作用域：当前账号已变，或未决提交属于另一账号，都不冻结也不发送。
+  if (
+    !loaded ||
+    loaded.scope !== currentScope() ||
+    (pending.value && pending.value.scope !== loaded.scope)
+  ) {
+    rejectAccount()
     return
   }
-  if (!pending.value) {
+  let frozen = pending.value
+  if (!frozen) {
     flowAnswers ??= flowFields.value?.submissionAnswers()
     if (!flowAnswers) return
     errors.value = {}
-    pending.value = {
+    frozen = pending.value = {
       scope: loaded.scope,
       payload: {
         version_id: survey.value.version_id,
@@ -319,15 +299,6 @@ async function submit(flowAnswers?: Answer[]) {
         })),
       },
     }
-  }
-  const frozen = pending.value
-  if (!frozen) return
-  // 发送前再次核对冻结作用域：B 登录后不能拿 A 的答案与幂等键去 POST。
-  if (frozen.scope !== loaded.scope || frozen.scope !== scope) {
-    accountMismatch.value = true
-    loginNeeded.value = true
-    error.value = '当前登录账号与原提交账号不一致，请切回原账号后重试；原回答与提交标识仍然保留。'
-    return
   }
   accountMismatch.value = false
   // 请求发出前先冻结载荷：请求途中关闭页面也能用原幂等键重试。
@@ -351,8 +322,8 @@ async function submit(flowAnswers?: Answer[]) {
     replayed.value = null
     // 成功清理使用冻结作用域，不随此后 auth.user 或题面状态改变。
     clearDraft()
-    removeDraft(draftKeyFor(id, frozen.payload.version_id, frozen.scope))
-    clearPending(frozen.scope)
+    removeStored(draftKeyFor(id, frozen.payload.version_id, frozen.scope))
+    removeStored(pendingKeyFor(id, frozen.scope))
     window.scrollTo({ top: 0 })
     await nextTick()
     receiptPanel.value?.focus()
@@ -364,9 +335,6 @@ async function submit(flowAnswers?: Answer[]) {
     if (conflict)
       error.value =
         '这次提交的标识此前已记录过另一份回答，原提交不会重复计入。请核对答案后重新提交。'
-    if (accountChanged)
-      error.value =
-        '当前浏览器登录的账号与原提交账号不一致。请切换回原账号后重试；原回答与提交标识仍然保留。'
     if (reason instanceof ApiError) {
       if (reason.question_id) {
         errors.value = { [reason.question_id]: reason.message }
@@ -382,14 +350,11 @@ async function submit(flowAnswers?: Answer[]) {
         (reason instanceof ApiError
           ? reason.status === 0 || reason.status >= 500 || reason.status === 401
           : true))
-    if (accountChanged) {
-      accountMismatch.value = true
-      loginNeeded.value = true
-    }
+    if (accountChanged) rejectAccount()
     // 结果未知时保留请求前已写入的冻结载荷；明确失败才按冻结作用域丢弃。
     if (!uncertain.value) {
       pending.value = null
-      clearPending(frozen.scope)
+      removeStored(pendingKeyFor(id, frozen.scope))
     }
   } finally {
     busy.value = false
@@ -399,7 +364,7 @@ async function submit(flowAnswers?: Answer[]) {
 }
 function leave(event: BeforeUnloadEvent) {
   writeDraft()
-  if (!receipt.value && (busy.value || answered.value > 0 || uncertain.value)) {
+  if (!receipt.value && (busy.value || flowAnswered.value > 0 || uncertain.value)) {
     event.preventDefault()
     event.returnValue = ''
   }
@@ -408,7 +373,7 @@ onBeforeRouteLeave(() => {
   writeDraft()
   return (
     !!receipt.value ||
-    (!busy.value && !answered.value && !uncertain.value) ||
+    (!busy.value && !flowAnswered.value && !uncertain.value) ||
     window.confirm('离开后可在同一版本继续填写，是否离开？')
   )
 })

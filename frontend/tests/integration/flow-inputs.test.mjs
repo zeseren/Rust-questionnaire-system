@@ -11,6 +11,13 @@ import {
   textQuestion,
 } from '../helpers/documents.mjs'
 
+const logicFailure = (code, questionId) => (error) => {
+  assert.ok(error instanceof LogicError)
+  assert.equal(error.code, code)
+  assert.equal(error.question_id, questionId)
+  return true
+}
+
 test('评分原文转成原生数字，非法整数交给引擎报错', () => {
   const question = ratingQuestion({ required: false })
   const form = new FlowInputs(surveyDocument([question]))
@@ -73,15 +80,7 @@ test('翻页前自动结算过渡前缀，残缺输入给出题目级错误', ()
   const question = numberQuestion({ required: false })
   const form = new FlowInputs(surveyDocument([question]))
   form.change(question.id, '12.')
-  assert.throws(
-    () => form.next(),
-    (error) => {
-      assert.ok(error instanceof LogicError)
-      assert.equal(error.code, 'invalid_answer')
-      assert.equal(error.question_id, question.id)
-      return true
-    },
-  )
+  assert.throws(() => form.next(), logicFailure('invalid_answer', question.id))
   assert.equal(form.snapshot().errors[question.id], 'invalid_answer')
 
   form.change(question.id, '12.5')
@@ -145,15 +144,7 @@ test('未配置流程的问卷缺必填时拒绝前进，补全后可提交并�
   const required = textQuestion()
   const optional = numberQuestion({ required: false })
   const form = new FlowInputs(surveyDocument([required, optional]))
-  assert.throws(
-    () => form.next(),
-    (error) => {
-      assert.ok(error instanceof LogicError)
-      assert.equal(error.code, 'required_answer')
-      assert.equal(error.question_id, required.id)
-      return true
-    },
-  )
+  assert.throws(() => form.next(), logicFailure('required_answer', required.id))
   assert.equal(form.snapshot().outcome, null, '校验失败留在原页')
 
   form.change(required.id, '补全后的回答')

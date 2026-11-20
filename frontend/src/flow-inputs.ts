@@ -1,7 +1,8 @@
 //! 界面保留原始输入，流程只接收正确 JSON 类型。
 import { FlowSession } from './wasm/index.ts'
 import { LogicError } from './logic.ts'
-import { isNumberLiteral, isNumberPrefix, numberInput } from './numbers.ts'
+import { isNumberLiteral, isNumberPrefix } from './numbers.ts'
+import { trimWhitespace } from './value-contract.ts'
 import type { Inputs, InputValue } from './answers.ts'
 import type { Answer, FlowEvent, FlowSnapshot, SurveyDocument } from './types.ts'
 
@@ -72,13 +73,10 @@ export class FlowInputs {
 
   #apply(questionId: string, value: InputValue, settled: boolean) {
     const question = this.#document.questions.find((question) => question.id === questionId)
-    if (
-      !settled &&
-      typeof value === 'string' &&
-      (question?.type === 'number' || question?.type === 'rating')
-    ) {
+    const numeric = question?.type === 'number' || question?.type === 'rating'
+    if (!settled && numeric && typeof value === 'string') {
       // 过渡前缀：只留在界面镜像里，等完整数字或失焦结算时才送引擎。
-      if (isNumberPrefix(numberInput(value))) {
+      if (isNumberPrefix(trimWhitespace(value))) {
         if (!this.#editable(questionId))
           throw new LogicError('invalid_event', '$.event', questionId)
         this.#values[questionId] = value
@@ -87,8 +85,8 @@ export class FlowInputs {
       }
     }
     let typed: unknown = value
-    if ((question?.type === 'number' || question?.type === 'rating') && typeof value === 'string') {
-      const raw = numberInput(value)
+    if (numeric && typeof value === 'string') {
+      const raw = trimWhitespace(value)
       if (!raw) typed = null
       else if (isNumberLiteral(raw)) typed = Number(raw)
       // 非法数字原文作为错误类型交给引擎，不能转成 missing 或先舍入。
@@ -129,15 +127,12 @@ type ReplayEvent =
   | { type: 'next' }
   | { type: 'previous' }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && [...value].every((item: unknown) => typeof item === 'string')
-}
-
 /** 本地存储可能被任意改写：只把完整输入值收窄为界面镜像接受的类型。 */
 function replayValue(value: unknown): InputValue | undefined {
   if (value === null || typeof value === 'string') return value
   if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
-  if (isStringArray(value)) return [...value]
+  if (Array.isArray(value) && value.every((item: unknown) => typeof item === 'string'))
+    return [...value]
   return undefined
 }
 

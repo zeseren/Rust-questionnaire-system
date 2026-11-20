@@ -9,6 +9,11 @@ const QUESTION_ID = '00000000-0000-4000-8000-000000000001'
 const jsonResponse = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const errorResponse = (status, error) => jsonResponse({ error }, status)
+const isNetworkError = (message) => (error) =>
+  error instanceof ApiError &&
+  error.status === 0 &&
+  error.code === 'network_error' &&
+  error.message === message
 
 test('message 优先返回 Error 实例的文案，其余输入回退到默认或自定义文案', () => {
   assert.equal(message(new Error('接口读取失败')), '接口读取失败')
@@ -188,21 +193,10 @@ test('网络异常按读写语义给出不同文案', async (t) => {
     throw new TypeError('fetch failed')
   }
 
-  await assert.rejects(
-    api('/api/surveys'),
-    (error) =>
-      error instanceof ApiError &&
-      error.status === 0 &&
-      error.code === 'network_error' &&
-      error.message === '无法连接服务，请检查网络或稍后重试。',
-  )
+  await assert.rejects(api('/api/surveys'), isNetworkError('无法连接服务，请检查网络或稍后重试。'))
   await assert.rejects(
     api('/api/surveys', 'POST', {}),
-    (error) =>
-      error instanceof ApiError &&
-      error.status === 0 &&
-      error.code === 'network_error' &&
-      error.message === '尚未确认操作结果，请保留当前内容后重试。',
+    isNetworkError('尚未确认操作结果，请保留当前内容后重试。'),
   )
 })
 
@@ -216,14 +210,7 @@ test('30 秒截止会中止请求、归为网络失败并清除定时器', async
   const pending = api('/api/slow')
   const [timer] = env.timers.pending
   assert.equal(timer.delay, 30_000)
-  const assertion = assert.rejects(
-    pending,
-    (error) =>
-      error instanceof ApiError &&
-      error.status === 0 &&
-      error.code === 'network_error' &&
-      error.message === '无法连接服务，请检查网络或稍后重试。',
-  )
+  const assertion = assert.rejects(pending, isNetworkError('无法连接服务，请检查网络或稍后重试。'))
   timer.callback()
   await assertion
   assert.deepEqual(env.timers.pending, [])
@@ -298,13 +285,10 @@ test('download 读取响应正文失败时报告中文网络错误并清理截�
     },
   })
 
-  await assert.rejects(download('/api/surveys/1/export.csv', '答卷.csv'), (error) => {
-    assert.ok(error instanceof ApiError)
-    assert.equal(error.status, 0)
-    assert.equal(error.code, 'network_error')
-    assert.equal(error.message, '下载未完成，请检查网络后重试。')
-    return true
-  })
+  await assert.rejects(
+    download('/api/surveys/1/export.csv', '答卷.csv'),
+    isNetworkError('下载未完成，请检查网络后重试。'),
+  )
 
   // 下载未完成时不得创建锚点或对象地址，且定时器已经清除。
   assert.deepEqual(env.anchors, [])

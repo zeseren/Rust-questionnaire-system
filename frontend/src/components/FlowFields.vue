@@ -69,10 +69,7 @@ function buildSession(restore: readonly unknown[]) {
   refresh()
   // 只有真实存在过暂存事件才提示；重置或空草稿不能复活旧通知。
   if (restore.length) emit('replayed', applied, restore.length)
-  emit('change', Object.values(values.value).filter(isAnswered).length)
-}
-function initSession() {
-  buildSession(props.restore)
+  emit('change', answeredCount.value)
 }
 function reset() {
   if (props.disabled) return
@@ -87,9 +84,6 @@ function confirmReset() {
     if (!window.confirm('确定清空当前已填写的回答并从头开始吗？')) return
   }
   reset()
-}
-function progress() {
-  emit('change', Object.values(values.value).filter(isAnswered).length)
 }
 /** 当前进度的事件序列副本，供填写页按版本暂存。 */
 function events(): FlowEvent[] {
@@ -129,7 +123,7 @@ watch(
     () => props.document.questions,
     () => props.restore,
   ],
-  initSession,
+  () => buildSession(props.restore),
   { immediate: true },
 )
 const pageDocument = computed(() => {
@@ -193,7 +187,7 @@ function change(id: string, value: InputValue) {
     error.value = message(reason, '修改失败')
   }
   refresh()
-  progress()
+  emit('change', answeredCount.value)
 }
 function answerLabel(question: Question) {
   const value = snapshot.value?.answers[question.id]
@@ -218,51 +212,44 @@ function navigate(direction: 'next' | 'previous') {
     error.value = message(reason, '无法继续填写')
   }
   refresh()
-  progress()
+  emit('change', answeredCount.value)
   void focus()
 }
 function submissionAnswers(): Answer[] | undefined {
   if (!inputs || props.disabled || props.submitDisabled) return
-  if (plain.value) {
-    // 普通问卷没有核对页：next() 只做本页必填与格式校验，成功后立刻退回编辑态。
-    if (!snapshot.value?.outcome) {
-      attempted.value = true
-      try {
-        inputs.next()
-      } catch (reason) {
-        error.value = message(reason, '无法提交')
-        refresh()
-        void focus()
-        return
-      }
-      attempted.value = false
-      refresh()
-      if (!snapshot.value?.outcome) return
+  if (!snapshot.value?.outcome) {
+    if (!plain.value) {
+      navigate('next')
+      return
     }
+    // 普通问卷没有核对页：next() 只做本页必填与格式校验，成功后立刻退回编辑态。
+    attempted.value = true
     try {
-      error.value = ''
-      return inputs.submissionAnswers()
+      inputs.next()
     } catch (reason) {
       error.value = message(reason, '无法提交')
+      refresh()
       void focus()
       return
-    } finally {
-      // 临时 next/previous 不属于草稿导航，不写入事件序列；失败时也尽量回到可编辑页。
-      try {
-        inputs.previous()
-      } catch {}
-      refresh()
     }
+    attempted.value = false
+    refresh()
+    if (!snapshot.value?.outcome) return
   }
-  if (!snapshot.value?.outcome) {
-    navigate('next')
-    return
-  }
+  if (plain.value) error.value = ''
   try {
     return inputs.submissionAnswers()
   } catch (reason) {
     error.value = message(reason, '无法提交')
     void focus()
+  } finally {
+    // 普通问卷的临时 next 不属于草稿导航：交卷或失败后都退回可编辑页。
+    if (plain.value) {
+      try {
+        inputs.previous()
+      } catch {}
+      refresh()
+    }
   }
 }
 function confirm() {

@@ -13,26 +13,14 @@ function isAnswerValue(value: unknown): value is AnswerValue {
   return Array.isArray(value) && value.every((item: unknown) => typeof item === 'string')
 }
 function isAnswer(value: unknown): value is Answer {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'question_id' in value &&
-    typeof value.question_id === 'string' &&
-    'value' in value &&
-    isAnswerValue(value.value)
-  )
+  if (typeof value !== 'object' || value === null) return false
+  if (!('question_id' in value) || typeof value.question_id !== 'string') return false
+  return 'value' in value && isAnswerValue(value.value)
 }
 /** 校验从本地存储等不可信来源读回的提交载荷；字段缺失或类型不符一律不认。 */
 export function isSubmission(value: unknown): value is Submission {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'version_id' in value &&
-    typeof value.version_id === 'string' &&
-    'idempotency_key' in value &&
-    typeof value.idempotency_key === 'string' &&
-    'answers' in value &&
-    Array.isArray(value.answers) &&
-    value.answers.every(isAnswer)
-  )
+  if (typeof value !== 'object' || value === null) return false
+  if (!('version_id' in value) || typeof value.version_id !== 'string') return false
+  if (!('idempotency_key' in value) || typeof value.idempotency_key !== 'string') return false
+  return 'answers' in value && Array.isArray(value.answers) && value.answers.every(isAnswer)
 }
