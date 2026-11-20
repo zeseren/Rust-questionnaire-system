@@ -18,16 +18,6 @@ export class FlowSession {
      */
     dispatch(event_json: string): string;
     /**
-     * 从最终答案重建整份答卷：不读取也不修改会话当前的历史与输入。
-     *
-     * 复用核心 `FlowEvaluator::evaluate_answers`（与提交路径同一段代码），成功值
-     * 携带 `outcome`（`complete` 或 `screen_out`）；到达结束只代表可提交，不代表已经保存。
-     *
-     * # 错误
-     * 未知/重复题目、不适用答案、校验失败或未决条件时返回 error 信封。
-     */
-    evaluate_answers(answers_json: string): string;
-    /**
      * 解析文档、接管所有权并创建空会话；失败时抛出携带 `{"error":…}` 信封 JSON
      * 的字符串（与其它导出同一信封形状）。
      */
@@ -42,33 +32,9 @@ export class FlowSession {
  * 保存前的诊断预检：编译整份规则，只关心错误里的 `path` / `question_id`。
  *
  * 成功信封同时返回 `variable_order`：计算变量的拓扑顺序，供前端在编译期展示
- * 与断言使用（`evaluate_document_logic` 只负责按答案求值）。
+ * 与断言使用。
  */
 export function compile_document_logic(logic_json: string, questions_json: string): string;
-
-/**
- * 编译单个表达式包：`{"value_type":…,"dependencies":[…]}`，供双端语义契约测试使用。
- */
-export function compile_expression(raw_json: string, questions_json: string): string;
-
-/**
- * 整份规则的求值：编译后按答案上下文计算全部计算变量与规则结果。
- *
- * # 错误
- * 编译失败或求值中出现类型、引用、除零、溢出错误时返回 error 信封。
- */
-export function evaluate_document_logic(logic_json: string, questions_json: string, answers_json: string): string;
-
-/**
- * 单个表达式求值：入参与 `compile_expression` 一致，另收已按问卷规则规范化的答案上下文。
- *
- * 计算变量的解析需要回调，跨 JSON 边界无法表达；因此与核心
- * `CompiledExpression::evaluate` 一样只接受答案，变量引用在编译期即被拒绝。
- *
- * # 错误
- * 入参非法、编译失败或引用答案的类型/数值不合法时返回 error 信封。
- */
-export function evaluate_expression(raw_json: string, questions_json: string, answers_json: string): string;
 
 /**
  * 把规则 JSON 格式化回文本 DSL。

@@ -1,7 +1,7 @@
 //! 原生冒烟测试：不走 wasm 目标，直接调用与 `#[wasm_bindgen]` 导出完全相同的纯函数体。
 //!
 //! 本文件只守 JSON 字符串信封边界：成功值与错误值互斥、每个字符串入参的解码失败
-//! 都落到 `invalid_syntax` 边界错误、严格答案键，以及领域错误字段（含行列）原样穿透。
+//! 都落到 `invalid_syntax` 边界错误，以及领域错误字段（含行列）原样穿透。
 //! 夹具的语义细节由 `logic-core` 的集成测试负责，这里不再重复断言。
 
 use serde_json::{Value, json};
@@ -11,14 +11,9 @@ fn texts() -> Value {
         .expect("共享文本样例必须是合法 JSON")
 }
 
-fn expressions() -> Value {
-    serde_json::from_str(include_str!("../../fixtures/survey-logic/expressions.json"))
-        .expect("共享表达式样例必须是合法 JSON")
-}
-
-fn documents() -> Value {
-    serde_json::from_str(include_str!("../../fixtures/survey-logic/documents.json"))
-        .expect("共享文档样例必须是合法 JSON")
+fn flows() -> Value {
+    serde_json::from_str(include_str!("../../fixtures/survey-logic/flows.json"))
+        .expect("共享流程样例必须是合法 JSON")
 }
 
 fn parse_envelope(output: &str) -> Value {
@@ -67,12 +62,16 @@ fn domain_envelope(output: &str) -> Value {
 }
 
 #[test]
-fn 七个导出函数成功时只返回_ok_信封() {
+fn 四个导出函数成功时只返回_ok_信封() {
     let texts = texts();
-    let item = &texts["format_cases"][0];
-    let questions = item["questions"].to_string();
-    let logic = item["logic"].to_string();
-    let expected = item["expected"].as_str().unwrap().to_string();
+    let expected = texts["format_cases"][0]["expected"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let flows = flows();
+    let diamond = &flows["documents"]["diamond"];
+    let questions = diamond["questions"].to_string();
+    let logic = diamond["logic"].to_string();
 
     // 1. 文本解析：成功值是规则包对象。
     let parsed = ok_envelope(&logic_wasm::parse_logic_text(&expected, &questions));
@@ -85,79 +84,31 @@ fn 七个导出函数成功时只返回_ok_信封() {
         "格式化成功值必须是字符串：{formatted}"
     );
 
-    // 3. 文档规则预检：成功值是编译结果对象。
-    let expressions = expressions();
-    let expression_questions = expressions["questions"].to_string();
-    let documents = documents();
-    let case = &documents["cases"][0];
-    let case_logic = case["logic"].to_string();
-    let compiled = ok_envelope(&logic_wasm::compile_document_logic(
-        &case_logic,
-        &expression_questions,
-    ));
-    assert!(compiled.is_object(), "{compiled}");
+    // 3. 文档规则预检：成功值是编译结果对象，携带变量拓扑顺序。
+    let compiled = ok_envelope(&logic_wasm::compile_document_logic(&logic, &questions));
+    assert!(compiled["variable_order"].is_array(), "{compiled}");
 
-    // 4. 表达式编译：成功值是编译结果对象。
-    let raw = json!({
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "expression": { "op": "answered", "question_id": expression_questions_id(&expressions) },
-    })
-    .to_string();
-    let compiled = ok_envelope(&logic_wasm::compile_expression(&raw, &expression_questions));
-    assert!(compiled.is_object(), "{compiled}");
-
-    // 5. 单表达式求值：成功值是规则值对象。
-    let evaluated = ok_envelope(&logic_wasm::evaluate_expression(
-        &raw,
-        &expression_questions,
-        "{}",
-    ));
-    assert!(evaluated.is_object(), "{evaluated}");
-
-    // 6. 文档规则求值：成功值是求值结果对象。
-    let evaluated = ok_envelope(&logic_wasm::evaluate_document_logic(
-        &case_logic,
-        &expression_questions,
-        case["answers_json"].as_str().unwrap(),
-    ));
-    assert!(evaluated.is_object(), "{evaluated}");
-
-    // 7. 文本巡检：成功值携带绑定列表与可选诊断字段。
+    // 4. 文本巡检：成功值携带绑定列表与可选诊断字段。
     let inspected = ok_envelope(&logic_wasm::inspect_logic_text(&expected, &questions));
     assert!(inspected["bindings"].is_array(), "{inspected}");
     assert!(inspected.get("error").is_some(), "{inspected}");
     assert!(inspected.get("error_offset").is_some(), "{inspected}");
 }
 
-fn expression_questions_id(expressions: &Value) -> &str {
-    expressions["questions"][0]["id"].as_str().unwrap()
-}
-
 #[test]
 fn 非法_json_与错误_dto_结构按参数名归类为边界语法错误() {
     let texts = texts();
-    let item = &texts["format_cases"][0];
-    let questions = item["questions"].to_string();
-    let logic = item["logic"].to_string();
-    let expected = item["expected"].as_str().unwrap().to_string();
-    let expressions = expressions();
-    let expression_questions = expressions["questions"].to_string();
-    let documents = documents();
-    let case = &documents["cases"][0];
-    let case_logic = case["logic"].to_string();
-    let case_answers = case["answers_json"].as_str().unwrap();
-    let raw = json!({
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "expression": { "op": "boolean", "value": true },
-    })
-    .to_string();
-    let answers = "{}";
+    let expected = texts["format_cases"][0]["expected"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let flows = flows();
+    let diamond = &flows["documents"]["diamond"];
+    let questions = diamond["questions"].to_string();
+    let logic = diamond["logic"].to_string();
     let syntax = "{ 非法";
     let wrong_questions = "{}";
     let wrong_logic = "[]";
-    let wrong_answers = "[]";
 
     // 每个 (function, parameter) 组合保留一行；语法错误与结构错误交替覆盖。
     let cases = [
@@ -189,38 +140,6 @@ fn 非法_json_与错误_dto_结构按参数名归类为边界语法错误() {
             "questions_json",
             logic_wasm::compile_document_logic(&logic, syntax),
         ),
-        (
-            "raw_json",
-            logic_wasm::compile_expression(syntax, &questions),
-        ),
-        (
-            "questions_json",
-            logic_wasm::compile_expression(&raw, wrong_questions),
-        ),
-        (
-            "raw_json",
-            logic_wasm::evaluate_expression(syntax, &questions, answers),
-        ),
-        (
-            "questions_json",
-            logic_wasm::evaluate_expression(&raw, wrong_questions, answers),
-        ),
-        (
-            "answers_json",
-            logic_wasm::evaluate_expression(&raw, &questions, syntax),
-        ),
-        (
-            "logic_json",
-            logic_wasm::evaluate_document_logic(wrong_logic, &expression_questions, case_answers),
-        ),
-        (
-            "questions_json",
-            logic_wasm::evaluate_document_logic(&case_logic, syntax, case_answers),
-        ),
-        (
-            "answers_json",
-            logic_wasm::evaluate_document_logic(&case_logic, &expression_questions, wrong_answers),
-        ),
     ];
     for (parameter, output) in cases {
         boundary_envelope(&output, parameter);
@@ -228,47 +147,12 @@ fn 非法_json_与错误_dto_结构按参数名归类为边界语法错误() {
 }
 
 #[test]
-fn 严格答案键拒绝非规范_uuid() {
-    let expressions = expressions();
-    let questions = expressions["questions"].to_string();
-    let raw = json!({
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "expression": { "op": "answered", "question_id": expression_questions_id(&expressions) },
-    })
-    .to_string();
-    let logic = documents()["cases"][0]["logic"].to_string();
-
-    // 全零 UUID 在解码阶段拒绝；规范键由下面的对照覆盖。
-    let answers = r#"{"00000000-0000-0000-0000-000000000000":"x"}"#;
-    for output in [
-        logic_wasm::evaluate_expression(&raw, &questions, answers),
-        logic_wasm::evaluate_document_logic(&logic, &questions, answers),
-    ] {
-        boundary_envelope(&output, "answers_json");
-    }
-
-    // 对照：规范键与合法选项值进入领域层并正常求值。
-    let valid_option = expressions["questions"][0]["options"][0]["id"]
+fn 领域错误字段原样穿透信封() {
+    let flows = flows();
+    let questions_json = flows["documents"]["diamond"]["questions"].to_string();
+    let question_id = flows["documents"]["diamond"]["questions"][0]["id"]
         .as_str()
         .unwrap();
-    let answers = format!(
-        r#"{{"{}":"{valid_option}"}}"#,
-        expression_questions_id(&expressions)
-    );
-    let envelope = parse_envelope(&logic_wasm::evaluate_expression(&raw, &questions, &answers));
-    assert!(
-        envelope.get("error").is_none(),
-        "规范 UUID 键不应触发任何错误：{envelope}"
-    );
-    assert_eq!(envelope["ok"], json!({ "type": "boolean", "value": true }));
-}
-
-#[test]
-fn 领域错误字段原样穿透信封() {
-    let expressions = expressions();
-    let questions_json = expressions["questions"].to_string();
-    let question_id = expression_questions_id(&expressions);
 
     // 语法错误来自文本解析，额外携带从 1 开始的行列号。
     let error = domain_envelope(&logic_wasm::parse_logic_text("@@", &questions_json));
@@ -309,10 +193,10 @@ fn 领域错误字段原样穿透信封() {
 
 #[test]
 fn 巡检信封在语法错误后仍返回已扫描绑定() {
-    let texts = texts();
-    let item = &texts["format_cases"][0];
-    let questions = item["questions"].to_string();
-    let question_id = item["questions"][0]["id"].as_str().unwrap();
+    let flows = flows();
+    let diamond = &flows["documents"]["diamond"];
+    let questions = diamond["questions"].to_string();
+    let question_id = diamond["questions"][0]["id"].as_str().unwrap();
     let source =
         format!("dsl 1 semantics 1;\nbind question q = \"{question_id}\";\nlet broken = ;");
     let inspection = ok_envelope(&logic_wasm::inspect_logic_text(&source, &questions));

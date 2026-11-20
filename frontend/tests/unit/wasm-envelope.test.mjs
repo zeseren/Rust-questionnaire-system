@@ -3,16 +3,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { LogicError, LogicTextError } from '../../src/logic.ts'
-import {
-  FlowSession,
-  compileExpression,
-  formatLogicText,
-  parseLogicText,
-} from '../../src/wasm/index.ts'
+import { FlowSession, formatLogicText, parseLogicText } from '../../src/wasm/index.ts'
 
 const Q_NAME = '00000000-0000-4000-8000-000000000001'
 const Q_SCORE = '00000000-0000-4000-8000-000000000002'
-const VARIABLE = '00000000-0000-4000-8000-000000002001'
 const UNKNOWN_QUESTION = '00000000-0000-4000-8000-000000000999'
 
 const questions = [
@@ -35,47 +29,6 @@ const sessionDocument = {
   thank_you: '感谢参与',
   questions: [{ id: Q_NAME, title: '姓名', required: true, type: 'text', max_length: 200 }],
 }
-
-test('compileExpression 返回静态类型、依赖集合与可求值函数', () => {
-  const compiled = compileExpression(
-    {
-      dsl_version: 1,
-      semantics_version: 1,
-      expression: {
-        op: 'arithmetic',
-        operator: 'add',
-        left: { op: 'answer', question_id: Q_SCORE },
-        right: { op: 'number', value: '2' },
-      },
-    },
-    questions,
-  )
-
-  assert.equal(typeof compiled.valueType, 'string')
-  assert.ok(Array.isArray(compiled.dependencies))
-  assert.equal(typeof compiled.evaluate, 'function')
-})
-
-test('compileExpression 拒绝计算变量引用并定位到表达式根', () => {
-  assert.throws(
-    () =>
-      compileExpression(
-        {
-          dsl_version: 1,
-          semantics_version: 1,
-          expression: { op: 'variable', variable_id: VARIABLE },
-        },
-        questions,
-      ),
-    (error) => {
-      assert.ok(error instanceof LogicError)
-      assert.equal(error.code, 'invalid_reference')
-      assert.equal(error.path, '$.expression')
-      assert.equal(error.question_id, VARIABLE)
-      return true
-    },
-  )
-})
 
 test('parseLogicText 语法错误还原为带行列号的 LogicTextError', () => {
   assert.throws(
@@ -131,11 +84,12 @@ test('FlowSession 构造失败还原为领域错误并保留重复的题目身�
   )
 })
 
-test('FlowSession 快照、改答、非法回退与最终答案重建遵循契约', () => {
+test('FlowSession 快照、改答与非法回退遵循契约', () => {
   const session = new FlowSession(sessionDocument)
 
   const initial = session.snapshot()
   assert.deepEqual(initial.answers, {})
+  assert.ok(initial.visible.includes(Q_NAME))
 
   session.dispatch({ type: 'change', question_id: Q_NAME, value: '张三' })
   const changed = session.snapshot()
@@ -152,9 +106,4 @@ test('FlowSession 快照、改答、非法回退与最终答案重建遵循契�
     },
   )
   assert.deepEqual(session.snapshot().answers, changed.answers)
-
-  const evaluated = session.evaluateAnswers([{ question_id: Q_NAME, value: '张三' }])
-  assert.equal(evaluated.answers[Q_NAME], '张三')
-  // 成功重建携带结束分支：完整答卷与筛选结束共用同一回执契约。
-  assert.equal(evaluated.outcome, 'complete')
 })

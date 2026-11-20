@@ -200,18 +200,11 @@ export interface Audit {
 }
 
 // —— 规则与流程 ——
-// 与后端 `questionnaire-logic` 的 DTO 及求值结果逐字段对应；引擎（wasm 包装）只在
-// 边界上编解码这些结构，界面与测试直接消费它们，因此集中放在 DTO 模块。
+// 与后端 `questionnaire-logic` 的 DTO 逐字段对应；引擎（wasm 包装）只在边界上编
+// 解码这些结构，界面与测试直接消费它们，因此集中放在 DTO 模块。
 
 /** 编译期确定的类型；缺失值沿用原表达式的静态类型。 */
 export type LogicValueType = 'boolean' | 'number' | 'text' | 'choice' | 'choices'
-/** 求值结果；布尔位置的 `missing` 对应三值逻辑中的未知。 */
-export type LogicValue =
-  | { type: 'missing' }
-  | { type: 'boolean'; value: boolean }
-  | { type: 'number'; value: number }
-  | { type: 'text' | 'choice'; value: string }
-  | { type: 'choices'; value: string[] }
 
 /** 计算变量；`expression` 原文保留给引擎与格式化器，界面只按节点读写。 */
 export interface ComputedVariable {
@@ -232,14 +225,6 @@ export interface DocumentLogic {
   semantics_version: number
   variables: ComputedVariable[]
   rules: QuestionRule[]
-}
-/** 规则求值结果：计算变量值与各规则字段的三值结果。 */
-export interface DocumentLogicValues {
-  variables: Record<string, LogicValue>
-  rules: Record<
-    string,
-    { visible_if: LogicValue | null; required_if: LogicValue | null; validate: LogicValue | null }
-  >
 }
 
 export type FlowOutcome = 'complete' | 'screen_out'
@@ -274,12 +259,4 @@ export interface FlowSnapshot {
   errors: Record<string, LogicErrorCode>
   route_error: LogicErrorCode | null
   cleared: string[]
-}
-/** 由最终答案重建的答卷；到达 complete 不代表已经保存。 */
-export interface EvaluatedResponse {
-  answers: Record<string, AnswerValue>
-  question_states: Record<string, AnswerState>
-  path: string[]
-  /** 路径终点：完整填写或筛选结束；两种都能生成回执。 */
-  outcome: FlowOutcome
 }

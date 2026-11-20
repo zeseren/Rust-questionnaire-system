@@ -1,7 +1,6 @@
 //! 输入契约：共享身份与空白样例在配置编译、答案归一和填写会话中一致。
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { LogicError } from '../../src/logic.ts'
 import { FlowSession, compileDocumentLogic } from '../../src/wasm/index.ts'
 import {
   captureDomainError,
@@ -31,22 +30,27 @@ test('配置身份的每个引用位置只接受规范小写 UUID', () => {
   }
 })
 
-test('选项答案只接受规范 UUID，大写与零值一律拒绝', () => {
+test('选项答案只接受规范 UUID，大写归一、无连字符与零值记录错误', () => {
   const document = readFlowDocument(contracts.document)
   delete document.logic
   document.questions.length = 1
   document.questions[0].options[0].id = contracts.canonical_id
   const question_id = document.questions[0].id
   for (const item of contracts.uuid_cases) {
-    const evaluate = () =>
-      new FlowSession(document).evaluateAnswers([{ question_id, value: item.raw }])
-    if (item.option_valid)
-      assert.equal(evaluate().answers[question_id], contracts.canonical_id, item.name)
-    else assert.throws(evaluate, LogicError, item.name)
+    const session = new FlowSession(document)
+    session.dispatch({ type: 'change', question_id, value: item.raw })
+    const snapshot = session.snapshot()
+    if (item.option_valid) {
+      assert.equal(snapshot.answers[question_id], contracts.canonical_id, item.name)
+      assert.equal(snapshot.errors[question_id], undefined, item.name)
+    } else {
+      assert.equal(snapshot.answers[question_id], undefined, item.name)
+      assert.equal(snapshot.errors[question_id], 'invalid_answer', item.name)
+    }
   }
 })
 
-test('题目身份在重建与交互事件中只接受规范且已声明的 UUID', () => {
+test('题目身份在交互事件中只接受规范且已声明的 UUID', () => {
   const source = readFlowDocument(contracts.document)
   const document = readFlowDocument(contracts.document)
   delete document.logic
@@ -55,40 +59,20 @@ test('题目身份在重建与交互事件中只接受规范且已声明的 UUID
   document.questions[0].id = contracts.canonical_id
   const value = document.questions[0].options[0].id
   for (const item of contracts.uuid_cases) {
-    const answer = { question_id: item.raw, value }
+    const session = new FlowSession(document)
+    const before = session.snapshot()
+    const change = () => session.dispatch({ type: 'change', question_id: item.raw, value })
     if (item.configuration_valid) {
-      assert.doesNotThrow(() => new FlowSession(document).evaluateAnswers([answer]), item.name)
-      assert.doesNotThrow(
-        () => new FlowSession(document).dispatch({ type: 'change', ...answer }),
-        item.name,
-      )
+      assert.doesNotThrow(change, item.name)
       continue
     }
-    // 大写、无连字符与零值身份都在 wasm 边界反序列化时失败。
+    // 无连字符与零值身份都在 wasm 边界反序列化时失败。
     const boundary = { code: 'invalid_syntax', path: '$', question_id: null }
-    assert.deepEqual(
-      domainErrorFields(
-        captureDomainError(() => new FlowSession(document).evaluateAnswers([answer])),
-      ),
-      boundary,
-      item.name,
-    )
-    assert.deepEqual(
-      domainErrorFields(
-        captureDomainError(() => new FlowSession(document).dispatch({ type: 'change', ...answer })),
-      ),
-      boundary,
-      item.name,
-    )
+    assert.deepEqual(domainErrorFields(captureDomainError(change)), boundary, item.name)
+    assert.deepEqual(session.snapshot(), before, `${item.name}：失败事件不得改变状态`)
   }
-  // 规范但未声明的身份通过边界后，由领域层分别拒绝重建与事件。
+  // 规范但未声明的身份通过边界后，由领域层拒绝事件。
   const unknown = { question_id: '00000000-0000-4000-8000-000000009999', value }
-  assert.deepEqual(
-    domainErrorFields(
-      captureDomainError(() => new FlowSession(document).evaluateAnswers([unknown])),
-    ),
-    { code: 'invalid_reference', path: '$.answers', question_id: unknown.question_id },
-  )
   assert.deepEqual(
     domainErrorFields(
       captureDomainError(() => new FlowSession(document).dispatch({ type: 'change', ...unknown })),

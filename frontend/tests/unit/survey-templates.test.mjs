@@ -21,20 +21,31 @@ test('满意度回访按低分追问并传播缺失值', () => {
   const variable = document.logic.variables[0]
   const compiled = compileDocumentLogic(document.logic, document.questions)
   assert.deepEqual(compiled.variableOrder, [variable.id])
-  for (const [answer, expected] of [
-    [3, true],
-    [4, false],
-  ]) {
-    const values = compiled.evaluate({ [score.id]: answer })
-    assert.deepEqual(values.variables[variable.id], { type: 'boolean', value: expected })
-    assert.deepEqual(values.rules[reason.id], {
-      visible_if: { type: 'boolean', value: expected },
-      required_if: { type: 'boolean', value: expected },
-      validate: null,
-    })
+
+  const feedback = (answer) => {
+    const session = new FlowSession(document)
+    if (answer !== undefined)
+      session.dispatch({ type: 'change', question_id: score.id, value: answer })
+    return session.snapshot()
   }
-  const missing = compiled.evaluate({})
-  assert.deepEqual(missing.rules[reason.id].visible_if, { type: 'missing' })
+
+  // 低分追问：追问可见且动态必填，未填写时保留必填错误。
+  const low = feedback(3)
+  assert.ok(low.visible.includes(reason.id))
+  assert.ok(low.required.includes(reason.id))
+  assert.equal(low.errors[reason.id], 'required_answer')
+
+  // 高分不追问：隐藏题目既不进必填集合，也不留下错误。
+  const high = feedback(4)
+  assert.ok(!high.visible.includes(reason.id))
+  assert.ok(!high.required.includes(reason.id))
+  assert.equal(high.errors[reason.id], undefined)
+
+  // 未作答的评分让条件取缺失值：追问同样不可见且不产生错误。
+  const missing = feedback(undefined)
+  assert.ok(!missing.visible.includes(reason.id))
+  assert.ok(!missing.required.includes(reason.id))
+  assert.equal(missing.errors[reason.id], undefined)
 })
 
 test('产品体验调研按使用经历分流并在结束页汇合', () => {

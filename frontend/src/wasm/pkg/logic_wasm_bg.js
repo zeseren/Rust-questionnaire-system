@@ -42,35 +42,6 @@ export class FlowSession {
         }
     }
     /**
-     * 从最终答案重建整份答卷：不读取也不修改会话当前的历史与输入。
-     *
-     * 复用核心 `FlowEvaluator::evaluate_answers`（与提交路径同一段代码），成功值
-     * 携带 `outcome`（`complete` 或 `screen_out`）；到达结束只代表可提交，不代表已经保存。
-     *
-     * # 错误
-     * 未知/重复题目、不适用答案、校验失败或未决条件时返回 error 信封。
-     * @param {string} answers_json
-     * @returns {string}
-     */
-    evaluate_answers(answers_json) {
-        let deferred2_0;
-        let deferred2_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
-            const ptr0 = passStringToWasm0(answers_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.flowsession_evaluate_answers(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred2_0 = r0;
-            deferred2_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export3(deferred2_0, deferred2_1, 1);
-        }
-    }
-    /**
      * 解析文档、接管所有权并创建空会话；失败时抛出携带 `{"error":…}` 信封 JSON
      * 的字符串（与其它导出同一信封形状）。
      * @param {string} document_json
@@ -121,7 +92,7 @@ if (Symbol.dispose) FlowSession.prototype[Symbol.dispose] = FlowSession.prototyp
  * 保存前的诊断预检：编译整份规则，只关心错误里的 `path` / `question_id`。
  *
  * 成功信封同时返回 `variable_order`：计算变量的拓扑顺序，供前端在编译期展示
- * 与断言使用（`evaluate_document_logic` 只负责按答案求值）。
+ * 与断言使用。
  * @param {string} logic_json
  * @param {string} questions_json
  * @returns {string}
@@ -151,125 +122,6 @@ export function compile_document_logic(logic_json, questions_json) {
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
         wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
-    }
-}
-
-/**
- * 编译单个表达式包：`{"value_type":…,"dependencies":[…]}`，供双端语义契约测试使用。
- * @param {string} raw_json
- * @param {string} questions_json
- * @returns {string}
- */
-export function compile_expression(raw_json, questions_json) {
-    let deferred3_0;
-    let deferred3_1;
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
-        let ptr0, len0, ptr1, len1;
-        try {
-            ptr0 = passStringToWasm0(raw_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            len0 = WASM_VECTOR_LEN;
-            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            len1 = WASM_VECTOR_LEN;
-        } catch (e) {
-            if (ptr1) { wasm.__wbindgen_export3(ptr1, len1 * 1, 1); }
-            if (ptr0) { wasm.__wbindgen_export3(ptr0, len0 * 1, 1); }
-            throw e;
-        }
-        wasm.compile_expression(retptr, ptr0, len0, ptr1, len1);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        deferred3_0 = r0;
-        deferred3_1 = r1;
-        return getStringFromWasm0(r0, r1);
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
-    }
-}
-
-/**
- * 整份规则的求值：编译后按答案上下文计算全部计算变量与规则结果。
- *
- * # 错误
- * 编译失败或求值中出现类型、引用、除零、溢出错误时返回 error 信封。
- * @param {string} logic_json
- * @param {string} questions_json
- * @param {string} answers_json
- * @returns {string}
- */
-export function evaluate_document_logic(logic_json, questions_json, answers_json) {
-    let deferred4_0;
-    let deferred4_1;
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
-        let ptr0, len0, ptr1, len1, ptr2, len2;
-        try {
-            ptr0 = passStringToWasm0(logic_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            len0 = WASM_VECTOR_LEN;
-            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            len1 = WASM_VECTOR_LEN;
-            ptr2 = passStringToWasm0(answers_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            len2 = WASM_VECTOR_LEN;
-        } catch (e) {
-            if (ptr2) { wasm.__wbindgen_export3(ptr2, len2 * 1, 1); }
-            if (ptr1) { wasm.__wbindgen_export3(ptr1, len1 * 1, 1); }
-            if (ptr0) { wasm.__wbindgen_export3(ptr0, len0 * 1, 1); }
-            throw e;
-        }
-        wasm.evaluate_document_logic(retptr, ptr0, len0, ptr1, len1, ptr2, len2);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        deferred4_0 = r0;
-        deferred4_1 = r1;
-        return getStringFromWasm0(r0, r1);
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
-    }
-}
-
-/**
- * 单个表达式求值：入参与 `compile_expression` 一致，另收已按问卷规则规范化的答案上下文。
- *
- * 计算变量的解析需要回调，跨 JSON 边界无法表达；因此与核心
- * `CompiledExpression::evaluate` 一样只接受答案，变量引用在编译期即被拒绝。
- *
- * # 错误
- * 入参非法、编译失败或引用答案的类型/数值不合法时返回 error 信封。
- * @param {string} raw_json
- * @param {string} questions_json
- * @param {string} answers_json
- * @returns {string}
- */
-export function evaluate_expression(raw_json, questions_json, answers_json) {
-    let deferred4_0;
-    let deferred4_1;
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16) >>> 0;
-        let ptr0, len0, ptr1, len1, ptr2, len2;
-        try {
-            ptr0 = passStringToWasm0(raw_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            len0 = WASM_VECTOR_LEN;
-            ptr1 = passStringToWasm0(questions_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            len1 = WASM_VECTOR_LEN;
-            ptr2 = passStringToWasm0(answers_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            len2 = WASM_VECTOR_LEN;
-        } catch (e) {
-            if (ptr2) { wasm.__wbindgen_export3(ptr2, len2 * 1, 1); }
-            if (ptr1) { wasm.__wbindgen_export3(ptr1, len1 * 1, 1); }
-            if (ptr0) { wasm.__wbindgen_export3(ptr0, len0 * 1, 1); }
-            throw e;
-        }
-        wasm.evaluate_expression(retptr, ptr0, len0, ptr1, len1, ptr2, len2);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        deferred4_0 = r0;
-        deferred4_1 = r1;
-        return getStringFromWasm0(r0, r1);
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export3(deferred4_0, deferred4_1, 1);
     }
 }
 

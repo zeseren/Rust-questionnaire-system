@@ -7,17 +7,7 @@
 import { decode, encode } from '../json.ts'
 import { LogicError, LogicTextError } from '../logic.ts'
 import type { LogicErrorCode } from '../logic.ts'
-import type {
-  DocumentLogic,
-  DocumentLogicValues,
-  EvaluatedResponse,
-  FlowEvent,
-  FlowSnapshot,
-  LogicValue,
-  LogicValueType,
-  Question,
-  SurveyDocument,
-} from '../types.ts'
+import type { DocumentLogic, FlowEvent, FlowSnapshot, Question, SurveyDocument } from '../types.ts'
 
 /** 领域错误信封；字段与 Rust `LogicError` / `LogicTextError` 的序列化一致。 */
 interface EnvelopeError {
@@ -36,15 +26,11 @@ interface WasmEngine {
   inspect_logic_text(source: string, questions_json: string): string
   format_logic_text(logic_json: string, questions_json: string): string
   compile_document_logic(logic_json: string, questions_json: string): string
-  compile_expression(raw_json: string, questions_json: string): string
-  evaluate_expression(raw_json: string, questions_json: string, answers_json: string): string
-  evaluate_document_logic(logic_json: string, questions_json: string, answers_json: string): string
   FlowSession: new (document_json: string) => WasmFlowSession
 }
 interface WasmFlowSession {
   dispatch(event_json: string): string
   snapshot(): string
-  evaluate_answers(answers_json: string): string
 }
 /** wasm 模块的导入模块名就是 `_bg.js`，其导出即胶水提供的导入表。 */
 interface WasmGlue extends WasmEngine, Record<string, WebAssembly.ImportValue> {
@@ -118,21 +104,9 @@ function reviveThrown(reason: unknown): never {
   throw reason instanceof Error ? reason : new Error(String(reason))
 }
 
-export interface CompiledExpression {
-  readonly valueType: LogicValueType
-  readonly dependencies: readonly string[]
-  /** 变量上下文无法跨 JSON 边界回调，因此只接受答案（变量引用在编译期即被拒绝）。 */
-  evaluate(answers: Readonly<Record<string, unknown>>): LogicValue
-}
-
 export interface CompiledDocumentLogic {
   /** 计算变量的拓扑顺序；声明顺序不决定执行顺序。 */
   readonly variableOrder: readonly string[]
-  /**
-   * 输入须已规范化并排除不适用答案；结果不代表填写路径或提交资格。
-   * 每次调用都在 wasm 内重新编译规则包，只服务编辑期诊断与回归断言。
-   */
-  evaluate(answers: Readonly<Record<string, unknown>>): DocumentLogicValues
 }
 
 /** 解析文本 DSL；失败信封额外携带行列号，因此语法/语义错误抛 `LogicTextError`。 */
@@ -196,36 +170,10 @@ export function compileDocumentLogic(
   logic: DocumentLogic,
   questions: readonly Question[],
 ): CompiledDocumentLogic {
-  const logicJson = encode(logic),
-    questionsJson = encode(questions)
   const compiled = unwrap<{ variable_order: string[] }>(
-    engine.compile_document_logic(logicJson, questionsJson),
+    engine.compile_document_logic(encode(logic), encode(questions)),
   )
-  return {
-    variableOrder: compiled.variable_order,
-    evaluate: (answers) =>
-      unwrap<DocumentLogicValues>(
-        engine.evaluate_document_logic(logicJson, questionsJson, encode(answers)),
-      ),
-  }
-}
-
-/** 编译单个表达式包，供双端语义契约测试使用。 */
-export function compileExpression(
-  raw: unknown,
-  questions: readonly Question[],
-): CompiledExpression {
-  const rawJson = encode(raw),
-    questionsJson = encode(questions)
-  const compiled = unwrap<{ value_type: LogicValueType; dependencies: string[] }>(
-    engine.compile_expression(rawJson, questionsJson),
-  )
-  return {
-    valueType: compiled.value_type,
-    dependencies: compiled.dependencies,
-    evaluate: (answers) =>
-      unwrap<LogicValue>(engine.evaluate_expression(rawJson, questionsJson, encode(answers))),
-  }
+  return { variableOrder: compiled.variable_order }
 }
 
 /** 有状态填写会话：状态留在 wasm 线性内存，接口与删除前的 TS 类一致。 */
@@ -250,10 +198,5 @@ export class FlowSession {
   /** 事件失败不改状态。 */
   dispatch(event: FlowEvent): void {
     unwrap<null>(this.#session.dispatch(encode(event)))
-  }
-
-  /** 从最终输入重建路径，不读取或修改当前会话的历史与输入。 */
-  evaluateAnswers(answers: readonly { question_id: string; value: unknown }[]): EvaluatedResponse {
-    return unwrap<EvaluatedResponse>(this.#session.evaluate_answers(encode(answers)))
   }
 }

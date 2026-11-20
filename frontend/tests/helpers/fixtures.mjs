@@ -46,8 +46,6 @@ export function captureDomainError(run) {
 }
 
 /** 抽取人工预期里稳定出现的错误字段；`message` 由文案测试单独覆盖。 */
-export function domainErrorFields(error, expectedError) {
-  const fields = { code: error.code, question_id: error.question_id }
-  if (!expectedError || 'path' in expectedError) fields.path = error.path
-  return fields
+export function domainErrorFields(error) {
+  return { code: error.code, question_id: error.question_id, path: error.path }
 }
