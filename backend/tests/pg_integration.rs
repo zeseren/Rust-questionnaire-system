@@ -119,6 +119,19 @@ async fn 创建问卷(
     id
 }
 
+/// 读取问卷当前的发布版本 ID；问卷必须存在且已有发布版本。
+async fn 读取当前版本(db: &DatabaseConnection, 问卷: Uuid) -> Uuid {
+    db.query_one_raw(语句(
+        "SELECT current_version_id AS value FROM surveys WHERE id = $1",
+        vec![问卷.into()],
+    ))
+    .await
+    .expect("读取版本失败")
+    .expect("问卷必须存在")
+    .try_get::<Uuid>("", "value")
+    .expect("current_version_id 必须存在")
+}
+
 async fn 创建答卷(
     db: &DatabaseConnection,
     survey_id: Uuid,
@@ -262,16 +275,7 @@ async fn 真实_postgresql_迁移与契约() {
         None,
     )
     .await;
-    let version_id = db
-        .query_one_raw(语句(
-            "SELECT current_version_id AS value FROM surveys WHERE id = $1",
-            vec![问卷.into()],
-        ))
-        .await
-        .expect("读取版本失败")
-        .expect("问卷必须存在")
-        .try_get::<Uuid>("", "value")
-        .expect("current_version_id 必须存在");
+    let version_id = 读取当前版本(&db, 问卷).await;
     let 填写者 = 创建用户(&db, "respondent_login_once").await;
     创建答卷(&db, 问卷, version_id, Some(填写者), "complete", json!({}))
         .await
@@ -297,16 +301,7 @@ async fn 真实_postgresql_迁移与契约() {
         None,
     )
     .await;
-    let 并发版本 = db
-        .query_one_raw(语句(
-            "SELECT current_version_id AS value FROM surveys WHERE id = $1",
-            vec![并发问卷.into()],
-        ))
-        .await
-        .expect("读取版本失败")
-        .expect("问卷必须存在")
-        .try_get::<Uuid>("", "value")
-        .expect("current_version_id 必须存在");
+    let 并发版本 = 读取当前版本(&db, 并发问卷).await;
     let 并发填写者 = 创建用户(&db, "respondent_concurrent").await;
     let 第一份 = 创建答卷(
         &db,

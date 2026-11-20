@@ -812,7 +812,7 @@ pub(crate) fn summarize_report(
     rows: &[SnapshotRow],
 ) -> AppResult<ReportStatistics> {
     let mut dates = BTreeMap::new();
-    let mut complete_count = 0u64;
+    let mut complete: Vec<&SnapshotRow> = Vec::new();
     let mut screen_out_count = 0u64;
     for row in rows {
         // 趋势按全部正式提交（含筛选结束）统计，与 total_count 一致。
@@ -824,14 +824,15 @@ pub(crate) fn summarize_report(
             )
             .or_insert(0) += 1;
         match row.outcome {
-            Outcome::Complete => complete_count += 1,
+            Outcome::Complete => complete.push(row),
             Outcome::ScreenOut => screen_out_count += 1,
         }
     }
+    let complete_count = complete.len() as u64;
     let questions = document
         .questions
         .iter()
-        .map(|question| summarize_question(question, rows))
+        .map(|question| summarize_complete_question(question, &complete))
         .collect::<AppResult<Vec<_>>>()?;
     Ok(ReportStatistics {
         total_count: complete_count + screen_out_count,
@@ -846,17 +847,6 @@ pub(crate) fn summarize_report(
 }
 
 /// 各题只统计 `outcome = complete` 的样本；筛选结束不计入任何题目分母。
-pub(crate) fn summarize_question(
-    question: &Question,
-    rows: &[SnapshotRow],
-) -> AppResult<QuestionStatistics> {
-    let complete: Vec<&SnapshotRow> = rows
-        .iter()
-        .filter(|row| row.outcome == Outcome::Complete)
-        .collect();
-    summarize_complete_question(question, &complete)
-}
-
 fn summarize_complete_question(
     question: &Question,
     rows: &[&SnapshotRow],
@@ -1134,24 +1124,6 @@ pub(crate) fn encode_csv_rows(
             .map_err(|error| AppError::internal(error))?;
     }
     finish_writer(writer)
-}
-
-/// 表头与全部行的完整编码；供小批量测试和一次性场景使用。
-#[cfg(test)]
-pub(crate) fn encode_csv(
-    document: &Document,
-    version_id: Uuid,
-    version_number: i32,
-    rows: &[SnapshotRow],
-) -> AppResult<Vec<u8>> {
-    let mut bytes = encode_csv_header(document)?;
-    bytes.extend_from_slice(&encode_csv_rows(
-        document,
-        version_id,
-        version_number,
-        rows,
-    )?);
-    Ok(bytes)
 }
 
 pub(crate) fn formula_safe(value: &str) -> Cow<'_, str> {

@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, EntityTrait, FromQueryResult, IntoActiveModel,
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Select, Set, TransactionTrait,
-    sea_query::{Expr, LockType},
+    sea_query::LockType,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -214,11 +214,7 @@ pub(crate) struct AdminSurveyFilters {
 fn survey_filter_condition(filters: &AdminSurveyFilters, now: DateTime<Utc>) -> Condition {
     let mut condition = Condition::all();
     if let Some(title) = &filters.title {
-        // strpos 是字面子串搜索：参数仍绑定，不拼接 SQL，也不存在 LIKE 通配符绕过。
-        condition = condition.add(Expr::cust_with_values(
-            "strpos(lower(\"surveys\".\"draft\" ->> 'title'), lower($1)) > 0",
-            [title.clone()],
-        ));
+        condition = condition.add(repository::title_contains(title.clone()));
     }
     if let Some(status) = filters.status {
         condition = condition.add(crate::surveys::effective_status_condition(status, now));

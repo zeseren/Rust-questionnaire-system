@@ -109,7 +109,7 @@ pub(crate) fn raw_request(method: &str, uri: &str, headers: &[(&str, &str)]) -> 
 }
 
 /// 把响应拆成状态码、响应头与 JSON 体；非 JSON 或空体分别视为解析失败与 null。
-pub(crate) async fn response_json(response: Response) -> (StatusCode, HeaderMap, Value) {
+async fn response_json(response: Response) -> (StatusCode, HeaderMap, Value) {
     let status = response.status();
     let headers = response.headers().clone();
     let bytes = to_bytes(response.into_body(), 1 << 20)

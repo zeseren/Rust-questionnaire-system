@@ -11,6 +11,7 @@ use crate::{
         normalize_username, session_cookie, session_token, validate_password, verify_password,
     },
     entities::{AuditAction, SurveyStatus, UserRole},
+    error::AppError,
     tests::support::{error_json, user_model},
 };
 
@@ -28,6 +29,14 @@ fn cookie_头(值: &[&str]) -> HeaderMap {
         );
     }
     headers
+}
+
+/// 校验失败的统一契约：状态、错误码与消息一起断言，并带上具体场景。
+async fn 断言校验失败(error: AppError, 场景: &str, 期望消息: &str) {
+    let (状态, _, body) = error_json(error).await;
+    assert_eq!(状态, StatusCode::UNPROCESSABLE_ENTITY, "{场景}");
+    assert_eq!(body["error"]["code"], "validation_failed", "{场景}");
+    assert_eq!(body["error"]["message"], 期望消息, "{场景}");
 }
 
 #[tokio::test]
@@ -56,13 +65,12 @@ async fn 用户名必须为三到三十二个_ascii_字母数字下划线() {
         "用户abc".to_owned(),
     ] {
         let error = normalize_username(非法.clone()).expect_err("必须拒绝");
-        let (状态, _, body) = error_json(error).await;
-        assert_eq!(状态, StatusCode::UNPROCESSABLE_ENTITY, "非法用户名：{非法}");
-        assert_eq!(body["error"]["code"], "validation_failed");
-        assert_eq!(
-            body["error"]["message"],
-            "用户名须为 3—32 个 ASCII 字母、数字或下划线"
-        );
+        断言校验失败(
+            error,
+            &format!("非法用户名：{非法}"),
+            "用户名须为 3—32 个 ASCII 字母、数字或下划线",
+        )
+        .await;
     }
 }
 
@@ -74,10 +82,7 @@ async fn 密码按字符数限制在八到一百二十八之间() {
 
     for 非法 in ["1".repeat(7), "x".repeat(129), "😀".repeat(129)] {
         let error = validate_password(&非法).expect_err("必须拒绝");
-        let (状态, _, body) = error_json(error).await;
-        assert_eq!(状态, StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(body["error"]["code"], "validation_failed");
-        assert_eq!(body["error"]["message"], "密码长度须为 8—128 个字符");
+        断言校验失败(error, "非法密码", "密码长度须为 8—128 个字符").await;
     }
 }
 
@@ -272,10 +277,7 @@ async fn 治理原因必须是一到五百个可显示字符() {
         ),
     ] {
         let error = reason(&非法).expect_err("必须拒绝");
-        let (状态, _, body) = error_json(error).await;
-        assert_eq!(状态, StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(body["error"]["code"], "validation_failed");
-        assert_eq!(body["error"]["message"], 期望);
+        断言校验失败(error, "非法治理原因", 期望).await;
     }
 }
 

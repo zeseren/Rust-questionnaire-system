@@ -5,8 +5,8 @@
 
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait,
-    FromQueryResult, QueryFilter, QuerySelect, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction,
+    EntityTrait, FromQueryResult, QueryFilter, QuerySelect, Set, TransactionTrait,
     sea_query::{Expr, LockType, SimpleExpr, extension::postgres::PgExpr},
 };
 use std::sync::{Arc, Mutex, PoisonError};
@@ -21,6 +21,15 @@ use crate::{
 /// 只从草稿 JSONB 中取出标题列，供各列表投影复用。
 pub(crate) fn title_column() -> SimpleExpr {
     Expr::col(survey::Column::Draft).cast_json_field("title")
+}
+
+/// 草稿标题的字面子串筛选：本人列表与治理列表共用同一条绑定参数表达式。
+pub(crate) fn title_contains(title: String) -> SimpleExpr {
+    // strpos 是字面子串搜索：参数仍绑定，不拼接 SQL，也不存在 LIKE 通配符绕过。
+    Expr::cust_with_values(
+        "strpos(lower(\"surveys\".\"draft\" ->> 'title'), lower($1)) > 0",
+        [title],
+    )
 }
 
 /// 与 PostgreSQL `timestamptz` 一致的微秒时间：写响应与后续读回值不再有亚微秒差异。
@@ -238,6 +247,21 @@ pub(crate) async fn expire_survey(
     survey.status = SurveyStatus::Closed;
     survey.updated_at = now;
     Ok(survey)
+}
+
+/// 所有者写路径的统一前缀：开事务、按归属锁元数据行、取当前时刻并物化到期。
+///
+/// 固定顺序是先锁行再取时间，到期判断使用锁内时刻；错误原样向上传播，提交仍由调用方在同一事务内完成。
+pub(crate) async fn begin_owned_survey_write(
+    db: &DatabaseConnection,
+    owner_id: Uuid,
+    id: Uuid,
+) -> AppResult<(DatabaseTransaction, SurveyMetaRow, DateTime<Utc>)> {
+    let tx = db.begin().await?;
+    let meta = lock_owned_survey_meta(&tx, owner_id, id).await?;
+    let now = now_micros();
+    let meta = expire_survey(&tx, meta, now).await?;
+    Ok((tx, meta, now))
 }
 
 /// 归属校验只需要 ID 与当前版本，不加载 1 MiB 的草稿。

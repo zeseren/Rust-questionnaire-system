@@ -10,10 +10,11 @@ use uuid::Uuid;
 use crate::{
     domain::{AnswerState, Choice, Document, DocumentLogic, Question, QuestionKind},
     entities::Outcome,
+    error::AppResult,
     reports::{
-        QuestionStatisticsData, ReportFilter, SnapshotRow, TimeRange, encode_csv,
-        encode_csv_header, encode_csv_rows, formula_safe, resolve_version_id, summarize_question,
-        summarize_report, update_mean,
+        QuestionStatistics, QuestionStatisticsData, ReportFilter, SnapshotRow, TimeRange,
+        encode_csv_header, encode_csv_rows, formula_safe, resolve_version_id, summarize_report,
+        update_mean,
     },
     tests::support::error_json,
 };
@@ -170,18 +171,16 @@ fn 完成行(
     }
 }
 
-fn 筛选结束行(
-    receipt_id: Uuid,
-    submitted_at: DateTime<Utc>,
-    answers: BTreeMap<Uuid, Value>,
-    question_states: BTreeMap<Uuid, AnswerState>,
-) -> SnapshotRow {
-    SnapshotRow {
-        receipt_id,
-        submitted_at,
-        answers,
-        question_states,
-        outcome: Outcome::ScreenOut,
+/// 测试侧经生产入口汇总单题：一次总数/趋势遍历后取唯一题目结果。
+fn summarize_question(question: &Question, rows: &[SnapshotRow]) -> AppResult<QuestionStatistics> {
+    let mut questions = summarize_report(&单题文档(question.clone()), rows)?.questions;
+    Ok(questions.pop().expect("单题统计结果"))
+}
+
+fn 选项(label: &str) -> Choice {
+    Choice {
+        id: Uuid::new_v4(),
+        label: label.to_owned(),
     }
 }
 
@@ -195,14 +194,8 @@ fn 题目(id: Uuid, title: &str, kind: QuestionKind) -> Question {
 }
 
 fn 单选题目() -> (Question, Choice, Choice) {
-    let 甲 = Choice {
-        id: Uuid::new_v4(),
-        label: "甲".to_owned(),
-    };
-    let 乙 = Choice {
-        id: Uuid::new_v4(),
-        label: "乙".to_owned(),
-    };
+    let 甲 = 选项("甲");
+    let 乙 = 选项("乙");
     let 题 = 题目(
         Uuid::new_v4(),
         "单选题",
@@ -242,12 +235,15 @@ fn 统计区分完成与筛选结束且题目只统计完成样本() {
             答案(&[]),
             状态(&[(题.id, AnswerState::Unanswered)]),
         ),
-        筛选结束行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[(题.id, json!(甲.id))]),
-            状态(&[(题.id, AnswerState::Answered)]),
-        ),
+        SnapshotRow {
+            outcome: Outcome::ScreenOut,
+            ..完成行(
+                Uuid::new_v4(),
+                时间,
+                答案(&[(题.id, json!(甲.id))]),
+                状态(&[(题.id, AnswerState::Answered)]),
+            )
+        },
     ];
     let 统计 = summarize_report(&文档, &rows).expect("统计成功");
     assert_eq!(统计.total_count, 3);
@@ -318,14 +314,8 @@ fn 单选统计按选项计数并以外答数为分母() {
 
 #[test]
 fn 多选占比合计可以超过百分之百() {
-    let 甲 = Choice {
-        id: Uuid::new_v4(),
-        label: "甲".to_owned(),
-    };
-    let 乙 = Choice {
-        id: Uuid::new_v4(),
-        label: "乙".to_owned(),
-    };
+    let 甲 = 选项("甲");
+    let 乙 = 选项("乙");
     let 题 = 题目(
         Uuid::new_v4(),
         "多选题",
@@ -540,16 +530,7 @@ fn 空样本集返回零计数与空统计() {
         Uuid::new_v4(),
         "多选",
         QuestionKind::MultipleChoice {
-            options: vec![
-                Choice {
-                    id: Uuid::new_v4(),
-                    label: "甲".to_owned(),
-                },
-                Choice {
-                    id: Uuid::new_v4(),
-                    label: "乙".to_owned(),
-                },
-            ],
+            options: vec![选项("甲"), 选项("乙")],
             min_choices: 1,
             max_choices: 2,
         },
@@ -713,15 +694,36 @@ fn 公式前缀与前导不可见字符被加上单引号() {
     }
 }
 
+/// 表头与全部行的完整编码；测试用小批量一次生成完整 CSV。
+fn encode_csv(
+    document: &Document,
+    version_id: Uuid,
+    version_number: i32,
+    rows: &[SnapshotRow],
+) -> AppResult<Vec<u8>> {
+    let mut bytes = encode_csv_header(document)?;
+    bytes.extend_from_slice(&encode_csv_rows(
+        document,
+        version_id,
+        version_number,
+        rows,
+    )?);
+    Ok(bytes)
+}
+
+fn 解析_csv(字节: &[u8]) -> (csv::StringRecord, Vec<csv::StringRecord>) {
+    let mut reader = csv::Reader::from_reader(字节);
+    let 表头 = reader.headers().expect("表头可解析").clone();
+    let 记录 = reader
+        .records()
+        .map(|记录| 记录.expect("CSV 行可解析"))
+        .collect();
+    (表头, 记录)
+}
+
 fn 导出文档(logic: Option<DocumentLogic>) -> (Document, Question, Question, Choice, Choice) {
-    let 甲 = Choice {
-        id: Uuid::new_v4(),
-        label: "甲".to_owned(),
-    };
-    let 乙 = Choice {
-        id: Uuid::new_v4(),
-        label: "乙".to_owned(),
-    };
+    let 甲 = 选项("甲");
+    let 乙 = 选项("乙");
     let 多选 = 题目(
         Uuid::new_v4(),
         "多选",
@@ -750,14 +752,8 @@ fn 导出文档(logic: Option<DocumentLogic>) -> (Document, Question, Question, 
 #[test]
 fn 无逻辑版本的_csv_覆盖全部六种题型且防护表头公式与空值留空() {
     let (mut 文档, 多选, 文本, 甲, 乙) = 导出文档(None);
-    let 单甲 = Choice {
-        id: Uuid::new_v4(),
-        label: "甲".to_owned(),
-    };
-    let 单乙 = Choice {
-        id: Uuid::new_v4(),
-        label: "乙".to_owned(),
-    };
+    let 单甲 = 选项("甲");
+    let 单乙 = 选项("乙");
     let 单选 = 题目(
         Uuid::new_v4(),
         "单选",
@@ -835,8 +831,7 @@ fn 无逻辑版本的_csv_覆盖全部六种题型且防护表头公式与空值
         "必须使用 CRLF 换行"
     );
 
-    let mut reader = csv::Reader::from_reader(字节.as_slice());
-    let 表头 = reader.headers().expect("表头可解析").clone();
+    let (表头, 记录) = 解析_csv(&字节);
     assert_eq!(
         表头.iter().take(5).collect::<Vec<_>>(),
         vec![
@@ -857,10 +852,6 @@ fn 无逻辑版本的_csv_覆盖全部六种题型且防护表头公式与空值
     assert_eq!(&表头[7], format!("单选 [{}]", 单选.id).as_str());
     assert_eq!(&表头[10], format!("评分 [{}]", 评分.id).as_str());
 
-    let 记录: Vec<csv::StringRecord> = reader
-        .records()
-        .map(|记录| 记录.expect("CSV 行可解析"))
-        .collect();
     assert_eq!(记录.len(), 2);
     assert_eq!(&记录[0][1], "complete", "每行带流程终点");
     assert_eq!(&记录[0][2], 版本.to_string().as_str());
@@ -909,29 +900,27 @@ fn 有逻辑版本的_csv_带状态列且多选保持_json_数组() {
                 (文本.id, AnswerState::Answered),
             ]),
         ),
-        筛选结束行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[]),
-            状态(&[
-                (多选.id, AnswerState::Unanswered),
-                (文本.id, AnswerState::Skipped),
-            ]),
-        ),
+        SnapshotRow {
+            outcome: Outcome::ScreenOut,
+            ..完成行(
+                Uuid::new_v4(),
+                时间,
+                答案(&[]),
+                状态(&[
+                    (多选.id, AnswerState::Unanswered),
+                    (文本.id, AnswerState::Skipped),
+                ]),
+            )
+        },
     ];
     let 字节 = encode_csv(&文档, Uuid::new_v4(), 1, &rows).expect("导出成功");
-    let mut reader = csv::Reader::from_reader(字节.as_slice());
-    let 表头 = reader.headers().expect("表头可解析").clone();
+    let (表头, 记录) = 解析_csv(&字节);
     assert_eq!(表头.len(), 9, "两道题各带一个状态列，另加 outcome");
     assert_eq!(&表头[5], format!("多选 [{}]", 多选.id).as_str());
     assert_eq!(&表头[6], format!("状态 [{}]", 多选.id).as_str());
     assert_eq!(&表头[7], format!("'=SUM(A1) [{}]", 文本.id).as_str());
     assert_eq!(&表头[8], format!("状态 [{}]", 文本.id).as_str());
 
-    let 记录: Vec<csv::StringRecord> = reader
-        .records()
-        .map(|记录| 记录.expect("CSV 行可解析"))
-        .collect();
     assert_eq!(记录.len(), 2);
     assert_eq!(&记录[0][1], "complete");
     assert_eq!(&记录[1][1], "screen_out", "筛选结束同样导出并标注");

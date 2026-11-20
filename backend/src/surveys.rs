@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use sea_orm::{
     AccessMode, ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseTransaction,
     EntityTrait, FromQueryResult, IsolationLevel, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set, Statement, TransactionOptions, TransactionTrait, sea_query::Expr,
+    QuerySelect, Set, Statement, TransactionOptions, TransactionTrait,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
@@ -675,11 +675,7 @@ async fn list_surveys(
     let now = Utc::now();
     let mut query = survey::Entity::find().filter(survey::Column::OwnerId.eq(owner_id));
     if let Some(title) = filters.title {
-        // strpos 是字面子串搜索：参数仍绑定，不拼接 SQL，也不存在 LIKE 通配符绕过。
-        query = query.filter(Expr::cust_with_values(
-            "strpos(lower(\"surveys\".\"draft\" ->> 'title'), lower($1)) > 0",
-            [title],
-        ));
+        query = query.filter(repository::title_contains(title));
     }
     if let Some(status) = filters.status {
         query = query.filter(effective_status_condition(status, now));
@@ -731,11 +727,8 @@ async fn save_survey_draft(
     input: SaveDraft,
 ) -> AppResult<SurveyDetail> {
     input.document.validate_draft()?;
-    let tx = state.db.begin().await?;
     // 只锁元数据行；旧草稿内容与本请求无关，不读取也不解码。
-    let meta = repository::lock_owned_survey_meta(&tx, owner_id, id).await?;
-    let now = repository::now_micros();
-    let meta = repository::expire_survey(&tx, meta, now).await?;
+    let (tx, meta, now) = repository::begin_owned_survey_write(&state.db, owner_id, id).await?;
     ensure_editable(&meta)?;
     ensure_revision(&meta, input.revision)?;
     let next_revision = meta
@@ -814,10 +807,7 @@ async fn publish_survey(
     id: Uuid,
     revision: i64,
 ) -> AppResult<(StatusCode, PublishedSurvey)> {
-    let tx = state.db.begin().await?;
-    let record = repository::lock_owned_survey_meta(&tx, owner_id, id).await?;
-    let now = repository::now_micros();
-    let record = repository::expire_survey(&tx, record, now).await?;
+    let (tx, record, now) = repository::begin_owned_survey_write(&state.db, owner_id, id).await?;
     ensure_editable(&record)?;
     ensure_revision(&record, revision)?;
     if record.mode.is_none() {
@@ -917,11 +907,8 @@ async fn update_collection(
     id: Uuid,
     input: CollectionSettings,
 ) -> AppResult<SurveyDetail> {
-    let tx = state.db.begin().await?;
-    let mut meta = repository::lock_owned_survey_meta(&tx, owner_id, id).await?;
-    let now = repository::now_micros();
     // 必须在覆盖 deadline 之前执行，否则延期会抹掉“已经到期”的事实。
-    meta = repository::expire_survey(&tx, meta, now).await?;
+    let (tx, mut meta, now) = repository::begin_owned_survey_write(&state.db, owner_id, id).await?;
     ensure_editable(&meta)?;
     validate_mode_change(meta.current_version_id, meta.mode, input.mode)?;
     let deadline_changed = input.deadline.is_some();
@@ -969,10 +956,7 @@ async fn change_status(
     id: Uuid,
     action: CollectionAction,
 ) -> AppResult<SurveyDetail> {
-    let tx = state.db.begin().await?;
-    let mut meta = repository::lock_owned_survey_meta(&tx, owner_id, id).await?;
-    let now = repository::now_micros();
-    meta = repository::expire_survey(&tx, meta, now).await?;
+    let (tx, mut meta, now) = repository::begin_owned_survey_write(&state.db, owner_id, id).await?;
     let current = meta.status;
     let target = next_collection_status(action, current, meta.deadline, now)?;
     if target != current {
