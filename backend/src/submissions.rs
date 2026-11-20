@@ -174,11 +174,16 @@ async fn public_survey_meta(
 /// 和选项仍会拒绝。成功后的原载荷重试可跨关闭、下架、发布者禁用及版本切换；`login_once`
 /// 仍须验证填写者身份。没有成功记录的旧版本提交返回 `version_changed`；未知版本和非法答案返回
 /// `validation_failed`。`screen_out` 与 `complete` 都是正式记录，共享 `login_once` 的唯一约束。
+/// 可选 `X-Expected-Account` 仅用于在 Cookie 认证后核对浏览器冻结的账号；缺失时保持旧行为，
+/// 不一致或格式非法返回 `409 account_changed`，不查询回执、不写入任何数据。
 #[utoipa::path(
     post,
     path = "/api/public/surveys/{id}/responses",
     tag = "公开填写",
-    params(("id" = Uuid, Path, description = "问卷编号")),
+    params(
+        ("id" = Uuid, Path, description = "问卷编号"),
+        ("X-Expected-Account" = Option<Uuid>, Header, description = "浏览器冻结的原提交账号；仅在 Cookie 认证后核对，不作为身份来源，匿名填写不传")
+    ),
     request_body = SubmitRequest,
     security((), ("cookieAuth" = [])),
     responses(
@@ -188,7 +193,7 @@ async fn public_survey_meta(
         (status = 401, description = "登录限次模式的会话无效或账号禁用", body = ErrorResponse),
         (status = 403, description = "跨站状态变更被拒绝", body = ErrorResponse),
         (status = 404, description = "问卷不存在或不可访问", body = ErrorResponse),
-        (status = 409, description = "idempotency_conflict、version_changed、already_submitted 或回收不可用", body = ErrorResponse),
+        (status = 409, description = "idempotency_conflict、version_changed、already_submitted、account_changed 或回收不可用", body = ErrorResponse),
         (status = 413, description = "请求体超过限制", body = ErrorResponse),
         (status = 422, description = "非 UUIDv4/UUIDv7 秘密、未知版本或答案校验失败；题目错误含 question_id", body = ErrorResponse),
         (status = 429, description = "提交频率超限", body = ErrorResponse),
@@ -297,9 +302,9 @@ async fn submit_response(
     // 只保存秘密的 SHA-256；UUID 的文本大小写、连字符格式不会改变其身份。
     let key_hash = auth::hash_secret_bytes(request.idempotency_key.as_bytes());
     let locked = lock_public_survey(state, headers, id).await?;
-    let scope = locked
-        .respondent_id
-        .map_or_else(|| "anonymous".to_owned(), |id| id.to_string());
+    // Cookie 已决定真实填写者；浏览器声明的冻结账号只做条件核对，绝不覆盖认证结果。
+    ensure_expected_account(headers, locked.respondent_id)?;
+    let scope = submission_scope(locked.respondent_id);
     let previous = find_previous(&locked.tx, id, &scope, &key_hash).await?;
     if let Some((_, original_version, _, _)) = &previous
         && *original_version != request.version_id
@@ -426,7 +431,7 @@ async fn find_previous(
 }
 
 /// 成功重试的公共语义：同载荷返回原回执，不同载荷返回幂等冲突。
-fn replay_receipt(
+pub(crate) fn replay_receipt(
     (receipt_id, _, original_hash, original_outcome): (Uuid, Uuid, String, Outcome),
     payload_hash: &str,
 ) -> AppResult<SubmissionReceipt> {
@@ -438,6 +443,43 @@ fn replay_receipt(
         receipt_id,
         outcome: original_outcome,
     })
+}
+
+/// 浏览器声明的「冻结提交账号」。它只在 Cookie 认证得到真实身份后做一致性核对，
+/// 绝不能作为身份来源，也不能让匿名提交获得账号作用域。
+const EXPECTED_ACCOUNT_HEADER: &str = "x-expected-account";
+
+/// 幂等作用域：匿名固定为 `anonymous`，即使请求恰好携带登录 Cookie 也不采集用户 ID。
+pub(crate) fn submission_scope(respondent_id: Option<Uuid>) -> String {
+    respondent_id.map_or_else(|| "anonymous".to_owned(), |id| id.to_string())
+}
+
+/// 多标签页中 Pinia 缓存的账号可能落后于真实 Cookie：有声明头时，认证后的
+/// `respondent_id` 必须与声明完全一致；缺失、格式错误或不匹配均在写库前拒绝。
+/// 未带该头的现有客户端保持原行为。
+pub(crate) fn ensure_expected_account(
+    headers: &HeaderMap,
+    respondent_id: Option<Uuid>,
+) -> AppResult<()> {
+    let Some(value) = headers.get(EXPECTED_ACCOUNT_HEADER) else {
+        return Ok(());
+    };
+    let expected = value
+        .to_str()
+        .ok()
+        .and_then(|text| Uuid::parse_str(text).ok())
+        .ok_or_else(account_changed)?;
+    if respondent_id != Some(expected) {
+        return Err(account_changed());
+    }
+    Ok(())
+}
+
+pub(crate) fn account_changed() -> AppError {
+    AppError::conflict(
+        "account_changed",
+        "浏览器当前登录账号与原提交账号不一致，请切回原账号后重试",
+    )
 }
 
 fn already_submitted() -> AppError {

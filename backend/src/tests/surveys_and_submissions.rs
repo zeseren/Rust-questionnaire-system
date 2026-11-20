@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use chrono::{Duration, Utc};
 use sea_orm::ActiveEnum;
 use serde::Serialize;
@@ -15,7 +15,8 @@ use crate::{
     error::AppError,
     repository::{SurveyMetaRow, ensure_collecting},
     submissions::{
-        PublicSurveyMeta, idempotency_conflict, privacy_notice, submission_payload_hash,
+        PublicSurveyMeta, account_changed, ensure_expected_account, idempotency_conflict,
+        privacy_notice, replay_receipt, submission_payload_hash, submission_scope,
         validate_idempotency_key,
     },
     surveys::{
@@ -592,6 +593,88 @@ fn 公开元信息只暴露声明的字段() {
 #[tokio::test]
 async fn 幂等冲突使用独立错误码() {
     let (状态, 码, _) = 三元组(idempotency_conflict()).await;
+    assert_eq!(状态, StatusCode::CONFLICT);
+    assert_eq!(码, "idempotency_conflict");
+}
+
+fn 预期账号头(值: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-expected-account",
+        HeaderValue::from_str(值).expect("测试头必须是合法 ASCII"),
+    );
+    headers
+}
+
+/// 声明头只在真实 Cookie 身份之后做条件核对：同账号重试放行，跨账号或匿名冒充拒绝。
+#[tokio::test]
+async fn 预期账号头不替代认证且拒绝跨账号() {
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    assert!(
+        ensure_expected_account(&HeaderMap::new(), None).is_ok(),
+        "匿名旧客户端不带头必须保持可用"
+    );
+    assert!(
+        ensure_expected_account(&HeaderMap::new(), Some(a)).is_ok(),
+        "登录限次旧客户端不带头必须保持可用"
+    );
+    ensure_expected_account(&预期账号头(&a.to_string()), Some(a)).expect("同账号重试必须放行");
+    ensure_expected_account(&预期账号头(&a.to_string().to_uppercase()), Some(a))
+        .expect("UUID 文本大小写不影响身份核对");
+
+    for (说明, headers, respondent) in [
+        ("已读 A 但 Cookie 是 B", 预期账号头(&a.to_string()), Some(b)),
+        ("匿名不可声明账号", 预期账号头(&a.to_string()), None),
+        ("格式错误", 预期账号头("not-a-uuid"), Some(a)),
+        ("空值", 预期账号头(""), Some(a)),
+    ] {
+        let error = ensure_expected_account(&headers, respondent).expect_err("声明不一致必须拒绝");
+        let (状态, 码, 消息) = 三元组(error).await;
+        assert_eq!(状态, StatusCode::CONFLICT, "{说明}");
+        assert_eq!(码, "account_changed", "{说明}");
+        assert_eq!(
+            消息, "浏览器当前登录账号与原提交账号不一致，请切回原账号后重试",
+            "{说明}"
+        );
+    }
+
+    let (状态, 码, 消息) = 三元组(account_changed()).await;
+    assert_eq!(状态, StatusCode::CONFLICT);
+    assert_eq!(码, "account_changed");
+    assert_eq!(
+        消息,
+        "浏览器当前登录账号与原提交账号不一致，请切回原账号后重试"
+    );
+}
+
+#[test]
+fn 提交作用域匿名固定且登录账号稳定() {
+    assert_eq!(submission_scope(None), "anonymous");
+    let 账号 = Uuid::new_v4();
+    assert_eq!(submission_scope(Some(账号)), 账号.to_string());
+    assert_eq!(
+        submission_scope(Some(账号)),
+        账号.to_string(),
+        "同一账号的每次重试必须落在同一作用域"
+    );
+}
+
+#[tokio::test]
+async fn 同账号同载荷重试复用回执而不同载荷冲突() {
+    let 回执 = Uuid::now_v7();
+    let 版本 = Uuid::new_v4();
+    let 历史 = (回执, 版本, "载荷摘要".to_owned(), Outcome::ScreenOut);
+
+    let 重放 = replay_receipt(历史.clone(), "载荷摘要").expect("同载荷必须重放");
+    assert_eq!(重放.receipt_id, 回执);
+    assert_eq!(重放.outcome, Outcome::ScreenOut);
+
+    let 错误 = match replay_receipt(历史, "另一摘要") {
+        Ok(_) => panic!("不同载荷必须拒绝"),
+        Err(error) => error,
+    };
+    let (状态, 码, _) = 三元组(错误).await;
     assert_eq!(状态, StatusCode::CONFLICT);
     assert_eq!(码, "idempotency_conflict");
 }

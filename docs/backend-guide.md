@@ -139,11 +139,12 @@ $Stats | Select-Object version_number, total_count, timezone
 
 `POST /api/public/surveys/{id}/responses` 在持锁事务内按以下顺序处理：
 
-1. 校验 `idempotency_key` 必须为标准随机 UUIDv4（否则 `422`）。
-2. 计算幂等作用域 `scope`（匿名模式固定为 `"anonymous"`，登录限次模式为填写者用户 UUID）与 `key_hash = SHA256(idempotency_key)`，查询 `(survey_id, scope, key_hash)` 是否已有历史记录。
-3. 若无历史记录，则校验问卷当前可回收状态、`version_id == current_version_id`（不一致返回 `409 version_changed`）及登录限次唯一资格；若已有历史记录且 `version_id` 一致，则允许进入重放比对（即使问卷此后已关闭或切换了新版本）。
-4. 使用目标版本的不可变 `Document` 校验并规范化答案（带规则版本通过 `FlowEvaluator` 从入口重建有效路径），计算规范化载荷哈希 `payload_hash`。
-5. 若命中历史记录且 `payload_hash` 一致，返回 `200 OK` 与原 `receipt_id`；若 `payload_hash` 不同，返回 `409 idempotency_conflict`；若为首次提交，则插入 `responses` 并返回 `201 Created`。
+1. 对问卷元数据行加共享锁后，由真实 Cookie 得到认证身份：登录限次模式解析出 `respondent_id`，匿名模式固定为无账号；浏览器声明的 `X-Expected-Account` 只在认证之后做条件校验——存在该头时，其值必须是合法 UUID 且与真实 `respondent_id` 完全一致，否则返回 `409 account_changed`，不查询回执、不写入任何答卷数据。该头不是身份凭据、不能建立作用域，匿名填写不传；未带该头的既有客户端行为不变。
+2. 校验 `idempotency_key` 必须为标准随机 UUIDv4 或时间有序 UUIDv7（否则 `422`）。
+3. 计算幂等作用域 `scope`（匿名模式固定为 `"anonymous"`，登录限次模式为认证后的填写者用户 UUID）与 `key_hash = SHA256(idempotency_key)`，查询 `(survey_id, scope, key_hash)` 是否已有历史记录。
+4. 若无历史记录，则校验问卷当前可回收状态、`version_id == current_version_id`（不一致返回 `409 version_changed`）及登录限次唯一资格；若已有历史记录且 `version_id` 一致，则允许进入重放比对（即使问卷此后已关闭或切换了新版本）。
+5. 使用目标版本的不可变 `Document` 校验并规范化答案（带规则版本通过 `FlowEvaluator` 从入口重建有效路径），计算规范化载荷哈希 `payload_hash`。
+6. 若命中历史记录且 `payload_hash` 一致，返回 `200 OK` 与原 `receipt_id`；若 `payload_hash` 不同，返回 `409 idempotency_conflict`；若为首次提交，则插入 `responses` 并返回 `201 Created`。
 
 ### 3.5 结构指纹与启动期校验
 
@@ -220,7 +221,7 @@ $Stats | Select-Object version_number, total_count, timezone
 | `401 Unauthorized` | `unauthorized` | 未登录、Session 过期或被撤销、密码错误 |
 | `403 Forbidden` | `csrf_rejected`、`forbidden`、`account_disabled` | `Origin` 不匹配或缺少 `X-CSRF-Protection: 1`、非管理员访问 `/api/admin/*` |
 | `404 Not Found` | `not_found` | 资源不存在或不属于当前发布者 |
-| `409 Conflict` | `revision_conflict`、`mode_frozen`、`version_changed`、`idempotency_conflict`、`already_submitted`、`survey_not_collecting` | 草稿修订号过期、首次发布后改模式、提交版本已过期、同幂等键载荷不同、登录限次已交过、问卷已关闭/到期/下架 |
+| `409 Conflict` | `revision_conflict`、`mode_frozen`、`version_changed`、`idempotency_conflict`、`already_submitted`、`account_changed`、`survey_not_collecting` | 草稿修订号过期、首次发布后改模式、提交版本已过期、同幂等键载荷不同、登录限次已交过、浏览器声明账号与真实 Cookie 身份不一致、问卷已关闭/到期/下架 |
 | `413 Payload Too Large` | `body_too_large` | 请求体超过 `1 MiB`（`MAX_SUBMISSION_BYTES`） |
 | `422 Unprocessable Entity` | `validation_failed` | 题面/规则/流程/答案校验未通过（题目级错误携带 `question_id`） |
 | `429 Too Many Requests` | `rate_limited` | 触发认证或公开提交固定窗口限流 |
