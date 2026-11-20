@@ -2,22 +2,15 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{Number, Value, json};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::domain::{MAX_QUESTIONS, Question, QuestionKind};
+use crate::domain::MAX_QUESTIONS;
 use crate::logic::{LogicErrorCode, LogicValueType};
 use crate::logic_document::{
     CompiledDocumentLogic, ComputedVariable, DocumentLogic, QuestionRule, rewrite,
 };
-
-fn id(value: u128) -> Uuid {
-    Uuid::from_u128(value)
-}
-
-fn 版本() -> Number {
-    Number::from(1_u32)
-}
+use crate::tests::support::{id, 数字题, 版本};
 
 fn 数字(value: &str) -> Value {
     json!({"op": "number", "value": value})
@@ -41,16 +34,12 @@ fn 逻辑(variables: Vec<ComputedVariable>, rules: Vec<QuestionRule>) -> Documen
     }
 }
 
-fn 数字题(value: u128) -> Question {
-    Question {
-        id: id(value),
-        title: format!("数字题 {value}"),
-        required: false,
-        kind: QuestionKind::Number {
-            integer: false,
-            min: None,
-            max: None,
-        },
+fn 恒显规则(question: u128) -> QuestionRule {
+    QuestionRule {
+        question_id: id(question),
+        visible_if: Some(json!({"op": "boolean", "value": true})),
+        required_if: None,
+        validate: None,
     }
 }
 
@@ -224,12 +213,7 @@ fn 变量与规则数量遵守题目上限边界() {
     assert_eq!(错误.question_id, None);
 
     let 规则超限: Vec<_> = (0..=MAX_QUESTIONS)
-        .map(|index| QuestionRule {
-            question_id: id(2000 + index as u128),
-            visible_if: Some(json!({"op": "boolean", "value": true})),
-            required_if: None,
-            validate: None,
-        })
+        .map(|index| 恒显规则(2000 + index as u128))
         .collect();
     let 错误 = 逻辑(Vec::new(), 规则超限).compile(&[]).unwrap_err();
     assert_eq!(错误.code, LogicErrorCode::LimitExceeded);
@@ -238,18 +222,13 @@ fn 变量与规则数量遵守题目上限边界() {
 
     // 恰好 MAX_QUESTIONS 个变量与规则仍可编译，确认拒绝只发生在越过上限之后。
     let questions: Vec<_> = (0..MAX_QUESTIONS)
-        .map(|index| 数字题(index as u128 + 1))
+        .map(|index| 数字题(index as u128 + 1, false, None, None))
         .collect();
     let 变量饱和: Vec<_> = (0..MAX_QUESTIONS)
         .map(|index| 变量(1000 + index as u128, LogicValueType::Number, 数字("1")))
         .collect();
     let 规则饱和: Vec<_> = (0..MAX_QUESTIONS)
-        .map(|index| QuestionRule {
-            question_id: id(index as u128 + 1),
-            visible_if: Some(json!({"op": "boolean", "value": true})),
-            required_if: None,
-            validate: None,
-        })
+        .map(|index| 恒显规则(index as u128 + 1))
         .collect();
     let 编译结果 = 逻辑(变量饱和, 规则饱和)
         .compile(&questions)
@@ -275,16 +254,8 @@ fn 变量身份必须唯一() {
 
 #[test]
 fn 规则必须指向已知题目且至少配置一个字段() {
-    let questions = [数字题(1)];
-    let 未知题目 = 逻辑(
-        Vec::new(),
-        vec![QuestionRule {
-            question_id: id(999),
-            visible_if: Some(json!({"op": "boolean", "value": true})),
-            required_if: None,
-            validate: None,
-        }],
-    );
+    let questions = [数字题(1, false, None, None)];
+    let 未知题目 = 逻辑(Vec::new(), vec![恒显规则(999)]);
     let 错误 = 未知题目.compile(&questions).unwrap_err();
     assert_eq!(错误.code, LogicErrorCode::InvalidReference);
     assert_eq!(错误.path, "$.logic.rules[0]");

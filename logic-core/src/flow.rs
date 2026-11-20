@@ -226,6 +226,11 @@ impl CompiledFlow {
             Node::Branch { .. } => unreachable!("分支节点不进入访问路径"),
         }
     }
+
+    /// 把节点下标路径映射为稳定身份；提交重建与会话快照共用。
+    fn ids(&self, path: &[usize]) -> Vec<Uuid> {
+        path.iter().map(|index| self.id(*index)).collect()
+    }
 }
 
 /// 流程结构错误共用同一路径与分类。
@@ -488,6 +493,22 @@ struct Projection {
     route_error: Option<LogicErrorCode>,
 }
 
+impl Projection {
+    /// 记录题目错误；同一题只看首个失败，后续失败不覆盖既有分类。
+    fn fail(&mut self, id: Uuid, code: LogicErrorCode) {
+        self.errors.entry(id).or_insert(code);
+    }
+
+    /// 取题目错误码并附上规范化说明，提交校验与会话前进共用同一拼装。
+    fn answer_error(&self, id: Uuid) -> Option<LogicError> {
+        let failure = error(*self.errors.get(&id)?, "$.answers", Some(id));
+        Some(match self.error_messages.get(&id) {
+            Some(message) => failure.with_message(message.clone()),
+            None => failure,
+        })
+    }
+}
+
 /// 借用会话状态的只读快照。
 ///
 /// 大字段直接借用会话内部集合，避免每次按键或翻页复制全部答案与错误；
@@ -703,11 +724,7 @@ impl CompiledPlan {
         Ok(EvaluatedResponse {
             answers: projection.answers,
             question_states,
-            path: projection
-                .path
-                .iter()
-                .map(|index| self.flow.id(*index))
-                .collect(),
+            path: self.flow.ids(&projection.path),
             outcome,
         })
     }
@@ -720,12 +737,8 @@ impl CompiledPlan {
         inputs: &BTreeMap<Uuid, Value>,
     ) -> Result<(BTreeSet<Uuid>, FlowOutcome), LogicError> {
         for question in &document.questions {
-            if let Some(code) = projection.errors.get(&question.id) {
-                let failure = error(*code, "$.answers", Some(question.id));
-                return Err(match projection.error_messages.get(&question.id) {
-                    Some(message) => failure.with_message(message.clone()),
-                    None => failure,
-                });
+            if let Some(failure) = projection.answer_error(question.id) {
+                return Err(failure);
             }
         }
         if let Some(code) = projection.route_error {
@@ -876,17 +889,9 @@ impl CompiledPlan {
         };
         match required {
             LogicValue::Boolean(true) if value.is_none() => {
-                result
-                    .errors
-                    .entry(id)
-                    .or_insert(LogicErrorCode::RequiredAnswer);
+                result.fail(id, LogicErrorCode::RequiredAnswer);
             }
-            LogicValue::Missing => {
-                result
-                    .errors
-                    .entry(id)
-                    .or_insert(LogicErrorCode::UnknownCondition);
-            }
+            LogicValue::Missing => result.fail(id, LogicErrorCode::UnknownCondition),
             _ => {}
         }
         let Some(value) = value else {
@@ -899,21 +904,9 @@ impl CompiledPlan {
                 .evaluate_expression(validate, &result.answers, variables)
             {
                 Ok(LogicValue::Boolean(true)) => {}
-                Ok(LogicValue::Missing) => {
-                    result
-                        .errors
-                        .entry(id)
-                        .or_insert(LogicErrorCode::UnknownCondition);
-                }
-                Ok(_) => {
-                    result
-                        .errors
-                        .entry(id)
-                        .or_insert(LogicErrorCode::ConstraintFailed);
-                }
-                Err(failure) => {
-                    result.errors.entry(id).or_insert(failure.code);
-                }
+                Ok(LogicValue::Missing) => result.fail(id, LogicErrorCode::UnknownCondition),
+                Ok(_) => result.fail(id, LogicErrorCode::ConstraintFailed),
+                Err(failure) => result.fail(id, failure.code),
             }
         }
         if result.errors.contains_key(&id) {
@@ -1006,17 +999,8 @@ impl FlowSession {
                 Node::End { outcome, .. } => Some(*outcome),
                 _ => None,
             },
-            history: self
-                .history
-                .iter()
-                .map(|index| self.evaluator.plan.flow.id(*index))
-                .collect(),
-            path: self
-                .projection
-                .path
-                .iter()
-                .map(|index| self.evaluator.plan.flow.id(*index))
-                .collect(),
+            history: self.evaluator.plan.flow.ids(&self.history),
+            path: self.evaluator.plan.flow.ids(&self.projection.path),
             visible: &self.projection.visible,
             required: &self.projection.required,
             answers: &self.projection.answers,
@@ -1081,12 +1065,8 @@ impl FlowSession {
                     return Err(invalid());
                 };
                 for id in questions {
-                    if let Some(code) = self.projection.errors.get(id) {
-                        let failure = error(*code, "$.answers", Some(*id));
-                        return Err(match self.projection.error_messages.get(id) {
-                            Some(message) => failure.with_message(message.clone()),
-                            None => failure,
-                        });
+                    if let Some(failure) = self.projection.answer_error(*id) {
+                        return Err(failure);
                     }
                 }
                 let Some(position) = self

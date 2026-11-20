@@ -3,16 +3,13 @@
 use serde_json::{Number, Value, json};
 use uuid::Uuid;
 
-use crate::domain::{Choice, Document, Question, QuestionKind, ValidationError, check_length};
+use crate::domain::{Document, Question, QuestionKind, ValidationError, check_length};
+use crate::tests::support::{id, 数字题, 选项};
 
-fn id(value: u128) -> Uuid {
-    Uuid::from_u128(value)
-}
-
-fn 选项(value: u128) -> Choice {
-    Choice {
-        id: id(value),
-        label: format!("选项 {value}"),
+fn 问卷(questions: Vec<Question>) -> Document {
+    Document {
+        questions,
+        ..Document::default()
     }
 }
 
@@ -69,33 +66,13 @@ fn 草稿校验拒绝非有限数值边界() {
         (Some(f64::NEG_INFINITY), None, "负无穷下界"),
         (None, Some(f64::NAN), "NaN 上界"),
     ] {
-        let document = Document {
-            questions: vec![题目(
-                1,
-                QuestionKind::Number {
-                    integer: false,
-                    min,
-                    max,
-                },
-            )],
-            ..Document::default()
-        };
+        let document = 问卷(vec![数字题(1, false, min, max)]);
         let 错误 = document.validate_draft_fields().unwrap_err();
         assert_eq!(错误.question_id, Some(id(1)), "{说明}");
         assert_eq!(错误.message, "数值上下界必须是有限数值", "{说明}");
     }
 
-    let document = Document {
-        questions: vec![题目(
-            1,
-            QuestionKind::Number {
-                integer: true,
-                min: Some(-1.0),
-                max: Some(1.0),
-            },
-        )],
-        ..Document::default()
-    };
+    let document = 问卷(vec![数字题(1, true, Some(-1.0), Some(1.0))]);
     assert!(
         document.validate_draft_fields().is_ok(),
         "有限闭区间应通过草稿校验"
@@ -249,14 +226,7 @@ fn 多行文本允许换行但拒绝空字符() {
 
 #[test]
 fn 数字答案校验有限性整数性闭区间与负零() {
-    let 整数题 = 题目(
-        1,
-        QuestionKind::Number {
-            integer: true,
-            min: None,
-            max: None,
-        },
-    );
+    let 整数题 = 数字题(1, true, None, None);
     assert_eq!(数值(整数题.normalize_answer(Some(&json!(2)))), 2.0);
     assert_eq!(
         数值(整数题.normalize_answer(Some(&json!(2.0)))),
@@ -271,14 +241,7 @@ fn 数字答案校验有限性整数性闭区间与负零() {
         "答案必须是有限的 JSON 数字（例如 3 或 -1.5）"
     );
 
-    let 区间题 = 题目(
-        2,
-        QuestionKind::Number {
-            integer: false,
-            min: Some(-1.5),
-            max: Some(2.5),
-        },
-    );
+    let 区间题 = 数字题(2, false, Some(-1.5), Some(2.5));
     assert_eq!(
         数值(区间题.normalize_answer(Some(&json!(-1.5)))),
         -1.5,
@@ -295,14 +258,7 @@ fn 数字答案校验有限性整数性闭区间与负零() {
     assert_eq!(高于.message, "数值必须在 -1.5 到 2.5 之间");
 
     // 单边区间只报告实际存在的一侧，不能暗示不存在的边界。
-    let 下界题 = 题目(
-        3,
-        QuestionKind::Number {
-            integer: false,
-            min: Some(0.5),
-            max: None,
-        },
-    );
+    let 下界题 = 数字题(3, false, Some(0.5), None);
     assert_eq!(
         下界题
             .normalize_answer(Some(&json!(0.4)))
@@ -310,14 +266,7 @@ fn 数字答案校验有限性整数性闭区间与负零() {
             .message,
         "数值不能小于 0.5"
     );
-    let 上界题 = 题目(
-        4,
-        QuestionKind::Number {
-            integer: false,
-            min: None,
-            max: Some(10.0),
-        },
-    );
+    let 上界题 = 数字题(4, false, None, Some(10.0));
     assert_eq!(
         上界题
             .normalize_answer(Some(&json!(10.5)))

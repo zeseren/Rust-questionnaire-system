@@ -1,29 +1,14 @@
 //! 流程状态机内部不变量：结构校验、分支数量边界与当前页可见题目的改答约束。
 
-use serde_json::{Number, json};
-use uuid::Uuid;
+use serde_json::json;
 
-use crate::domain::{Choice, Document, DocumentLogic, Question, QuestionKind, QuestionRule};
+use crate::domain::{Document, DocumentLogic, Question, QuestionKind, QuestionRule};
 use crate::flow::{
     CompiledFlow, FlowBranch, FlowDefinition, FlowEvent, FlowNode, FlowOutcome, FlowSession,
     MAX_BRANCHES, Node,
 };
 use crate::logic::LogicErrorCode;
-
-fn id(value: u128) -> Uuid {
-    Uuid::from_u128(value)
-}
-
-fn 版本() -> Number {
-    Number::from(1_u32)
-}
-
-fn 选项(value: u128) -> Choice {
-    Choice {
-        id: id(value),
-        label: format!("选项 {value}"),
-    }
-}
+use crate::tests::support::{id, 版本, 选项};
 
 fn 单选题(value: u128, options: &[u128]) -> Question {
     Question {
@@ -48,13 +33,7 @@ fn 文档(questions: Vec<Question>, logic: Option<DocumentLogic>) -> Document {
 }
 
 fn 逻辑(flow: FlowDefinition) -> DocumentLogic {
-    DocumentLogic {
-        flow: Some(flow),
-        dsl_version: 版本(),
-        semantics_version: 版本(),
-        variables: Vec::new(),
-        rules: Vec::new(),
-    }
+    逻辑带规则(flow, Vec::new())
 }
 
 fn 逻辑带规则(flow: FlowDefinition, rules: Vec<QuestionRule>) -> DocumentLogic {

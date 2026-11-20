@@ -8,6 +8,8 @@
 //! | `logic_document` | 空规则包、同层变量排序、身份重写与变量/规则上限 |
 //! | `flow` | 流程结构边界、分支上限与隐藏题目改答拦截 |
 //! | `logic_text` | 字节偏移行列定位、词法预算限制与巡检绑定扫描 |
+//!
+//! 各模块共用的身份、版本与最小题目构造放在 `support`，避免逐文件复制样板。
 
 mod domain;
 mod flow;
@@ -15,3 +17,4 @@ mod identity;
 mod logic;
 mod logic_document;
 mod logic_text;
+mod support;

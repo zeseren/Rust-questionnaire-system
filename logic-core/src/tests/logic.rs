@@ -5,28 +5,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::domain::{MAX_CHOICES, Question, QuestionKind};
+use crate::domain::{MAX_CHOICES, Question};
 use crate::logic::{
     Binding, CompiledExpression, LogicErrorCode, LogicValueType, compile_expression, error,
     numeric, read_answer, selection,
 };
-
-fn id(value: u128) -> Uuid {
-    Uuid::from_u128(value)
-}
-
-fn 数字题(value: u128) -> Question {
-    Question {
-        id: id(value),
-        title: format!("数字题 {value}"),
-        required: false,
-        kind: QuestionKind::Number {
-            integer: false,
-            min: None,
-            max: None,
-        },
-    }
-}
+use crate::tests::support::{id, 数字题};
 
 fn 编译(expression: &Value, questions: &[Question]) -> CompiledExpression {
     compile_expression(
@@ -240,7 +224,7 @@ fn 答案读取拒绝越界与超量选项() {
 
 #[test]
 fn 存在性守护决定必然读取的题目集合() {
-    let questions = [数字题(1), 数字题(2)];
+    let questions = [数字题(1, false, None, None), 数字题(2, false, None, None)];
     let 答 = |question: u128| json!({"op": "answered", "question_id": id(question).to_string()});
     let 比较 = |question: u128| {
         json!({
