@@ -65,17 +65,9 @@ pub(crate) struct ReportFilter {
     pub(crate) to: Option<String>,
 }
 
+/// 答卷列表与文本答案分页共用版本、时间范围与分页参数。
 #[derive(Debug, Deserialize, ToSchema)]
 struct ResponseListQuery {
-    #[serde(flatten)]
-    filter: ReportFilter,
-    #[serde(flatten)]
-    pagination: Pagination,
-}
-
-/// 文本答案分页：版本、时间范围与分页共用报表筛选口径。
-#[derive(Debug, Deserialize)]
-struct QuestionResponsesQuery {
     #[serde(flatten)]
     filter: ReportFilter,
     #[serde(flatten)]
@@ -381,7 +373,7 @@ async fn question_responses(
     State(state): State<AppState>,
     user: AuthUser,
     ApiPath((id, question_id)): ApiPath<(Uuid, Uuid)>,
-    ApiQuery(query): ApiQuery<QuestionResponsesQuery>,
+    ApiQuery(query): ApiQuery<ResponseListQuery>,
 ) -> AppResult<Json<Page<TextResponse>>> {
     let bounds = query.pagination.bounds()?;
     let range = TimeRange::parse(&query.filter)?;
@@ -479,13 +471,22 @@ async fn statistics(
     ApiQuery(filter): ApiQuery<ReportFilter>,
 ) -> AppResult<Json<StatisticsResponse>> {
     let range = TimeRange::parse(&filter)?;
-    let loaded = load_report(&state, user.id, id, filter.version_id, &range).await?;
-    let LoadedReport {
-        version_id,
-        version_number,
-        document,
-        stored,
-    } = loaded;
+    let survey = repository::owned_survey_meta(&state.db, user.id, id).await?;
+    let version_id = resolve_version_id(survey.current_version_id, filter.version_id)?;
+    // 校验版本归属并编译题面；答卷随后按同一版本读取，解码与汇总交给阻塞线程。
+    let version = repository::load_version(&state.db, &state.versions, id, version_id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
+    let stored = filtered_responses(id, version_id, &range)
+        .select_only()
+        .columns(STORED_COLUMNS)
+        .order_by_asc(response::Column::SubmittedAt)
+        .order_by_asc(response::Column::Id)
+        .into_model::<StoredResponseRow>()
+        .all(&state.db)
+        .await?;
+    let version_number = version.number;
+    let document = version.prepared.document_arc();
     // JSONB 解码与逐题汇总都在同一个阻塞任务内完成，避免两次线程切换。
     let summary = tokio::task::spawn_blocking(move || {
         let rows = decode_rows(stored)?;
@@ -643,49 +644,6 @@ async fn selected_version_meta(
         .ok_or_else(AppError::not_found)
 }
 
-/// 统计共用的单次读取结果：版本标识、不可变题面和原始答卷行。
-struct LoadedReport {
-    version_id: Uuid,
-    version_number: i32,
-    document: Arc<Document>,
-    stored: Vec<StoredResponseRow>,
-}
-
-async fn load_report(
-    state: &AppState,
-    owner_id: Uuid,
-    survey_id: Uuid,
-    version_id: Option<Uuid>,
-    range: &TimeRange,
-) -> AppResult<LoadedReport> {
-    let survey = repository::owned_survey_meta(&state.db, owner_id, survey_id).await?;
-    let version_id = resolve_version_id(survey.current_version_id, version_id)?;
-    // 校验版本归属并编译题面；答卷随后按同一版本读取，解码与汇总交给阻塞线程。
-    let version = repository::load_version(&state.db, &state.versions, survey_id, version_id)
-        .await?
-        .ok_or_else(AppError::not_found)?;
-    let stored = filtered_responses(survey_id, version_id, range)
-        .select_only()
-        .columns([
-            response::Column::Id,
-            response::Column::SubmittedAt,
-            response::Column::Answers,
-            response::Column::QuestionStates,
-            response::Column::Outcome,
-        ])
-        .order_by_asc(response::Column::SubmittedAt)
-        .order_by_asc(response::Column::Id)
-        .into_model::<StoredResponseRow>()
-        .all(&state.db)
-        .await?;
-    Ok(LoadedReport {
-        version_id,
-        version_number: version.number,
-        document: version.prepared.document_arc(),
-        stored,
-    })
-}
-
 #[derive(FromQueryResult)]
 struct ResponseHead {
     id: Uuid,
@@ -720,6 +678,15 @@ struct StoredResponseRow {
     outcome: Outcome,
 }
 
+/// 与 `StoredResponseRow` 字段同序的列投影。
+const STORED_COLUMNS: [response::Column; 5] = [
+    response::Column::Id,
+    response::Column::SubmittedAt,
+    response::Column::Answers,
+    response::Column::QuestionStates,
+    response::Column::Outcome,
+];
+
 fn filtered_responses(
     survey_id: Uuid,
     version_id: Uuid,
@@ -748,13 +715,7 @@ async fn fetch_export_batch(
 ) -> AppResult<Vec<StoredResponseRow>> {
     let mut query = filtered_responses(survey_id, version_id, range)
         .select_only()
-        .columns([
-            response::Column::Id,
-            response::Column::SubmittedAt,
-            response::Column::Answers,
-            response::Column::QuestionStates,
-            response::Column::Outcome,
-        ]);
+        .columns(STORED_COLUMNS);
     if let Some((submitted_at, id)) = after {
         query = query.filter(
             Condition::any()

@@ -186,23 +186,12 @@ async fn 真实_postgresql_迁移与契约() {
     创建问卷(&db, 所有者, "秋季问卷", "unpublished", None, None).await;
     let 字面标题 = 创建问卷(&db, 所有者, "100% 满意度", "unpublished", None, None).await;
     assert_ne!(字面标题, Uuid::nil());
-    let 标题计数 = 读取整数(
-        &db,
-        r#"SELECT count(*)::bigint AS value FROM surveys
+    let 标题查询 = r#"SELECT count(*)::bigint AS value FROM surveys
            WHERE owner_id = $1
-             AND strpos(lower(draft ->> 'title'), lower($2)) > 0"#,
-        vec![所有者.into(), "问卷".to_owned().into()],
-    )
-    .await;
+             AND strpos(lower(draft ->> 'title'), lower($2)) > 0"#;
+    let 标题计数 = 读取整数(&db, 标题查询, vec![所有者.into(), "问卷".to_owned().into()]).await;
     assert_eq!(标题计数, 2, "标题子串应命中两份问卷");
-    let 百分号计数 = 读取整数(
-        &db,
-        r#"SELECT count(*)::bigint AS value FROM surveys
-           WHERE owner_id = $1
-             AND strpos(lower(draft ->> 'title'), lower($2)) > 0"#,
-        vec![所有者.into(), "%".to_owned().into()],
-    )
-    .await;
+    let 百分号计数 = 读取整数(&db, 标题查询, vec![所有者.into(), "%".to_owned().into()]).await;
     assert_eq!(百分号计数, 1, "% 必须按字面匹配");
 
     // 2. 首页计数：收集中的过期问卷计入 closed，总数与各状态一致。

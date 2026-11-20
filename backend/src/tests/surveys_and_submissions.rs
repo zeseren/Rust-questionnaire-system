@@ -670,10 +670,9 @@ async fn 同账号同载荷重试复用回执而不同载荷冲突() {
     assert_eq!(重放.receipt_id, 回执);
     assert_eq!(重放.outcome, Outcome::ScreenOut);
 
-    let 错误 = match replay_receipt(历史, "另一摘要") {
-        Ok(_) => panic!("不同载荷必须拒绝"),
-        Err(error) => error,
-    };
+    let 错误 = replay_receipt(历史, "另一摘要")
+        .err()
+        .expect("不同载荷必须拒绝");
     let (状态, 码, _) = 三元组(错误).await;
     assert_eq!(状态, StatusCode::CONFLICT);
     assert_eq!(码, "idempotency_conflict");

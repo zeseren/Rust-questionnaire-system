@@ -171,6 +171,18 @@ fn 完成行(
     }
 }
 
+/// 只涉及一道题的完成样本：有值即带答案，无值只记录该题状态。
+fn 单题行(
+    时间: DateTime<Utc>, 题: Uuid, 值: Option<Value>, 态: AnswerState
+) -> SnapshotRow {
+    完成行(
+        Uuid::new_v4(),
+        时间,
+        值.into_iter().map(|值| (题, 值)).collect(),
+        状态(&[(题, 态)]),
+    )
+}
+
 /// 测试侧经生产入口汇总单题：一次总数/趋势遍历后取唯一题目结果。
 fn summarize_question(question: &Question, rows: &[SnapshotRow]) -> AppResult<QuestionStatistics> {
     let mut questions = summarize_report(&单题文档(question.clone()), rows)?.questions;
@@ -191,6 +203,18 @@ fn 题目(id: Uuid, title: &str, kind: QuestionKind) -> Question {
         required: false,
         kind,
     }
+}
+
+fn 数字题目(title: &str) -> Question {
+    题目(
+        Uuid::new_v4(),
+        title,
+        QuestionKind::Number {
+            integer: false,
+            min: None,
+            max: None,
+        },
+    )
 }
 
 fn 单选题目() -> (Question, Choice, Choice) {
@@ -223,26 +247,11 @@ fn 统计区分完成与筛选结束且题目只统计完成样本() {
     let 文档 = 单题文档(题.clone());
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let rows = vec![
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[(题.id, json!(甲.id))]),
-            状态(&[(题.id, AnswerState::Answered)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[]),
-            状态(&[(题.id, AnswerState::Unanswered)]),
-        ),
+        单题行(时间, 题.id, Some(json!(甲.id)), AnswerState::Answered),
+        单题行(时间, 题.id, None, AnswerState::Unanswered),
         SnapshotRow {
             outcome: Outcome::ScreenOut,
-            ..完成行(
-                Uuid::new_v4(),
-                时间,
-                答案(&[(题.id, json!(甲.id))]),
-                状态(&[(题.id, AnswerState::Answered)]),
-            )
+            ..单题行(时间, 题.id, Some(json!(甲.id)), AnswerState::Answered)
         },
     ];
     let 统计 = summarize_report(&文档, &rows).expect("统计成功");
@@ -271,24 +280,9 @@ fn 单选统计按选项计数并以外答数为分母() {
     let (题, 甲, 乙) = 单选题目();
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let rows = vec![
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[(题.id, json!(甲.id))]),
-            状态(&[(题.id, AnswerState::Answered)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[(题.id, json!(乙.id))]),
-            状态(&[(题.id, AnswerState::Answered)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[]),
-            状态(&[(题.id, AnswerState::Unanswered)]),
-        ),
+        单题行(时间, 题.id, Some(json!(甲.id)), AnswerState::Answered),
+        单题行(时间, 题.id, Some(json!(乙.id)), AnswerState::Answered),
+        单题行(时间, 题.id, None, AnswerState::Unanswered),
     ];
     let 统计 = summarize_question(&题, &rows).expect("统计成功");
     assert_eq!(统计.question_id, 题.id);
@@ -327,18 +321,13 @@ fn 多选占比合计可以超过百分之百() {
     );
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let rows = vec![
-        完成行(
-            Uuid::new_v4(),
+        单题行(
             时间,
-            答案(&[(题.id, json!([甲.id, 乙.id]))]),
-            状态(&[(题.id, AnswerState::Answered)]),
+            题.id,
+            Some(json!([甲.id, 乙.id])),
+            AnswerState::Answered,
         ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[(题.id, json!([甲.id]))]),
-            状态(&[(题.id, AnswerState::Answered)]),
-        ),
+        单题行(时间, 题.id, Some(json!([甲.id])), AnswerState::Answered),
     ];
     let 统计 = summarize_question(&题, &rows).expect("统计成功");
     assert_eq!(统计.answered_count, 2);
@@ -367,18 +356,8 @@ fn 文本题统计只返回计数不再内联正文() {
     );
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let rows = vec![
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[(单行.id, json!("第一条"))]),
-            状态(&[(单行.id, AnswerState::Answered)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[]),
-            状态(&[(单行.id, AnswerState::Unanswered)]),
-        ),
+        单题行(时间, 单行.id, Some(json!("第一条")), AnswerState::Answered),
+        单题行(时间, 单行.id, None, AnswerState::Unanswered),
     ];
     let 统计 = summarize_question(&单行, &rows).expect("统计成功");
     assert_eq!(统计.answered_count, 1, "文本正文不回流到统计");
@@ -397,11 +376,11 @@ fn 文本题统计只返回计数不再内联正文() {
         "多行文本",
         QuestionKind::Textarea { max_length: 1_000 },
     );
-    let 多行记录 = vec![完成行(
-        Uuid::new_v4(),
+    let 多行记录 = vec![单题行(
         时间,
-        答案(&[(多行.id, json!("第一行\n第二行"))]),
-        状态(&[(多行.id, AnswerState::Answered)]),
+        多行.id,
+        Some(json!("第一行\n第二行")),
+        AnswerState::Answered,
     )];
     let 统计 = summarize_question(&多行, &多行记录).expect("统计成功");
     assert!(matches!(
@@ -413,41 +392,13 @@ fn 文本题统计只返回计数不再内联正文() {
 
 #[test]
 fn 数字统计排除缺失但把零当作有效值() {
-    let 题 = 题目(
-        Uuid::new_v4(),
-        "数字题",
-        QuestionKind::Number {
-            integer: false,
-            min: None,
-            max: None,
-        },
-    );
+    let 题 = 数字题目("数字题");
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let rows = vec![
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[(题.id, json!(0.0))]),
-            状态(&[(题.id, AnswerState::Answered)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[(题.id, json!(4.0))]),
-            状态(&[(题.id, AnswerState::Answered)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[]),
-            状态(&[(题.id, AnswerState::Unanswered)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[]),
-            状态(&[(题.id, AnswerState::Skipped)]),
-        ),
+        单题行(时间, 题.id, Some(json!(0.0)), AnswerState::Answered),
+        单题行(时间, 题.id, Some(json!(4.0)), AnswerState::Answered),
+        单题行(时间, 题.id, None, AnswerState::Unanswered),
+        单题行(时间, 题.id, None, AnswerState::Skipped),
     ];
     let 统计 = summarize_question(&题, &rows).expect("统计成功");
     assert_eq!(统计.answered_count, 2, "缺失值不计入回答数");
@@ -478,24 +429,9 @@ fn 评分统计按分值升序给出分布与均值() {
     );
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let rows = vec![
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[(题.id, json!(5))]),
-            状态(&[(题.id, AnswerState::Answered)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[(题.id, json!(3.0))]),
-            状态(&[(题.id, AnswerState::Answered)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[]),
-            状态(&[(题.id, AnswerState::Unanswered)]),
-        ),
+        单题行(时间, 题.id, Some(json!(5)), AnswerState::Answered),
+        单题行(时间, 题.id, Some(json!(3.0)), AnswerState::Answered),
+        单题行(时间, 题.id, None, AnswerState::Unanswered),
     ];
     let 统计 = summarize_question(&题, &rows).expect("统计成功");
     assert_eq!(统计.answered_count, 2);
@@ -535,15 +471,7 @@ fn 空样本集返回零计数与空统计() {
             max_choices: 2,
         },
     );
-    let 数字 = 题目(
-        Uuid::new_v4(),
-        "数字",
-        QuestionKind::Number {
-            integer: false,
-            min: None,
-            max: None,
-        },
-    );
+    let 数字 = 数字题目("数字");
     let 评分 = 题目(
         Uuid::new_v4(),
         "评分",
@@ -591,30 +519,10 @@ fn 三态计数满足适用加跳过等于完成样本数() {
     let (题, 甲, _) = 单选题目();
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let rows = vec![
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[(题.id, json!(甲.id))]),
-            状态(&[(题.id, AnswerState::Answered)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[]),
-            状态(&[(题.id, AnswerState::Unanswered)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[]),
-            状态(&[(题.id, AnswerState::Skipped)]),
-        ),
-        完成行(
-            Uuid::new_v4(),
-            时间,
-            答案(&[]),
-            状态(&[(题.id, AnswerState::Skipped)]),
-        ),
+        单题行(时间, 题.id, Some(json!(甲.id)), AnswerState::Answered),
+        单题行(时间, 题.id, None, AnswerState::Unanswered),
+        单题行(时间, 题.id, None, AnswerState::Skipped),
+        单题行(时间, 题.id, None, AnswerState::Skipped),
     ];
     let 统计 = summarize_question(&题, &rows).expect("统计成功");
     assert_eq!(统计.answered_count, 1);
@@ -635,22 +543,14 @@ fn 三态计数满足适用加跳过等于完成样本数() {
 #[tokio::test]
 async fn 损坏的已存答案返回内部错误且不回显内容() {
     let (单选, ..) = 单选题目();
-    let 数字 = 题目(
-        Uuid::new_v4(),
-        "数字",
-        QuestionKind::Number {
-            integer: false,
-            min: None,
-            max: None,
-        },
-    );
+    let 数字 = 数字题目("数字");
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     for (题, 值) in [(单选, json!(42)), (数字, json!("秘密数值"))] {
-        let rows = vec![完成行(
-            Uuid::new_v4(),
+        let rows = vec![单题行(
             时间,
-            答案(&[(题.id, 值.clone())]),
-            状态(&[(题.id, AnswerState::Answered)]),
+            题.id,
+            Some(值.clone()),
+            AnswerState::Answered,
         )];
         let error = summarize_question(&题, &rows)
             .err()
@@ -766,15 +666,7 @@ fn 无逻辑版本的_csv_覆盖全部六种题型且防护表头公式与空值
         "多行",
         QuestionKind::Textarea { max_length: 1_000 },
     );
-    let 数字 = 题目(
-        Uuid::new_v4(),
-        "数字",
-        QuestionKind::Number {
-            integer: false,
-            min: None,
-            max: None,
-        },
-    );
+    let 数字 = 数字题目("数字");
     let 评分 = 题目(
         Uuid::new_v4(),
         "评分",
@@ -951,11 +843,11 @@ fn 导出把表头与行批次分开且批次不带重复表头() {
         "固定前缀列必须包含 outcome：{表头}"
     );
 
-    let rows = vec![完成行(
-        Uuid::new_v4(),
+    let rows = vec![单题行(
         时刻("2026-10-20T00:00:00Z"),
-        答案(&[(多选.id, json!([]))]),
-        状态(&[(多选.id, AnswerState::Unanswered)]),
+        多选.id,
+        Some(json!([])),
+        AnswerState::Unanswered,
     )];
     let 行 =
         String::from_utf8(encode_csv_rows(&文档, Uuid::new_v4(), 2, &rows).expect("行编码成功"))

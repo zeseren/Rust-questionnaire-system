@@ -53,17 +53,11 @@ fn 缺少数据库地址时给出配置项名称() {
 #[test]
 fn 数据库连接串必须是合法的_postgresql_url() {
     assert_eq!(
-        配置(&[("DATABASE_URL", "这不是 URL")])
-            .err()
-            .unwrap()
-            .to_string(),
+        拒绝原因(&[("DATABASE_URL", "这不是 URL")]),
         "DATABASE_URL 格式错误"
     );
     assert_eq!(
-        配置(&[("DATABASE_URL", "mysql://user:pass@127.0.0.1:3306/db")])
-            .err()
-            .unwrap()
-            .to_string(),
+        拒绝原因(&[("DATABASE_URL", "mysql://user:pass@127.0.0.1:3306/db")]),
         "DATABASE_URL 必须使用 PostgreSQL"
     );
     assert_eq!(

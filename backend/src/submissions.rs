@@ -251,6 +251,17 @@ async fn read_public_survey_meta(state: &AppState, id: Uuid) -> AppResult<Public
     })
 }
 
+/// 读取发布者账号的禁用标志；只读题面与提交事务共用同一投影。
+async fn publisher_disabled(db: &impl ConnectionTrait, owner_id: Uuid) -> AppResult<bool> {
+    user::Entity::find_by_id(owner_id)
+        .select_only()
+        .column(user::Column::Disabled)
+        .into_tuple::<bool>()
+        .one(db)
+        .await?
+        .ok_or_else(|| AppError::internal("survey publisher is missing"))
+}
+
 /// 只读的公开可见性检查：发布者未禁用、回收可用且当前版本存在。
 async fn load_public_survey(
     state: &AppState,
@@ -264,14 +275,7 @@ async fn load_public_survey(
         .one(&state.db)
         .await?
         .ok_or_else(AppError::not_found)?;
-    let publisher_disabled = user::Entity::find_by_id(survey.owner_id)
-        .select_only()
-        .column(user::Column::Disabled)
-        .into_tuple::<bool>()
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| AppError::internal("survey publisher is missing"))?;
-    if publisher_disabled {
+    if publisher_disabled(&state.db, survey.owner_id).await? {
         return Err(AppError::conflict(
             "publisher_disabled",
             "发布者账号暂不可用，问卷暂停接受填写",
@@ -511,13 +515,7 @@ async fn lock_public_survey(
         Some(FillingMode::Anonymous) | None => None,
     };
     // 发布者禁用状态在同一事务内读取；禁用不能阻止已经成功的合法重试。
-    let owner_disabled = user::Entity::find_by_id(survey.owner_id)
-        .select_only()
-        .column(user::Column::Disabled)
-        .into_tuple::<bool>()
-        .one(&tx)
-        .await?
-        .ok_or_else(|| AppError::internal("survey publisher is missing"))?;
+    let owner_disabled = publisher_disabled(&tx, survey.owner_id).await?;
     Ok(LockedSurvey {
         tx,
         survey,
@@ -580,13 +578,8 @@ struct HashWriter(Sha256);
 
 impl std::io::Write for HashWriter {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        self.write_all(buffer)?;
-        Ok(buffer.len())
-    }
-
-    fn write_all(&mut self, buffer: &[u8]) -> std::io::Result<()> {
         self.0.update(buffer);
-        Ok(())
+        Ok(buffer.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {

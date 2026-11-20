@@ -247,13 +247,10 @@ async fn 路径参数解析失败映射为四百_invalid_path() {
     let router = Router::new()
         .route("/api/items/{id}", get(显示路径))
         .with_state(test_state());
-    let (状态, _, body) = send_raw_http(router, &合法).await;
+    let (状态, _, body) = send_raw_http(router.clone(), &合法).await;
     assert_eq!(状态, StatusCode::OK);
     assert_eq!(body, json!(编号.to_string()));
 
-    let router = Router::new()
-        .route("/api/items/{id}", get(显示路径))
-        .with_state(test_state());
     let (状态, _, body) = send_raw_http(
         router,
         "GET /api/items/not-a-uuid HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",

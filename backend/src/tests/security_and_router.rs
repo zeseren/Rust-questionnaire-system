@@ -30,6 +30,19 @@ fn 报文(方法: &str, 路径: &str, 体: &str) -> String {
     报文
 }
 
+/// 带转发头的登录请求，用于验证代理信任下的分桶。
+fn 转发请求(转发: &str) -> axum::extract::Request {
+    raw_request(
+        "POST",
+        "/api/auth/login",
+        &[
+            ("origin", "http://localhost:3000"),
+            ("x-csrf-protection", "1"),
+            ("x-forwarded-for", 转发),
+        ],
+    )
+}
+
 #[tokio::test]
 async fn 安全方法免于_csrf_与限流() {
     let state = test_state();
@@ -181,25 +194,14 @@ async fn 信任代理时按转发头分桶() {
         config: Arc::new(config),
         ..test_state()
     };
-    let 请求 = |转发: &str| {
-        raw_request(
-            "POST",
-            "/api/auth/login",
-            &[
-                ("origin", "http://localhost:3000"),
-                ("x-csrf-protection", "1"),
-                ("x-forwarded-for", 转发),
-            ],
-        )
-    };
 
     for _ in 0..2 {
-        security::check(&state, &请求("203.0.113.7")).expect("同一客户端在配额内必须通过");
+        security::check(&state, &转发请求("203.0.113.7")).expect("同一客户端在配额内必须通过");
     }
     let error =
-        security::check(&state, &请求("203.0.113.7")).expect_err("同一客户端超出配额必须限流");
+        security::check(&state, &转发请求("203.0.113.7")).expect_err("同一客户端超出配额必须限流");
     assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
-    security::check(&state, &请求("203.0.113.8")).expect("不同客户端必须使用各自的分桶");
+    security::check(&state, &转发请求("203.0.113.8")).expect("不同客户端必须使用各自的分桶");
     security::check(
         &state,
         &raw_request(
@@ -214,10 +216,11 @@ async fn 信任代理时按转发头分桶() {
     )
     .expect("缺少 X-Forwarded-For 时回退到 X-Real-IP");
     // 最右侧的有效转发地址生效：左侧是客户端可追加伪造的内容，右侧才是可信代理写入的地址。
-    security::check(&state, &请求("203.0.113.7, 203.0.113.9")).expect("最右侧有效转发地址决定分桶");
-    security::check(&state, &请求("198.51.100.1, 203.0.113.9"))
+    security::check(&state, &转发请求("203.0.113.7, 203.0.113.9"))
+        .expect("最右侧有效转发地址决定分桶");
+    security::check(&state, &转发请求("198.51.100.1, 203.0.113.9"))
         .expect("同一最右侧转发地址共享分桶");
-    let error = security::check(&state, &请求("203.0.113.1, 203.0.113.9"))
+    let error = security::check(&state, &转发请求("203.0.113.1, 203.0.113.9"))
         .expect_err("同一最右侧转发地址的第三次请求必须限流");
     assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
 
@@ -242,10 +245,10 @@ async fn 信任代理时按转发头分桶() {
 
     // 最右项不可解析时不得向左回退到客户端可伪造的地址，而是落到对端哨兵桶。
     for 左侧 in ["203.0.113.230", "203.0.113.231"] {
-        security::check(&state, &请求(&format!("{左侧}, not-an-ip")))
+        security::check(&state, &转发请求(&format!("{左侧}, not-an-ip")))
             .expect("最右项非法时按对端地址分桶");
     }
-    let error = security::check(&state, &请求("203.0.113.232, not-an-ip"))
+    let error = security::check(&state, &转发请求("203.0.113.232, not-an-ip"))
         .expect_err("最右项非法时不得回退到左侧地址");
     assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
 }
@@ -254,21 +257,10 @@ async fn 信任代理时按转发头分桶() {
 #[tokio::test]
 async fn 未信任代理时忽略转发头() {
     let state = test_state();
-    let 请求 = |转发: &str| {
-        raw_request(
-            "POST",
-            "/api/auth/login",
-            &[
-                ("origin", "http://localhost:3000"),
-                ("x-csrf-protection", "1"),
-                ("x-forwarded-for", 转发),
-            ],
-        )
-    };
-    security::check(&state, &请求("203.0.113.1")).expect("第一次请求在配额内");
-    security::check(&state, &请求("203.0.113.2")).expect("伪造不同 IP 不产生新桶");
-    let error =
-        security::check(&state, &请求("203.0.113.3")).expect_err("共用哨兵桶的第 3 次请求必须限流");
+    security::check(&state, &转发请求("203.0.113.1")).expect("第一次请求在配额内");
+    security::check(&state, &转发请求("203.0.113.2")).expect("伪造不同 IP 不产生新桶");
+    let error = security::check(&state, &转发请求("203.0.113.3"))
+        .expect_err("共用哨兵桶的第 3 次请求必须限流");
     assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
 }
 
