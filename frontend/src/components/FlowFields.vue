@@ -4,7 +4,7 @@
 <!-- 预览和填写共用同一会话；只有显式确认才交付当前有效答案。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, watch } from 'vue'
-import { FlowInputs } from '../flow-inputs'
+import { FlowInputs, replayEvents } from '../flow-inputs'
 import { LogicError } from '../logic'
 import type { Answer, FlowEvent, FlowSnapshot, Question, SurveyDocument } from '../types'
 import { isAnswered } from '../answers'
@@ -19,8 +19,8 @@ const props = withDefaults(
     preview?: boolean
     errors?: Record<string, string>
     hideFooter?: boolean
-    /** 上次未提交的填写进度（按版本暂存的事件序列）。 */
-    restore?: FlowEvent[]
+    /** 上次未提交的填写进度；本地存储读回后形状不可信，由回放助手逐项校验。 */
+    restore?: readonly unknown[]
   }>(),
   { errors: () => ({}), hideFooter: false, restore: () => [] },
 )
@@ -28,6 +28,8 @@ const emit = defineEmits<{
   submit: [answers: Answer[]]
   change: [count: number]
   reset: []
+  /** 暂存进度回放结果；仅当存在待回放事件时通知父级。 */
+  replayed: [applied: number, total: number]
 }>()
 let inputs: FlowInputs | undefined
 /** 规则问卷已应用的事件序列；普通问卷按每题最新输入派生，不保留按键历史。 */
@@ -48,43 +50,25 @@ function refresh() {
   unsettled.value = inputs?.unsettled() ?? new Set()
   for (const id of snapshot.value?.cleared ?? []) touched.value.delete(id)
 }
-/** 回放暂存进度；遇到不支持或与当前题面不兼容的事件时，保留已成功回放的前缀并停止。 */
-function replay(events: readonly FlowEvent[]) {
-  if (!inputs) return
-  const session = inputs
-  for (const event of events) {
-    try {
-      if (!event || typeof event !== 'object') break
-      if (event.type === 'change') {
-        if (typeof event.question_id !== 'string') break
-        session.change(event.question_id, event.value as InputValue)
-      } else if (event.type === 'next') {
-        if (plain.value) break
-        session.next()
-      } else if (event.type === 'previous') {
-        if (plain.value) break
-        session.previous()
-      } else break
-      if (!plain.value) recorded.push(event)
-    } catch {
-      // 未可信草稿可能包含不适用事件：保留此前已成功回放的前缀。
-      break
-    }
-  }
-}
-function buildSession(restore: readonly FlowEvent[]) {
+function buildSession(restore: readonly unknown[]) {
   inputs = undefined
   recorded = []
   error.value = ''
   touched.value = new Set()
   attempted.value = false
+  let applied = 0
   try {
-    inputs = new FlowInputs(props.document)
-    replay(restore)
+    const session = new FlowInputs(props.document)
+    inputs = session
+    const result = replayEvents(session, restore, plain.value)
+    recorded = result.events
+    applied = result.applied
   } catch (reason) {
     error.value = message(reason, '流程无法加载')
   }
   refresh()
+  // 只有真实存在过暂存事件才提示；重置或空草稿不能复活旧通知。
+  if (restore.length) emit('replayed', applied, restore.length)
   emit('change', Object.values(values.value).filter(isAnswered).length)
 }
 function initSession() {
@@ -170,15 +154,19 @@ const numbers = computed<Record<string, number>>(() => {
 })
 const fieldErrors = computed<Record<string, string>>(() => {
   const result: Record<string, string> = {}
+  const current = snapshot.value
   for (const q of pageDocument.value.questions) {
     // 引擎还没见过的数字前缀按“输入中”处理，不显示上一轮遗留的校验错误；结算后照常显示。
     if (unsettled.value.has(q.id)) continue
-    const code = snapshot.value?.errors[q.id]
-    const text =
-      props.errors[q.id] ||
-      (code && (attempted.value || touched.value.has(q.id))
-        ? new LogicError(code, '$.answers', q.id).message
-        : '')
+    const serverError = props.errors[q.id]
+    if (serverError) {
+      result[q.id] = serverError
+      continue
+    }
+    if (!attempted.value && !touched.value.has(q.id)) continue
+    const detail = current?.error_messages?.[q.id]
+    const code = current?.errors[q.id]
+    const text = detail || (code && new LogicError(code, '$.answers', q.id).message)
     if (text) result[q.id] = text
   }
   return result

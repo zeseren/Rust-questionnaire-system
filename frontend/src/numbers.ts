@@ -15,9 +15,8 @@ export function isNumberPrefix(raw: string): boolean {
   return raw !== '' && !NUMBER_LITERAL.test(raw) && NUMBER_PREFIX.test(raw)
 }
 
-export function numberError(raw: string): string | undefined {
+/** 完整输入能否按同一文法转成可精确表示的有限数字；具体修正文案由引擎按题级给出。 */
+export function isNumberLiteral(raw: string): boolean {
   // 调用方已由 numberInput 完成空白修剪，下方文法也拒绝空白。
-  if (!NUMBER_LITERAL.test(raw) || !Number.isFinite(Number(raw)))
-    return '请输入有限数字，例如 12、0.5 或 1e3。'
-  return undefined
+  return NUMBER_LITERAL.test(raw) && Number.isFinite(Number(raw))
 }

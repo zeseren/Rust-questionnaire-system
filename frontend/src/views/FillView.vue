@@ -6,19 +6,19 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { onBeforeRouteLeave, RouterLink, useRoute } from 'vue-router'
 import { api, ApiError, message } from '../api'
-import { isSubmission } from '../answers'
 import { dateTime, shareLink } from '../format'
 import { decode } from '../json'
+import {
+  ANONYMOUS_SCOPE,
+  draftKeyFor,
+  freezePending,
+  pendingKeyFor,
+  scopeFor,
+} from '../pending-submission'
+import type { FrozenPending } from '../pending-submission'
 import { useAuth } from '../stores'
 import { newId } from '../uuid'
-import type {
-  Answer,
-  FlowEvent,
-  PublicSurvey,
-  PublicSurveyMeta,
-  Receipt,
-  Submission,
-} from '../types'
+import type { Answer, FlowEvent, PublicSurvey, PublicSurveyMeta, Receipt } from '../types'
 import FlowFields from '../components/FlowFields.vue'
 import AuthForm from '../components/AuthForm.vue'
 import Modal from '../components/Modal.vue'
@@ -28,10 +28,15 @@ import LoadingState from '../components/LoadingState.vue'
 const route = useRoute()
 const auth = useAuth()
 const id = String(route.params.id)
-const STORAGE_PREFIX = 'wenxu:fill-draft:'
 /** 本地暂存按问卷与发布版本隔离，换版本后不会把旧输入带到新题面。 */
 interface FillDraft {
   events?: FlowEvent[]
+}
+/** 题面载入时的账号快照：草稿与未决提交都只使用这个作用域。 */
+interface LoadedScope {
+  accountId: string | null
+  scope: string
+  versionId: string
 }
 const meta = shallowRef<PublicSurveyMeta | null>(null)
 const survey = shallowRef<PublicSurvey | null>(null)
@@ -45,18 +50,21 @@ const busy = ref(false)
 const loginNeeded = ref(false)
 const uncertain = ref(false)
 const versionChanged = ref(false)
-const restored = ref(false)
-const pending = shallowRef<Submission | null>(null)
+/** 当前登录账号与冻结提交账号不一致：保留原提交，只提示切回原账号。 */
+const accountMismatch = ref(false)
+const replayed = ref<{ applied: number; total: number } | null>(null)
+const pending = shallowRef<FrozenPending | null>(null)
+const loadedScope = shallowRef<LoadedScope | null>(null)
 const flowFields = ref<InstanceType<typeof FlowFields>>()
 const flowAnswered = ref(0)
 /** 「登录限次」但当前没有会话：先展示上下文与登录引导，不直接撞 401。 */
 const loginRequired = computed(() => meta.value?.mode === 'login_once' && !auth.user)
 const draftKey = computed(() =>
-  survey.value ? `${STORAGE_PREFIX}${id}:${survey.value.version_id}` : '',
+  loadedScope.value ? draftKeyFor(id, loadedScope.value.versionId, loadedScope.value.scope) : '',
 )
-/** 未决提交按问卷与账号保存：同一浏览器换账号后，不会把上一个账号的答案当成本人的重试。 */
-function pendingKey() {
-  return `${STORAGE_PREFIX}${id}:pending:${auth.user?.id ?? 'anonymous'}`
+/** 当前要核对的账号：匿名始终 anonymous；登录限次缺账号时为 null，不降级为匿名。 */
+function currentScope(): string | null {
+  return scopeFor(survey.value?.mode, auth.user?.id ?? null)
 }
 function flowChanged(count: number) {
   flowAnswered.value = count
@@ -64,6 +72,26 @@ function flowChanged(count: number) {
   scheduleSave()
 }
 const answered = computed(() => flowAnswered.value)
+/** 0/0 表示本次没有可提示的暂存；全量、部分与全失败三种结果都必须明确告知。 */
+const replayNotice = computed(() => {
+  const info = replayed.value
+  if (!info || info.total <= 0) return ''
+  if (info.applied >= info.total) return '已恢复上次未提交的全部填写进度，可继续填写或清空重试。'
+  if (info.applied <= 0)
+    return '上次未提交的填写进度与当前题面不兼容，未能恢复；当前为空白，请重新填写或清空暂存。'
+  return `已恢复上次未提交填写进度的前 ${info.applied} 项（共 ${info.total} 项），其余内容与当前题面不兼容，未恢复。可继续填写或清空重试。`
+})
+function replayedDraft(applied: number, total: number) {
+  if (!Number.isFinite(applied) || !Number.isFinite(total) || total <= 0) {
+    replayed.value = null
+    return
+  }
+  const totalCount = Math.floor(total)
+  replayed.value = {
+    applied: Math.min(Math.max(0, Math.floor(applied)), totalCount),
+    total: totalCount,
+  }
+}
 function readDraft(key: string): FillDraft | null {
   try {
     const raw = localStorage.getItem(key)
@@ -80,7 +108,9 @@ function writeDraft() {
   if (!draftKey.value || receipt.value) return
   const draft: FillDraft = { events: flowFields.value?.events() ?? [] }
   if (!draft.events?.length) {
-    clearDraft()
+    // 恢复失败时保留原暂存，等用户明确清空；不能让重放后的空事件把它悄悄删掉。
+    const failedReplay = replayed.value && replayed.value.applied < replayed.value.total
+    if (!failedReplay) clearDraft()
     return
   }
   try {
@@ -89,27 +119,26 @@ function writeDraft() {
     // 隐私模式等存储不可用时静默跳过，填写本身不受影响。
   }
 }
-function readPending(): Submission | null {
+function readPending(scope: string): FrozenPending | null {
   try {
-    const raw = localStorage.getItem(pendingKey())
+    const raw = localStorage.getItem(pendingKeyFor(id, scope))
     if (!raw) return null
-    // 本地存储可被任意改写：按 unknown 读入，形状完整才当作未决提交。
-    const stored = decode<unknown>(raw)
-    return isSubmission(stored) ? stored : null
+    // 作用域只来自存储键；本地载荷仍按不可信输入校验，形状完整才冻结。
+    return freezePending(decode<unknown>(raw), scope)
   } catch {
     return null
   }
 }
-function writePending(submission: Submission) {
+function writePending(frozen: FrozenPending) {
   try {
-    localStorage.setItem(pendingKey(), JSON.stringify(submission))
+    localStorage.setItem(pendingKeyFor(id, frozen.scope), JSON.stringify(frozen.payload))
   } catch {
     // 存储不可用时只在本次会话内保留原载荷。
   }
 }
-function clearPending() {
+function clearPending(scope: string) {
   try {
-    localStorage.removeItem(pendingKey())
+    localStorage.removeItem(pendingKeyFor(id, scope))
   } catch {}
 }
 let saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -117,27 +146,29 @@ function scheduleSave() {
   clearTimeout(saveTimer)
   saveTimer = setTimeout(writeDraft, 400)
 }
+function removeDraft(key: string) {
+  try {
+    localStorage.removeItem(key)
+  } catch {}
+}
 function clearDraft() {
   clearTimeout(saveTimer)
   saveTimer = undefined
-  if (!draftKey.value) return
-  try {
-    localStorage.removeItem(draftKey.value)
-  } catch {}
+  if (draftKey.value) removeDraft(draftKey.value)
 }
 /** 流程页「清空重填」：同时丢弃已回放的进度，避免下次初始化又被恢复。 */
 function resetFlowDraft() {
   flowDraft.value = []
-  restored.value = false
+  replayed.value = null
   clearDraft()
 }
-function applyStoredDraft(result: PublicSurvey) {
+function applyStoredDraft(result: PublicSurvey, scope: string) {
   flowDraft.value = []
-  restored.value = false
-  const draft = readDraft(`${STORAGE_PREFIX}${id}:${result.version_id}`)
+  replayed.value = null
+  const draft = readDraft(draftKeyFor(id, result.version_id, scope))
   if (!draft || !Array.isArray(draft.events) || !draft.events.length) return
+  // 只交付事件；是否真正恢复由 FlowFields 的 replayed 事件决定，父端不提前宣告成功。
   flowDraft.value = draft.events
-  restored.value = true
 }
 async function load() {
   loading.value = true
@@ -158,23 +189,39 @@ async function load() {
 async function loadSurvey() {
   loading.value = true
   error.value = ''
+  // 题面加载时冻结账号：此后即使 auth.user 变化，草稿与未决提交也不改作用域。
+  const accountId = auth.user?.id ?? null
   try {
     const result = await api<PublicSurvey>(`/api/public/surveys/${id}`)
+    const scope = scopeFor(result.mode, accountId)
+    if (!scope) {
+      // 登录限次缺少账号时不能把题面落到 anonymous 作用域。
+      survey.value = null
+      loadedScope.value = null
+      loginNeeded.value = true
+      return
+    }
     survey.value = result
+    loadedScope.value = {
+      accountId,
+      scope,
+      versionId: result.version_id,
+    }
     versionChanged.value = false
     uncertain.value = false
+    accountMismatch.value = false
     pending.value = null
     receipt.value = null
     errors.value = {}
     flowAnswered.value = 0
-    applyStoredDraft(result)
+    applyStoredDraft(result, loadedScope.value.scope)
     // 未决提交只在版本一致时回放，保证“重试原提交”沿用原来的幂等键。
-    const storedPending = readPending()
-    if (storedPending && storedPending.version_id === result.version_id) {
+    const storedPending = readPending(loadedScope.value.scope)
+    if (storedPending && storedPending.payload.version_id === result.version_id) {
       pending.value = storedPending
       uncertain.value = true
     } else if (storedPending) {
-      clearPending()
+      clearPending(storedPending.scope)
     }
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) loginNeeded.value = true
@@ -184,13 +231,15 @@ async function loadSurvey() {
   }
 }
 function resetFill() {
-  if (busy.value || uncertain.value || versionChanged.value || !answered.value) return
-  if (!window.confirm('确定清空当前已填写的回答吗？')) return
+  if (busy.value || uncertain.value || versionChanged.value) return
+  // 恢复提示存在时即使没有答案也允许明确清空损坏或不可恢复的暂存。
+  if (answered.value && !window.confirm('确定清空当前已填写的回答吗？')) return
   error.value = ''
   errors.value = {}
   flowAnswered.value = 0
-  flowFields.value?.reset()
-  restored.value = false
+  replayed.value = null
+  if (flowFields.value) flowFields.value.reset()
+  else flowDraft.value = []
   clearDraft()
 }
 /** 放弃冻结的未决提交并解锁表单；只在用户明确接受重复提交风险后执行。 */
@@ -201,15 +250,37 @@ function abandonPending() {
     )
   )
     return
+  const scope = pending.value?.scope
   pending.value = null
   uncertain.value = false
+  accountMismatch.value = false
   error.value = ''
-  clearPending()
+  if (scope) clearPending(scope)
 }
 async function loginSuccess() {
   loginNeeded.value = false
   error.value = ''
-  if (!survey.value) await loadSurvey()
+  // 冻结作用域是唯一依据：B 登录后既不发送 A 的载荷，也不把幂等键迁到 B。
+  if (
+    pending.value &&
+    pending.value.scope !== ANONYMOUS_SCOPE &&
+    pending.value.scope !== auth.user?.id
+  ) {
+    accountMismatch.value = true
+    loginNeeded.value = true
+    error.value = '当前登录账号与原提交账号不一致，请切回原账号后重试；原回答与提交标识仍然保留。'
+    return
+  }
+  accountMismatch.value = false
+  if (!survey.value) {
+    await loadSurvey()
+    return
+  }
+  // 登录限次换成另一个账号后重新载入题面，避免继续显示上一账号的草稿。
+  if (survey.value.mode === 'login_once' && loadedScope.value?.accountId !== auth.user?.id) {
+    writeDraft()
+    await loadSurvey()
+  }
 }
 async function focusError() {
   const first = survey.value?.document.questions.find((question) => errors.value[question.id])
@@ -218,38 +289,70 @@ async function focusError() {
 async function submit(flowAnswers?: Answer[]) {
   if (!survey.value || busy.value || receipt.value || versionChanged.value) return
   error.value = ''
+  // 登录限次必须在首次冻结载荷前已有账号；未登录输入继续留在草稿，不冻结为匿名作用域。
+  if (survey.value.mode === 'login_once' && !auth.user) {
+    loginNeeded.value = true
+    return
+  }
+  const loaded = loadedScope.value
+  const scope = currentScope()
+  // 首次冻结只能使用题面载入时的作用域，并且当前账号必须仍是载入账号。
+  if (!loaded || !scope || loaded.scope !== scope) {
+    accountMismatch.value = true
+    loginNeeded.value = true
+    error.value = '当前登录账号与原提交账号不一致，请切回原账号后重试；原回答与提交标识仍然保留。'
+    return
+  }
   if (!pending.value) {
     flowAnswers ??= flowFields.value?.submissionAnswers()
     if (!flowAnswers) return
     errors.value = {}
     pending.value = {
-      version_id: survey.value.version_id,
-      // UUIDv7 同样满足后端对幂等秘密的版本校验。
-      idempotency_key: newId(),
-      answers: flowAnswers.map((answer) => ({
-        ...answer,
-        value: Array.isArray(answer.value) ? [...answer.value] : answer.value,
-      })),
+      scope: loaded.scope,
+      payload: {
+        version_id: survey.value.version_id,
+        // UUIDv7 同样满足后端对幂等秘密的版本校验。
+        idempotency_key: newId(),
+        answers: flowAnswers.map((answer) => ({
+          ...answer,
+          value: Array.isArray(answer.value) ? [...answer.value] : answer.value,
+        })),
+      },
     }
   }
-  // 登录态由提交接口鉴权；未登录时先弹出登录表单，不额外预请求账号信息。
-  if (survey.value.mode === 'login_once' && !auth.user) {
+  const frozen = pending.value
+  if (!frozen) return
+  // 发送前再次核对冻结作用域：B 登录后不能拿 A 的答案与幂等键去 POST。
+  if (frozen.scope !== loaded.scope || frozen.scope !== scope) {
+    accountMismatch.value = true
     loginNeeded.value = true
+    error.value = '当前登录账号与原提交账号不一致，请切回原账号后重试；原回答与提交标识仍然保留。'
     return
   }
+  accountMismatch.value = false
   // 请求发出前先冻结载荷：请求途中关闭页面也能用原幂等键重试。
-  if (pending.value) writePending(pending.value)
+  writePending(frozen)
   busy.value = true
   try {
-    const result = await api<Receipt>(`/api/public/surveys/${id}/responses`, 'POST', pending.value)
+    // 匿名不声明账号；登录限次把冻结账号交给后端核对真实 Cookie 身份。
+    const expectedAccount = frozen.scope === ANONYMOUS_SCOPE ? undefined : frozen.scope
+    const result = await api<Receipt>(
+      `/api/public/surveys/${id}/responses`,
+      'POST',
+      frozen.payload,
+      { expectedAccount },
+    )
     if (result.status !== 'submitted')
       throw new ApiError(0, 'invalid_response', '尚未收到完整回执，请重试原提交。')
     receipt.value = result
     pending.value = null
     uncertain.value = false
-    restored.value = false
+    accountMismatch.value = false
+    replayed.value = null
+    // 成功清理使用冻结作用域，不随此后 auth.user 或题面状态改变。
     clearDraft()
-    clearPending()
+    removeDraft(draftKeyFor(id, frozen.payload.version_id, frozen.scope))
+    clearPending(frozen.scope)
     window.scrollTo({ top: 0 })
     await nextTick()
     receiptPanel.value?.focus()
@@ -257,9 +360,13 @@ async function submit(flowAnswers?: Answer[]) {
     error.value = message(reason)
     // 同一幂等键连同原载荷已经落库：这是明确结果，不再按“结果未知”锁定表单。
     const conflict = reason instanceof ApiError && reason.code === 'idempotency_conflict'
+    const accountChanged = reason instanceof ApiError && reason.code === 'account_changed'
     if (conflict)
       error.value =
         '这次提交的标识此前已记录过另一份回答，原提交不会重复计入。请核对答案后重新提交。'
+    if (accountChanged)
+      error.value =
+        '当前浏览器登录的账号与原提交账号不一致。请切换回原账号后重试；原回答与提交标识仍然保留。'
     if (reason instanceof ApiError) {
       if (reason.question_id) {
         errors.value = { [reason.question_id]: reason.message }
@@ -268,16 +375,21 @@ async function submit(flowAnswers?: Answer[]) {
       if (reason.status === 401) loginNeeded.value = true
       if (reason.code === 'version_changed') versionChanged.value = true
     }
-    // 只有拿不到明确结果（网络中断、服务端故障、重新登录中）才锁定并保留冻结载荷。
+    // account_changed 是拒绝写入但必须保留原提交；其它拿不到明确结果的情况同样锁定。
     uncertain.value =
-      !conflict &&
-      (reason instanceof ApiError
-        ? reason.status === 0 || reason.status >= 500 || reason.status === 401
-        : true)
-    // 结果未知时保留请求前已写入的冻结载荷；明确失败才丢弃。
+      accountChanged ||
+      (!conflict &&
+        (reason instanceof ApiError
+          ? reason.status === 0 || reason.status >= 500 || reason.status === 401
+          : true))
+    if (accountChanged) {
+      accountMismatch.value = true
+      loginNeeded.value = true
+    }
+    // 结果未知时保留请求前已写入的冻结载荷；明确失败才按冻结作用域丢弃。
     if (!uncertain.value) {
       pending.value = null
-      clearPending()
+      clearPending(frozen.scope)
     }
   } finally {
     busy.value = false
@@ -379,9 +491,10 @@ onBeforeUnmount(() => {
           </RouterLink>
         </p>
       </div>
-      <form v-else-if="survey" novalidate @submit.prevent="submit()">
-        <div v-if="restored" class="notice mt">
-          <div class="grow">已恢复上次未提交的填写进度，可继续填写或清空重试。</div>
+      <!-- 保持挂载以保留 A 的草稿与冻结状态，但账号不一致时不能透过弹窗背景看到原答案。 -->
+      <form v-else-if="survey" v-show="!accountMismatch" novalidate @submit.prevent="submit()">
+        <div v-if="replayNotice" class="notice mt">
+          <div class="grow">{{ replayNotice }}</div>
           <button
             type="button"
             class="text-button"
@@ -419,11 +532,12 @@ onBeforeUnmount(() => {
           :document="survey.document"
           :restore="flowDraft"
           :errors="errors"
-          :disabled="busy || uncertain || versionChanged"
+          :disabled="busy || uncertain || versionChanged || accountMismatch"
           :submit-disabled="loginNeeded"
-          :hide-footer="uncertain || versionChanged"
+          :hide-footer="uncertain || versionChanged || accountMismatch"
           @change="flowChanged"
           @reset="resetFlowDraft"
+          @replayed="replayedDraft"
           @submit="submit"
         />
         <p v-else class="notice mt">本问卷没有需要回答的题目。</p>
@@ -460,9 +574,15 @@ onBeforeUnmount(() => {
     </template>
   </div>
   <Modal v-if="loginNeeded && meta" title="请重新登录后继续" :dismissible="false">
-    <p class="subtle mb">当前回答仍然保留。请登录后重试提交。</p>
+    <p v-if="accountMismatch" class="subtle mb">
+      当前登录的不是原提交账号。原回答与提交标识仍然保留，请使用原账号登录后原样重试；系统不会把这份提交转给当前账号。
+    </p>
+    <p v-else class="subtle mb">当前回答仍然保留。请登录后重试提交。</p>
     <ErrorNotice :message="error" />
-    <AuthForm :initial-username="auth.user?.username" @success="loginSuccess" />
+    <AuthForm
+      :initial-username="accountMismatch ? '' : auth.user?.username"
+      @success="loginSuccess"
+    />
     <div class="actions between mt">
       <RouterLink class="text-button" to="/">先返回首页</RouterLink>
     </div>

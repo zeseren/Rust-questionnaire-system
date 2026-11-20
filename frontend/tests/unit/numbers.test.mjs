@@ -1,16 +1,14 @@
 //! 数字输入边界：修剪空白后只接受可精确表示有限双精度的十进制写法。
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { isNumberPrefix, numberError } from '../../src/numbers.ts'
+import { isNumberLiteral, isNumberPrefix } from '../../src/numbers.ts'
 
-const message = '请输入有限数字，例如 12、0.5 或 1e3。'
-
-test('numberError 接受整数、小数、科学计数法与负零', () => {
+test('isNumberLiteral 接受整数、小数、科学计数法与负零', () => {
   for (const raw of ['0', '-0', '12', '-12', '0.5', '1e3', '1E+3', '1e-3', '1e308'])
-    assert.equal(numberError(raw), undefined, raw)
+    assert.equal(isNumberLiteral(raw), true, raw)
 })
 
-test('numberError 拒绝非有限值与不规范写法并给出固定文案', () => {
+test('isNumberLiteral 拒绝非有限值与不规范写法', () => {
   for (const raw of [
     '',
     ' 12',
@@ -29,7 +27,7 @@ test('numberError 拒绝非有限值与不规范写法并给出固定文案', ()
     '--1',
     '−1',
   ])
-    assert.equal(numberError(raw), message, JSON.stringify(raw))
+    assert.equal(isNumberLiteral(raw), false, JSON.stringify(raw))
 })
 
 test('isNumberPrefix 只认还能补全成合法数字的未完成输入', () => {

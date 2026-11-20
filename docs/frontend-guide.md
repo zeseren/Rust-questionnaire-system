@@ -11,7 +11,7 @@
 | `/`、`/surveys`、`/archive` | `DashboardView.vue` | **工作台与案卷库**：展示核心指标账本栏（全部、回收中、草稿、已归档）、案卷列表/卡片视图切换、按状态与标题搜索、新建问卷（空白或三套内置规则模板）、复制问卷 |
 | `/login`、`/register` | `AuthView.vue` | **认证入口**：普通用户注册、全角色统一登录（管理员登录后侧边栏自动展示「平台管理」入口），支持安全站内跳转 `redirect` |
 | `/surveys/:id/edit` | `EditorView.vue` | **四工作区编纂台**：<br>1. **题目设计**：问卷标题、说明、收集目的、结束语及六类题型配置；<br>2. **规则与跳题**：可视化条件/变量/页面流程编辑与松烟墨文本 DSL 控制台双向切换；<br>3. **试填预览**：基于内存会话直接试填当前未保存草稿，可切换桌面/手机宽度；<br>4. **回收设置**：填写模式（公开匿名 / 登录限次）、截止时间、发布、关闭/恢复、归档、删除草稿与分享链接复制 |
-| `/s/:id` | `FillView.vue` | **受访者沉浸填写页**：公开匿名直接作答，登录限次模式先认证；所有问卷统一由 WASM `FlowSession` 驱动，普通问卷为隐式单页、无核对页、一步提交，有规则问卷分步渲染、回退自动清理失效分支答案、抵达终点后进入核对页确认提交；内置 UUIDv4 幂等重试保护 |
+| `/s/:id` | `FillView.vue` | **受访者沉浸填写页**：公开匿名直接作答，登录限次模式先认证；所有问卷统一由 WASM `FlowSession` 驱动，普通问卷为隐式单页、无核对页、一步提交，有规则问卷分步渲染、回退自动清理失效分支答案、抵达终点后进入核对页确认提交；首次提交由 `newId()` 生成 UUIDv7 幂等键并在重试时原样冻结 |
 | `/surveys/:id/reports` | `ReportsView.vue` | **分版本报表与导出**：按发布版本与北京时间 `[from, to)` 范围筛选；展示回收汇总、自然日趋势、各题三态计数（已答 / 适用未答 / 规则跳过）、选项占比、评分分布、数值统计、答卷明细弹窗与 CSV 下载 |
 | `/admin` | `AdminView.vue` | **平台治理**（仅管理员）：用户分页列表与禁用/启用、问卷治理列表与下架/恢复（可查看当前已发布题面，不暴露他人答卷）、操作审计日志列表 |
 | `/settings` | `SettingsView.vue` | **账户设置**：查看账户角色、切换外观主题（浅色 / 深色 / 跟随系统）、修改密码（成功后全设备会话失效并跳转登录） |
@@ -50,7 +50,7 @@ frontend/
     ├── api.ts / resource.ts    # Fetch 封装（含 CSRF 头与覆盖正文读取的 30s 超时）、带序号防竞态的异步资源加载器
     ├── json.ts / types.ts      # JSON 编解码助手与完整 API / 领域 TypeScript 类型定义
     ├── value-contract.ts       # Unicode 空白判定（U+0085 为空白、U+FEFF 为内容）与标量计数校验
-    ├── numbers.ts / format.ts  # 数字输入清洗与本地格式提示；北京时间格式化、状态名与分享链接
+    ├── numbers.ts / format.ts  # 数字输入清洗与数字文法判定；北京时间格式化、状态名与分享链接
     ├── documents.ts / answers.ts # 新题与复制题身份生成、文本上限常量；作答输入类型、是否已答判定与本地提交载荷校验
     ├── survey-templates.ts     # 三套内置规则问卷模板（满意度回访、产品体验调研、活动报名）
     ├── logic.ts                # LogicError / LogicTextError 错误类型与中文文案映射
@@ -88,8 +88,9 @@ frontend/
 
 ### 4.4 填写会话与幂等提交重试
 
-- **WASM 会话驱动**：填写页与编辑器试填预览共用 `FlowFields.vue` + `FlowInputs` + WASM `FlowSession`。普通问卷以隐式单页呈现，提交时临时前进完成本页必填与格式校验，通过后直接提交、不进入核对页；有规则问卷修改答案（`change`）会从入口重算有效路径并立即清理被跳过分支上的旧输入，抵达 `complete` 终点后展示核对清单，须显式确认才发起提交。
-- **冻结载荷与幂等重放**：点击提交时生成一次 `crypto.randomUUID()` 作为 `idempotency_key`。若遇到网络中断、30 秒读取超时或 `5xx` 错误，页面将**冻结**原版本、原答案与原幂等键，仅展示「重试原提交」按钮（`login_once` 模式还会校验重试账号与首次提交账号一致），杜绝超时重发产生重复答卷。
+- **WASM 会话驱动**：填写页与编辑器试填预览共用 `FlowFields.vue` + `FlowInputs` + WASM `FlowSession`。普通问卷以隐式单页呈现，提交时临时前进完成本页必填与格式校验，通过后直接提交、不进入核对页；有规则问卷修改答案（`change`）会从入口重算有效路径并立即清理被跳过分支上的旧输入，抵达 `complete` 终点后展示核对清单，须显式确认才发起提交。`FlowSnapshot` 同时返回稳定错误码 `errors` 与题级可修正说明 `error_messages`；数字输入停留在未完成的过渡前缀（如 `-`、`12.`、`1e-`）时不提前判错，失焦结算后才显示结果。界面文案优先使用服务端题级错误，其次使用引擎 `error_messages`，最后才回退 `errors` 的稳定错误码文案。
+- **暂存进度恢复**：未提交进度按问卷与发布版本写入本地；重新打开时按顺序回放事件，只应用形状有效且当前路径可用的成功前缀（普通问卷只认改答），跳过页或损坏事件不会被当作已恢复。`FlowFields` 通过 `replayed(applied, total)` 通知父级展示全成功、部分恢复或全失败反馈；重置与空草稿不会重新弹出恢复提示。
+- **冻结载荷与幂等重放**：点击提交时由 `newId()` 生成一次 UUIDv7 作为 `idempotency_key`，随后将原版本、原答案与该键一起冻结，重试不会再生成新键。若遇到网络中断、30 秒读取超时或 `5xx` 错误，页面仅展示「重试原提交」按钮。`login_once` 模式重试时携带 `X-Expected-Account: <首次提交的账号 ID>` 条件头；后端先按 Cookie 认证，再核对声明账号与真实身份一致，不一致返回 `409 account_changed`，声明头绝不能覆盖认证结果。匿名模式完全不采集、不发送账号 ID。
 - **版本更新保护**：若提交时返回 `409 version_changed`，页面保留用户已填内容并提示在新窗口打开最新题面核对，绝不把旧答案静默映射到新版本。
 
 ---
@@ -131,7 +132,7 @@ frontend/
 | `inspectLogicText(source, questions)` | 解析并返回绑定速查与诊断（不抛出），供规则文本编辑器使用 |
 | `formatLogicText(logic, questions)` | 将 `DocumentLogic` 格式化为确定性文本 DSL（与后端逐字节一致） |
 | `compileDocumentLogic(logic, questions)` | 校验整份规则模型，返回计算变量拓扑顺序 `variableOrder` |
-| `FlowSession` | 有状态流程会话类：支持 `snapshot()` 与 `dispatch(event)` |
+| `FlowSession` | 有状态流程会话类：支持 `snapshot()` 与 `dispatch(event)`；快照的 `errors` 是稳定错误码，`error_messages` 提供对应题级修正说明 |
 
 - **双环境兼容**：Vite 浏览器构建使用 `pkg/logic_wasm.js` bundler 胶水；Node 测试环境（`node --test`）通过 `pkg/logic_wasm_bg.js` 配合 `readFileSync` 加载本地 `logic_wasm_bg.wasm`。
 - **重建命令**：修改 `logic-core/` 或 `logic-wasm/` 后，在 `frontend/` 下运行 `pnpm run wasm:build` 即可重新编译并更新 `src/wasm/pkg/` 下的五件套入库产物。

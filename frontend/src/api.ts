@@ -29,12 +29,18 @@ export function query(values: Record<string, string | number | null | undefined>
   })
   return search.size ? `?${search}` : ''
 }
+/** 窄发送选项：只允许声明公开填写冻结的账号，不开放任意请求头覆盖认证标记。 */
+export interface SendOptions {
+  /** 浏览器冻结的原提交账号；服务端只在真实 Cookie 认证后核对，匿名不传。 */
+  expectedAccount?: string
+}
 // 截止时间由调用方在读完正文后清除；失败路径立即清除，不遗留定时器。
 // 否则响应头到达后正文可以无限期停留，界面既不超时也拿不到结果。
 async function send(
   path: string,
   method = 'GET',
   body?: unknown,
+  options: SendOptions = {},
 ): Promise<{ response: Response; timer: number }> {
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), 30_000)
@@ -42,6 +48,7 @@ async function send(
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (method !== 'GET') headers['X-CSRF-Protection'] = '1'
     if (body !== undefined) headers['Content-Type'] = 'application/json'
+    if (options.expectedAccount) headers['X-Expected-Account'] = options.expectedAccount
     const response = await fetch(path, {
       method,
       headers,
@@ -77,8 +84,13 @@ async function send(
     )
   }
 }
-export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const { response, timer } = await send(path, method, body)
+export async function api<T>(
+  path: string,
+  method = 'GET',
+  body?: unknown,
+  options?: SendOptions,
+): Promise<T> {
+  const { response, timer } = await send(path, method, body, options)
   try {
     // 204 仅用于无响应体的写接口；调用方按 `void` 消费，`T` 不会被读取。
     if (response.status === 204) return undefined as T

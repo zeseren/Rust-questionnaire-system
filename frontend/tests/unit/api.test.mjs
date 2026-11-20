@@ -70,6 +70,43 @@ test('写请求统一附加 CSRF 标记，仅在携带请求体时声明 JSON', 
   assert.equal(withBody.body, JSON.stringify({ revision: 2 }))
 })
 
+test('写请求可窄传预期账号，同时保留 CSRF 与 JSON 头', async (t) => {
+  const env = installBrowserEnv(t)
+  let captured
+  env.fetch = async (path, init) => {
+    captured = { path, init }
+    return jsonResponse({ status: 'submitted' })
+  }
+  const payload = { version_id: QUESTION_ID, idempotency_key: QUESTION_ID, answers: [] }
+
+  await api('/api/public/surveys/1/responses', 'POST', payload, { expectedAccount: QUESTION_ID })
+
+  assert.equal(captured.path, '/api/public/surveys/1/responses')
+  assert.equal(captured.init.method, 'POST')
+  assert.equal(captured.init.headers['X-Expected-Account'], QUESTION_ID)
+  // 窄选项只能追加声明头，认证与内容类型策略仍由传输层统一决定。
+  assert.equal(captured.init.headers['X-CSRF-Protection'], '1')
+  assert.equal(captured.init.headers['Content-Type'], 'application/json')
+  assert.equal(captured.init.body, JSON.stringify(payload))
+})
+
+test('未声明预期账号时不发送该头，匿名提交保持原请求形状', async (t) => {
+  const env = installBrowserEnv(t)
+  const calls = []
+  env.fetch = async (_path, init) => {
+    calls.push(init)
+    return jsonResponse({ status: 'submitted' })
+  }
+
+  await api('/api/public/surveys/1/responses', 'POST', {})
+  assert.equal(calls.at(-1).headers['X-Expected-Account'], undefined)
+  assert.equal(calls.at(-1).headers['X-CSRF-Protection'], '1')
+
+  await api('/api/public/surveys/1/responses', 'POST', {}, { expectedAccount: '' })
+  assert.equal(calls.at(-1).headers['X-Expected-Account'], undefined, '空账号不得发送头')
+  assert.equal(calls.at(-1).headers['X-CSRF-Protection'], '1')
+})
+
 test('204 No Content 按无正文处理并返回 undefined', async (t) => {
   const env = installBrowserEnv(t)
   env.fetch = async () => new Response(null, { status: 204 })

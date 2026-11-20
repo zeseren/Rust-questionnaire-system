@@ -1,9 +1,9 @@
 //! 界面保留原始输入，流程只接收正确 JSON 类型。
 import { FlowSession } from './wasm/index.ts'
 import { LogicError } from './logic.ts'
-import { isNumberPrefix, numberError, numberInput } from './numbers.ts'
+import { isNumberLiteral, isNumberPrefix, numberInput } from './numbers.ts'
 import type { Inputs, InputValue } from './answers.ts'
-import type { Answer, FlowSnapshot, SurveyDocument } from './types.ts'
+import type { Answer, FlowEvent, FlowSnapshot, SurveyDocument } from './types.ts'
 
 export class FlowInputs {
   #document: SurveyDocument
@@ -60,6 +60,16 @@ export class FlowInputs {
       }))
   }
 
+  /** 当前步是否接受对该题的改答：未到终点、题目可见且属于当前页面。 */
+  #editable(questionId: string): boolean {
+    if (this.#snapshot.outcome || !this.#snapshot.visible.includes(questionId)) return false
+    const nodes = this.#document.logic?.flow?.nodes
+    // 未配置流程的隐式单页没有文档节点，当前页即全部可见题目。
+    if (!nodes) return true
+    const node = nodes.find((node) => node.id === this.#snapshot.current_node)
+    return node?.type === 'page' && node.question_ids.includes(questionId)
+  }
+
   #apply(questionId: string, value: InputValue, settled: boolean) {
     const question = this.#document.questions.find((question) => question.id === questionId)
     if (
@@ -69,6 +79,8 @@ export class FlowInputs {
     ) {
       // 过渡前缀：只留在界面镜像里，等完整数字或失焦结算时才送引擎。
       if (isNumberPrefix(numberInput(value))) {
+        if (!this.#editable(questionId))
+          throw new LogicError('invalid_event', '$.event', questionId)
         this.#values[questionId] = value
         this.#unsettled.add(questionId)
         return
@@ -78,7 +90,7 @@ export class FlowInputs {
     if ((question?.type === 'number' || question?.type === 'rating') && typeof value === 'string') {
       const raw = numberInput(value)
       if (!raw) typed = null
-      else if (!numberError(raw)) typed = Number(raw)
+      else if (isNumberLiteral(raw)) typed = Number(raw)
       // 非法数字原文作为错误类型交给引擎，不能转成 missing 或先舍入。
     }
     this.#dispatch(questionId, typed, value)
@@ -102,4 +114,70 @@ export class FlowInputs {
       if (typeof value === 'string') this.#apply(questionId, value, true)
     }
   }
+}
+
+/** 回放结果：`applied` 是成功应用的事件前缀长度，失败或形状无效后不再尝试后续事件。 */
+export interface ReplayResult {
+  applied: number
+  total: number
+  /** 已成功应用并收窄后的前缀；失败事件不会进入。 */
+  events: FlowEvent[]
+}
+
+type ReplayEvent =
+  | { type: 'change'; question_id: string; value: InputValue }
+  | { type: 'next' }
+  | { type: 'previous' }
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && [...value].every((item: unknown) => typeof item === 'string')
+}
+
+/** 本地存储可能被任意改写：只把完整输入值收窄为界面镜像接受的类型。 */
+function replayValue(value: unknown): InputValue | undefined {
+  if (value === null || typeof value === 'string') return value
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (isStringArray(value)) return [...value]
+  return undefined
+}
+
+function replayEvent(raw: unknown, plain: boolean): ReplayEvent | undefined {
+  if (typeof raw !== 'object' || raw === null || !('type' in raw)) return undefined
+  if (raw.type === 'change') {
+    if (!('question_id' in raw) || typeof raw.question_id !== 'string') return undefined
+    if (!('value' in raw)) return undefined
+    const value = replayValue(raw.value)
+    if (value === undefined) return undefined
+    return { type: 'change', question_id: raw.question_id, value }
+  }
+  // 普通问卷没有分步导航，混入的 next/previous 不是可回放的进度。
+  if (plain) return undefined
+  if (raw.type === 'next') return { type: 'next' }
+  if (raw.type === 'previous') return { type: 'previous' }
+  return undefined
+}
+
+/**
+ * 按顺序回放暂存进度，只接受形状有效的事件。
+ * 形状无效、不可应用或非法导航立即停止并保留已成功前缀；领域内拒绝的答案仍算已回放。
+ */
+export function replayEvents(
+  form: FlowInputs,
+  stored: readonly unknown[],
+  plain: boolean,
+): ReplayResult {
+  const events: FlowEvent[] = []
+  for (const raw of stored) {
+    const event = replayEvent(raw, plain)
+    if (!event) break
+    try {
+      if (event.type === 'change') form.change(event.question_id, event.value)
+      else if (event.type === 'next') form.next()
+      else form.previous()
+    } catch {
+      break
+    }
+    events.push(event)
+  }
+  return { applied: events.length, total: stored.length, events }
 }
