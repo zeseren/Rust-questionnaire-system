@@ -257,6 +257,8 @@ export interface FlowSnapshot {
   required: string[]
   answers: Record<string, AnswerValue>
   errors: Record<string, LogicErrorCode>
+  /** 每题可直接展示的修正说明；`errors` 仍保留稳定错误码供程序分支。 */
+  error_messages: Record<string, string>
   route_error: LogicErrorCode | null
   cleared: string[]
 }

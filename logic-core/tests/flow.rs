@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use questionnaire_logic::domain::{
     Answer, AnswerState, Document, FlowDefinition, FlowEvaluator, FlowEvent, FlowNode, FlowOutcome,
-    FlowSession, LogicErrorCode,
+    FlowSession, LogicErrorCode, QuestionKind,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -375,6 +375,190 @@ fn 填写会话公开交互且不复用或改写外部输入() {
     branched.evaluate_answers(input.clone()).unwrap();
     assert_eq!(input, original, "求值不能改写调用方提供的答案");
     assert_eq!(serde_json::to_vec(&branched.snapshot()).unwrap(), before);
+}
+
+#[test]
+fn 校验细节进入快照_next_与提交错误并在更正后清除() {
+    let mut document = self::document("diamond");
+    let number = document
+        .questions
+        .iter_mut()
+        .find(|question| question.id == id(2))
+        .expect("diamond 必须包含数字题");
+    number.kind = QuestionKind::Number {
+        integer: true,
+        min: Some(0.0),
+        max: Some(10.0),
+    };
+
+    let mut session = FlowSession::new(&document).unwrap();
+    session
+        .dispatch(FlowEvent::Change {
+            question_id: id(1),
+            value: json!(id(101).to_string()),
+        })
+        .unwrap();
+    session.dispatch(FlowEvent::Next).unwrap();
+
+    // 整数要求的原因同时出现在快照与 next 错误中，错误码和位置保持稳定。
+    session
+        .dispatch(FlowEvent::Change {
+            question_id: id(2),
+            value: json!(3.5),
+        })
+        .unwrap();
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.errors[&id(2)], LogicErrorCode::InvalidAnswer);
+    assert_eq!(snapshot.error_messages[&id(2)], "此题只接受整数");
+    assert!(!snapshot.answers.contains_key(&id(2)));
+    let wire = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(wire["errors"][id(2).to_string().as_str()], "invalid_answer");
+    assert_eq!(
+        wire["error_messages"][id(2).to_string().as_str()],
+        "此题只接受整数"
+    );
+    let error = session.dispatch(FlowEvent::Next).unwrap_err();
+    assert_eq!(error.code, LogicErrorCode::InvalidAnswer);
+    assert_eq!(error.path, "$.answers");
+    assert_eq!(error.question_id, Some(id(2)));
+    assert_eq!(error.message.as_ref(), "此题只接受整数");
+
+    // 服务端重建使用同一条说明，路径指向答案集合。
+    let evaluator = FlowEvaluator::new(&document).unwrap();
+    let error = evaluator
+        .evaluate_answers(vec![
+            Answer {
+                question_id: id(1),
+                value: json!(id(101).to_string()),
+            },
+            Answer {
+                question_id: id(2),
+                value: json!(3.5),
+            },
+        ])
+        .unwrap_err();
+    assert_eq!(error.code, LogicErrorCode::InvalidAnswer);
+    assert_eq!(error.path, "$.answers");
+    assert_eq!(error.question_id, Some(id(2)));
+    assert_eq!(error.message.as_ref(), "此题只接受整数");
+
+    // 闭区间越界报告实际上下界。
+    session
+        .dispatch(FlowEvent::Change {
+            question_id: id(2),
+            value: json!(11),
+        })
+        .unwrap();
+    assert_eq!(
+        session.snapshot().error_messages[&id(2)],
+        "数值必须在 0 到 10 之间"
+    );
+
+    // 更正后快照不再保留旧说明。
+    session
+        .dispatch(FlowEvent::Change {
+            question_id: id(2),
+            value: json!(3),
+        })
+        .unwrap();
+    let snapshot = session.snapshot();
+    assert!(!snapshot.errors.contains_key(&id(2)));
+    assert!(!snapshot.error_messages.contains_key(&id(2)));
+    assert_eq!(snapshot.answers[&id(2)].as_f64(), Some(3.0));
+    session.dispatch(FlowEvent::Next).unwrap();
+
+    // 文本上限的具体字符数与 next、提交错误保持一致，且不回显答案内容。
+    let 超长 = "隐私".repeat(101);
+    session
+        .dispatch(FlowEvent::Change {
+            question_id: id(4),
+            value: json!(超长),
+        })
+        .unwrap();
+    let snapshot = session.snapshot();
+    let message = &snapshot.error_messages[&id(4)];
+    assert_eq!(message, "文本答案最多允许 200 个 Unicode 字符");
+    assert!(!message.contains("隐私"), "错误说明不能回显答案内容");
+    let error = session.dispatch(FlowEvent::Next).unwrap_err();
+    assert_eq!(error.question_id, Some(id(4)));
+    assert_eq!(
+        error.message.as_ref(),
+        "文本答案最多允许 200 个 Unicode 字符"
+    );
+    let error = evaluator
+        .evaluate_answers(vec![
+            Answer {
+                question_id: id(1),
+                value: json!(id(101).to_string()),
+            },
+            Answer {
+                question_id: id(2),
+                value: json!(3),
+            },
+            Answer {
+                question_id: id(4),
+                value: json!(超长),
+            },
+        ])
+        .unwrap_err();
+    assert_eq!(error.path, "$.answers");
+    assert_eq!(error.question_id, Some(id(4)));
+    assert_eq!(
+        error.message.as_ref(),
+        "文本答案最多允许 200 个 Unicode 字符"
+    );
+}
+
+#[test]
+fn 题目隐藏后不保留答案校验说明() {
+    let document = self::document("rollback");
+    let mut session = FlowSession::new(&document).unwrap();
+
+    // rollback 的 q2 受 q1=甲 动态必填；q2 变量用于 q3 的 visible_if（阈值 > 0），
+    // 因此必须先选 q1，再设置 q2，q3 才会真正可见。
+    session
+        .dispatch(FlowEvent::Change {
+            question_id: id(1),
+            value: json!(id(101).to_string()),
+        })
+        .unwrap();
+    session
+        .dispatch(FlowEvent::Change {
+            question_id: id(2),
+            value: json!(1),
+        })
+        .unwrap();
+    assert!(
+        session.snapshot().visible.contains(&id(3)),
+        "q2 变量大于 0 时 q3 必须可见"
+    );
+
+    // 超长文本先留下具体说明。
+    session
+        .dispatch(FlowEvent::Change {
+            question_id: id(3),
+            value: json!("字".repeat(201)),
+        })
+        .unwrap();
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.errors[&id(3)], LogicErrorCode::InvalidAnswer);
+    assert_eq!(
+        snapshot.error_messages[&id(3)],
+        "文本答案最多允许 200 个 Unicode 字符"
+    );
+
+    // 改回 0 后 q3 隐藏，错误与说明一并消失，输入也不再保留。
+    session
+        .dispatch(FlowEvent::Change {
+            question_id: id(2),
+            value: json!(0),
+        })
+        .unwrap();
+    let snapshot = session.snapshot();
+    assert!(!snapshot.visible.contains(&id(3)));
+    assert!(!snapshot.errors.contains_key(&id(3)));
+    assert!(!snapshot.error_messages.contains_key(&id(3)));
+    assert!(!snapshot.answers.contains_key(&id(3)));
 }
 
 // JSON 的整数与浮点表示不影响数值语义，其他字段仍严格比较。

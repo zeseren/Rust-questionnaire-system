@@ -659,14 +659,24 @@ impl Question {
                     return Err(ValidationError::new(id, "此题只接受整数"));
                 }
                 if min.is_some_and(|min| number < min) || max.is_some_and(|max| number > max) {
-                    return Err(ValidationError::new(id, "数值不在允许范围内"));
+                    // 单边限制只说明实际存在的一侧，避免暗示不存在的边界。
+                    let message = match (min, max) {
+                        (Some(min), Some(max)) => format!("数值必须在 {min} 到 {max} 之间"),
+                        (Some(min), None) => format!("数值不能小于 {min}"),
+                        (None, Some(max)) => format!("数值不能大于 {max}"),
+                        (None, None) => unreachable!("没有上下界时不可能越界"),
+                    };
+                    return Err(ValidationError::new(id, message));
                 }
                 Ok(Some(canonical_number(number)))
             }
             QuestionKind::Rating { min, max, .. } => {
                 let number = finite_number(value, self.id)?;
                 if number.fract() != 0.0 || number < f64::from(*min) || number > f64::from(*max) {
-                    return Err(ValidationError::new(id, "评分必须是允许范围内的整数"));
+                    return Err(ValidationError::new(
+                        id,
+                        format!("评分必须是 {min} 到 {max} 之间的整数"),
+                    ));
                 }
                 Ok(Some(canonical_number(number)))
             }
@@ -689,7 +699,10 @@ impl Question {
             return Ok(None);
         }
         if values.len() < min_choices || values.len() > max_choices {
-            return Err(ValidationError::new(id, "所选数量不符合此题的上下限"));
+            return Err(ValidationError::new(
+                id,
+                format!("请选择 {min_choices} 到 {max_choices} 个选项"),
+            ));
         }
         let mut selected = BTreeSet::new();
         for value in values {
@@ -745,7 +758,12 @@ pub(crate) fn finite_number(value: &Value, question_id: Uuid) -> Result<f64, Val
     value
         .as_f64()
         .filter(|number| number.is_finite())
-        .ok_or_else(|| ValidationError::new(Some(question_id), "答案必须是有限的 JSON 数字"))
+        .ok_or_else(|| {
+            ValidationError::new(
+                Some(question_id),
+                "答案必须是有限的 JSON 数字（例如 3 或 -1.5）",
+            )
+        })
 }
 
 /// 统一正零与负零；IEEE 754 保留负零的符号，但问卷中的两者是相同答案。

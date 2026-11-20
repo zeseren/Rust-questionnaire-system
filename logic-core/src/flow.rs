@@ -484,6 +484,7 @@ struct Projection {
     required: Vec<Uuid>,
     answers: BTreeMap<Uuid, Value>,
     errors: BTreeMap<Uuid, LogicErrorCode>,
+    error_messages: BTreeMap<Uuid, String>,
     route_error: Option<LogicErrorCode>,
 }
 
@@ -509,6 +510,8 @@ pub struct FlowSnapshot<'a> {
     pub answers: &'a BTreeMap<Uuid, Value>,
     /// 可见题目的错误；隐藏题目不留错误。
     pub errors: &'a BTreeMap<Uuid, LogicErrorCode>,
+    /// 答案规范化失败的具体说明；只含限制与格式，不含答案原文。
+    pub error_messages: &'a BTreeMap<Uuid, String>,
     /// 路径末端的未决分支或计算错误。
     pub route_error: Option<LogicErrorCode>,
     /// 最近一次改答清除的题目身份。
@@ -718,7 +721,11 @@ impl CompiledPlan {
     ) -> Result<(BTreeSet<Uuid>, FlowOutcome), LogicError> {
         for question in &document.questions {
             if let Some(code) = projection.errors.get(&question.id) {
-                return Err(error(*code, "$.answers", Some(question.id)));
+                let failure = error(*code, "$.answers", Some(question.id));
+                return Err(match projection.error_messages.get(&question.id) {
+                    Some(message) => failure.with_message(message.clone()),
+                    None => failure,
+                });
             }
         }
         if let Some(code) = projection.route_error {
@@ -854,12 +861,18 @@ impl CompiledPlan {
         if matches!(&required, LogicValue::Boolean(true)) {
             result.required.push(id);
         }
-        let Ok(value) = question.normalize_answer(inputs.get(&id)) else {
-            result
-                .errors
-                .entry(id)
-                .or_insert(LogicErrorCode::InvalidAnswer);
-            return;
+        let value = match question.normalize_answer(inputs.get(&id)) {
+            Ok(value) => value,
+            Err(failure) => {
+                let code = result
+                    .errors
+                    .entry(id)
+                    .or_insert(LogicErrorCode::InvalidAnswer);
+                if *code == LogicErrorCode::InvalidAnswer {
+                    result.error_messages.insert(id, failure.message);
+                }
+                return;
+            }
         };
         match required {
             LogicValue::Boolean(true) if value.is_none() => {
@@ -1008,6 +1021,7 @@ impl FlowSession {
             required: &self.projection.required,
             answers: &self.projection.answers,
             errors: &self.projection.errors,
+            error_messages: &self.projection.error_messages,
             route_error: self.projection.route_error,
             cleared: &self.cleared,
         }
@@ -1068,7 +1082,11 @@ impl FlowSession {
                 };
                 for id in questions {
                     if let Some(code) = self.projection.errors.get(id) {
-                        return Err(error(*code, "$.answers", Some(*id)));
+                        let failure = error(*code, "$.answers", Some(*id));
+                        return Err(match self.projection.error_messages.get(id) {
+                            Some(message) => failure.with_message(message.clone()),
+                            None => failure,
+                        });
                     }
                 }
                 let Some(position) = self

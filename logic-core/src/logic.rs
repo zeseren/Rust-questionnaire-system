@@ -1,5 +1,6 @@
 //! 表达式必须先通过类型与引用检查；求值不访问外部状态，也不把错误当作缺失值。
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -71,13 +72,19 @@ pub struct LogicError {
     pub path: String,
     /// 涉及的题目；纯表达式错误没有题目。
     pub question_id: Option<Uuid>,
-    /// 中文诊断信息。
-    pub message: &'static str,
+    /// 中文诊断信息；题目校验细节复用领域规则文案，其余仍为静态文案。
+    pub message: Cow<'static, str>,
 }
 
 impl LogicError {
     pub(crate) fn relocate(mut self, path: &str) -> Self {
         self.path = self.path.replacen("$.expression", path, 1);
+        self
+    }
+
+    /// 用题目校验的具体说明替换稳定文案；不包含用户答案原文。
+    pub(crate) fn with_message(mut self, message: String) -> Self {
+        self.message = Cow::Owned(message);
         self
     }
 }
@@ -107,7 +114,7 @@ pub(crate) fn error(code: LogicErrorCode, path: &str, question_id: Option<Uuid>)
         code,
         path: path.into(),
         question_id,
-        message,
+        message: Cow::Borrowed(message),
     }
 }
 

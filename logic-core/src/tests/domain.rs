@@ -162,7 +162,7 @@ fn 多选答案校验数量归属重复并排序归一() {
     let 少于 = 题
         .normalize_answer(Some(&json!([id(101).to_string()])))
         .unwrap_err();
-    assert_eq!(少于.message, "所选数量不符合此题的上下限");
+    assert_eq!(少于.message, "请选择 2 到 2 个选项");
     let 多于 = 题
         .normalize_answer(Some(&json!([
             id(101).to_string(),
@@ -170,7 +170,7 @@ fn 多选答案校验数量归属重复并排序归一() {
             id(103).to_string()
         ])))
         .unwrap_err();
-    assert_eq!(多于.message, "所选数量不符合此题的上下限");
+    assert_eq!(多于.message, "请选择 2 到 2 个选项");
     let 重复 = 题
         .normalize_answer(Some(&json!([id(101).to_string(), id(101).to_string()])))
         .unwrap_err();
@@ -266,7 +266,10 @@ fn 数字答案校验有限性整数性闭区间与负零() {
     let 非整数 = 整数题.normalize_answer(Some(&json!(2.5))).unwrap_err();
     assert_eq!(非整数.message, "此题只接受整数");
     let 非数字 = 整数题.normalize_answer(Some(&json!("2"))).unwrap_err();
-    assert_eq!(非数字.message, "答案必须是有限的 JSON 数字");
+    assert_eq!(
+        非数字.message,
+        "答案必须是有限的 JSON 数字（例如 3 或 -1.5）"
+    );
 
     let 区间题 = 题目(
         2,
@@ -287,9 +290,41 @@ fn 数字答案校验有限性整数性闭区间与负零() {
         "闭区间上界应通过"
     );
     let 低于 = 区间题.normalize_answer(Some(&json!(-1.6))).unwrap_err();
-    assert_eq!(低于.message, "数值不在允许范围内");
+    assert_eq!(低于.message, "数值必须在 -1.5 到 2.5 之间");
     let 高于 = 区间题.normalize_answer(Some(&json!(2.6))).unwrap_err();
-    assert_eq!(高于.message, "数值不在允许范围内");
+    assert_eq!(高于.message, "数值必须在 -1.5 到 2.5 之间");
+
+    // 单边区间只报告实际存在的一侧，不能暗示不存在的边界。
+    let 下界题 = 题目(
+        3,
+        QuestionKind::Number {
+            integer: false,
+            min: Some(0.5),
+            max: None,
+        },
+    );
+    assert_eq!(
+        下界题
+            .normalize_answer(Some(&json!(0.4)))
+            .unwrap_err()
+            .message,
+        "数值不能小于 0.5"
+    );
+    let 上界题 = 题目(
+        4,
+        QuestionKind::Number {
+            integer: false,
+            min: None,
+            max: Some(10.0),
+        },
+    );
+    assert_eq!(
+        上界题
+            .normalize_answer(Some(&json!(10.5)))
+            .unwrap_err()
+            .message,
+        "数值不能大于 10"
+    );
 
     let 负零 =
         数值(区间题.normalize_answer(Some(&Value::Number(Number::from_f64(-0.0).unwrap()))));
@@ -311,8 +346,11 @@ fn 评分答案必须是区间内整数() {
     assert_eq!(数值(题.normalize_answer(Some(&json!(5)))), 5.0);
     for 值 in [json!(0), json!(6), json!(2.5)] {
         let 错误 = 题.normalize_answer(Some(&值)).unwrap_err();
-        assert_eq!(错误.message, "评分必须是允许范围内的整数", "{值}");
+        assert_eq!(错误.message, "评分必须是 1 到 5 之间的整数", "{值}");
     }
     let 非数字 = 题.normalize_answer(Some(&json!("3"))).unwrap_err();
-    assert_eq!(非数字.message, "答案必须是有限的 JSON 数字");
+    assert_eq!(
+        非数字.message,
+        "答案必须是有限的 JSON 数字（例如 3 或 -1.5）"
+    );
 }
