@@ -6,14 +6,18 @@
 
 use serde_json::{Value, json};
 
-fn texts() -> Value {
-    serde_json::from_str(include_str!("../../fixtures/survey-logic/texts.json"))
-        .expect("共享文本样例必须是合法 JSON")
+#[path = "../../logic-core/tests/support/mod.rs"]
+mod support;
+
+fn diamond() -> Value {
+    support::flows()["documents"]["diamond"].clone()
 }
 
-fn flows() -> Value {
-    serde_json::from_str(include_str!("../../fixtures/survey-logic/flows.json"))
-        .expect("共享流程样例必须是合法 JSON")
+fn expected_text() -> String {
+    support::texts()["format_cases"][0]["expected"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 fn parse_envelope(output: &str) -> Value {
@@ -63,13 +67,8 @@ fn domain_envelope(output: &str) -> Value {
 
 #[test]
 fn 四个导出函数成功时只返回_ok_信封() {
-    let texts = texts();
-    let expected = texts["format_cases"][0]["expected"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let flows = flows();
-    let diamond = &flows["documents"]["diamond"];
+    let expected = expected_text();
+    let diamond = diamond();
     let questions = diamond["questions"].to_string();
     let logic = diamond["logic"].to_string();
 
@@ -97,13 +96,8 @@ fn 四个导出函数成功时只返回_ok_信封() {
 
 #[test]
 fn 非法_json_与错误_dto_结构按参数名归类为边界语法错误() {
-    let texts = texts();
-    let expected = texts["format_cases"][0]["expected"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let flows = flows();
-    let diamond = &flows["documents"]["diamond"];
+    let expected = expected_text();
+    let diamond = diamond();
     let questions = diamond["questions"].to_string();
     let logic = diamond["logic"].to_string();
     let syntax = "{ 非法";
@@ -148,11 +142,9 @@ fn 非法_json_与错误_dto_结构按参数名归类为边界语法错误() {
 
 #[test]
 fn 领域错误字段原样穿透信封() {
-    let flows = flows();
-    let questions_json = flows["documents"]["diamond"]["questions"].to_string();
-    let question_id = flows["documents"]["diamond"]["questions"][0]["id"]
-        .as_str()
-        .unwrap();
+    let diamond = diamond();
+    let questions_json = diamond["questions"].to_string();
+    let question_id = diamond["questions"][0]["id"].as_str().unwrap();
 
     // 语法错误来自文本解析，额外携带从 1 开始的行列号。
     let error = domain_envelope(&logic_wasm::parse_logic_text("@@", &questions_json));
@@ -193,8 +185,7 @@ fn 领域错误字段原样穿透信封() {
 
 #[test]
 fn 巡检信封在语法错误后仍返回已扫描绑定() {
-    let flows = flows();
-    let diamond = &flows["documents"]["diamond"];
+    let diamond = diamond();
     let questions = diamond["questions"].to_string();
     let question_id = diamond["questions"][0]["id"].as_str().unwrap();
     let source =

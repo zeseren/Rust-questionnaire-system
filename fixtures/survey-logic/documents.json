@@ -1,71 +1,55 @@
 {
   "description": "复用 expressions.json 的题目，验证文档级编译与计算。",
+  "fragments": {
+    "v202_add": {
+      "id": "00000000-0000-4000-8000-000000000202",
+      "value_type": "number",
+      "expression": {
+        "op": "arithmetic",
+        "operator": "add",
+        "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000000201"},
+        "right": {"op": "number", "value": "2"}
+      }
+    },
+    "v201_len": {
+      "id": "00000000-0000-4000-8000-000000000201",
+      "value_type": "number",
+      "expression": {
+        "op": "length",
+        "value": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000002"}
+      }
+    },
+    "v201_answer_q4": {
+      "id": "00000000-0000-4000-8000-000000000201",
+      "value_type": "number",
+      "expression": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"}
+    },
+    "rule_q004": {
+      "question_id": "00000000-0000-4000-8000-000000000004",
+      "visible_if": {
+        "op": "compare",
+        "comparison": "gt",
+        "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000000202"},
+        "right": {"op": "number", "value": "2"}
+      },
+      "required_if": {
+        "op": "selected",
+        "question_id": "00000000-0000-4000-8000-000000000001",
+        "option_id": "00000000-0000-4000-8000-000000000101"
+      },
+      "validate": {
+        "op": "compare",
+        "comparison": "ge",
+        "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+        "right": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000000202"}
+      }
+    }
+  },
   "base_logic": {
     "dsl_version": 1,
     "semantics_version": 1,
-    "variables": [
-      {
-        "id": "00000000-0000-4000-8000-000000000202",
-        "value_type": "number",
-        "expression": {
-          "op": "arithmetic",
-          "operator": "add",
-          "left": {
-            "op": "variable",
-            "variable_id": "00000000-0000-4000-8000-000000000201"
-          },
-          "right": {
-            "op": "number",
-            "value": "2"
-          }
-        }
-      },
-      {
-        "id": "00000000-0000-4000-8000-000000000201",
-        "value_type": "number",
-        "expression": {
-          "op": "length",
-          "value": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000002"
-          }
-        }
-      }
-    ],
-    "rules": [
-      {
-        "question_id": "00000000-0000-4000-8000-000000000004",
-        "visible_if": {
-          "op": "compare",
-          "comparison": "gt",
-          "left": {
-            "op": "variable",
-            "variable_id": "00000000-0000-4000-8000-000000000202"
-          },
-          "right": {
-            "op": "number",
-            "value": "2"
-          }
-        },
-        "required_if": {
-          "op": "selected",
-          "question_id": "00000000-0000-4000-8000-000000000001",
-          "option_id": "00000000-0000-4000-8000-000000000101"
-        },
-        "validate": {
-          "op": "compare",
-          "comparison": "ge",
-          "left": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000004"
-          },
-          "right": {
-            "op": "variable",
-            "variable_id": "00000000-0000-4000-8000-000000000202"
-          }
-        }
-      }
-    ]
+    "variables": ["v202_add", "v201_len"],
+    "rules": ["rule_q004"]
   },
   "cases": [
     {
@@ -73,35 +57,17 @@
       "overrides": {},
       "answers_json": "{\"00000000-0000-4000-8000-000000000001\":\"00000000-0000-4000-8000-000000000101\",\"00000000-0000-4000-8000-000000000002\":[\"00000000-0000-4000-8000-000000000104\",\"00000000-0000-4000-8000-000000000103\"],\"00000000-0000-4000-8000-000000000004\":5}",
       "expected": {
-        "order": [
-          "00000000-0000-4000-8000-000000000201",
-          "00000000-0000-4000-8000-000000000202"
-        ],
+        "order": ["00000000-0000-4000-8000-000000000201", "00000000-0000-4000-8000-000000000202"],
         "value": {
           "variables": {
-            "00000000-0000-4000-8000-000000000201": {
-              "type": "number",
-              "value": 2
-            },
-            "00000000-0000-4000-8000-000000000202": {
-              "type": "number",
-              "value": 4
-            }
+            "00000000-0000-4000-8000-000000000201": {"type": "number", "value": 2},
+            "00000000-0000-4000-8000-000000000202": {"type": "number", "value": 4}
           },
           "rules": {
             "00000000-0000-4000-8000-000000000004": {
-              "visible_if": {
-                "type": "boolean",
-                "value": true
-              },
-              "required_if": {
-                "type": "boolean",
-                "value": true
-              },
-              "validate": {
-                "type": "boolean",
-                "value": true
-              }
+              "visible_if": {"type": "boolean", "value": true},
+              "required_if": {"type": "boolean", "value": true},
+              "validate": {"type": "boolean", "value": true}
             }
           }
         }
@@ -112,31 +78,17 @@
       "overrides": {},
       "answers_json": "{\"00000000-0000-4000-8000-000000000001\":\"00000000-0000-4000-8000-000000000101\"}",
       "expected": {
-        "order": [
-          "00000000-0000-4000-8000-000000000201",
-          "00000000-0000-4000-8000-000000000202"
-        ],
+        "order": ["00000000-0000-4000-8000-000000000201", "00000000-0000-4000-8000-000000000202"],
         "value": {
           "variables": {
-            "00000000-0000-4000-8000-000000000201": {
-              "type": "missing"
-            },
-            "00000000-0000-4000-8000-000000000202": {
-              "type": "missing"
-            }
+            "00000000-0000-4000-8000-000000000201": {"type": "missing"},
+            "00000000-0000-4000-8000-000000000202": {"type": "missing"}
           },
           "rules": {
             "00000000-0000-4000-8000-000000000004": {
-              "visible_if": {
-                "type": "missing"
-              },
-              "required_if": {
-                "type": "boolean",
-                "value": true
-              },
-              "validate": {
-                "type": "missing"
-              }
+              "visible_if": {"type": "missing"},
+              "required_if": {"type": "boolean", "value": true},
+              "validate": {"type": "missing"}
             }
           }
         }
@@ -146,39 +98,16 @@
       "name": "变量循环不能依赖声明顺序侥幸通过",
       "overrides": {
         "variables": [
-          {
-            "id": "00000000-0000-4000-8000-000000000202",
-            "value_type": "number",
-            "expression": {
-              "op": "arithmetic",
-              "operator": "add",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000201"
-              },
-              "right": {
-                "op": "number",
-                "value": "2"
-              }
-            }
-          },
+          "v202_add",
           {
             "id": "00000000-0000-4000-8000-000000000201",
             "value_type": "number",
-            "expression": {
-              "op": "variable",
-              "variable_id": "00000000-0000-4000-8000-000000000202"
-            }
+            "expression": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000000202"}
           }
         ]
       },
       "answers_json": "{}",
-      "expected": {
-        "error": {
-          "code": "dependency_cycle",
-          "question_id": null
-        }
-      }
+      "expected": {"error": {"code": "dependency_cycle", "question_id": null}}
     },
     {
       "name": "变量声明类型必须匹配计算结果",
@@ -190,67 +119,19 @@
             "expression": {
               "op": "arithmetic",
               "operator": "add",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000201"
-              },
-              "right": {
-                "op": "number",
-                "value": "2"
-              }
+              "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000000201"},
+              "right": {"op": "number", "value": "2"}
             }
           },
-          {
-            "id": "00000000-0000-4000-8000-000000000201",
-            "value_type": "number",
-            "expression": {
-              "op": "length",
-              "value": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000000002"
-              }
-            }
-          }
+          "v201_len"
         ]
       },
       "answers_json": "{}",
-      "expected": {
-        "error": {
-          "code": "type_mismatch",
-          "question_id": null
-        }
-      }
+      "expected": {"error": {"code": "type_mismatch", "question_id": null}}
     },
     {
       "name": "显示条件不能通过变量间接依赖当前题",
-      "overrides": {
-        "variables": [
-          {
-            "id": "00000000-0000-4000-8000-000000000202",
-            "value_type": "number",
-            "expression": {
-              "op": "arithmetic",
-              "operator": "add",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000201"
-              },
-              "right": {
-                "op": "number",
-                "value": "2"
-              }
-            }
-          },
-          {
-            "id": "00000000-0000-4000-8000-000000000201",
-            "value_type": "number",
-            "expression": {
-              "op": "answer",
-              "question_id": "00000000-0000-4000-8000-000000000004"
-            }
-          }
-        ]
-      },
+      "overrides": {"variables": ["v202_add", "v201_answer_q4"]},
       "answers_json": "{}",
       "expected": {
         "error": {
@@ -268,14 +149,8 @@
             "visible_if": {
               "op": "compare",
               "comparison": "gt",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000202"
-              },
-              "right": {
-                "op": "number",
-                "value": "2"
-              }
+              "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000000202"},
+              "right": {"op": "number", "value": "2"}
             },
             "required_if": {
               "op": "selected",
@@ -285,14 +160,8 @@
             "validate": {
               "op": "compare",
               "comparison": "ge",
-              "left": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000000004"
-              },
-              "right": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000202"
-              }
+              "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+              "right": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000000202"}
             }
           }
         ]
@@ -315,59 +184,19 @@
             "expression": {
               "op": "arithmetic",
               "operator": "add",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000201"
-              },
-              "right": {
-                "op": "number",
-                "value": "2"
-              }
+              "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000000201"},
+              "right": {"op": "number", "value": "2"}
             }
           },
-          {
-            "id": "00000000-0000-4000-8000-000000000201",
-            "value_type": "number",
-            "expression": {
-              "op": "length",
-              "value": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000000002"
-              }
-            }
-          }
+          "v201_len"
         ]
       },
       "answers_json": "{}",
-      "expected": {
-        "error": {
-          "code": "invalid_reference",
-          "question_id": null
-        }
-      }
+      "expected": {"error": {"code": "invalid_reference", "question_id": null}}
     },
     {
       "name": "删除被引用变量后不能静默清除规则",
-      "overrides": {
-        "variables": [
-          {
-            "id": "00000000-0000-4000-8000-000000000202",
-            "value_type": "number",
-            "expression": {
-              "op": "arithmetic",
-              "operator": "add",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000201"
-              },
-              "right": {
-                "op": "number",
-                "value": "2"
-              }
-            }
-          }
-        ]
-      },
+      "overrides": {"variables": ["v202_add"]},
       "answers_json": "{}",
       "expected": {
         "error": {
@@ -378,74 +207,7 @@
     },
     {
       "name": "同题重复规则不能覆盖已有规则",
-      "overrides": {
-        "rules": [
-          {
-            "question_id": "00000000-0000-4000-8000-000000000004",
-            "visible_if": {
-              "op": "compare",
-              "comparison": "gt",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000202"
-              },
-              "right": {
-                "op": "number",
-                "value": "2"
-              }
-            },
-            "required_if": {
-              "op": "selected",
-              "question_id": "00000000-0000-4000-8000-000000000001",
-              "option_id": "00000000-0000-4000-8000-000000000101"
-            },
-            "validate": {
-              "op": "compare",
-              "comparison": "ge",
-              "left": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000000004"
-              },
-              "right": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000202"
-              }
-            }
-          },
-          {
-            "question_id": "00000000-0000-4000-8000-000000000004",
-            "visible_if": {
-              "op": "compare",
-              "comparison": "gt",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000202"
-              },
-              "right": {
-                "op": "number",
-                "value": "2"
-              }
-            },
-            "required_if": {
-              "op": "selected",
-              "question_id": "00000000-0000-4000-8000-000000000001",
-              "option_id": "00000000-0000-4000-8000-000000000101"
-            },
-            "validate": {
-              "op": "compare",
-              "comparison": "ge",
-              "left": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000000004"
-              },
-              "right": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000202"
-              }
-            }
-          }
-        ]
-      },
+      "overrides": {"rules": ["rule_q004", "rule_q004"]},
       "answers_json": "{}",
       "expected": {
         "error": {
@@ -460,10 +222,7 @@
         "rules": [
           {
             "question_id": "00000000-0000-4000-8000-000000000004",
-            "visible_if": {
-              "op": "variable",
-              "variable_id": "00000000-0000-4000-8000-000000000202"
-            },
+            "visible_if": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000000202"},
             "required_if": {
               "op": "selected",
               "question_id": "00000000-0000-4000-8000-000000000001",
@@ -472,46 +231,25 @@
             "validate": {
               "op": "compare",
               "comparison": "ge",
-              "left": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000000004"
-              },
-              "right": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000000202"
-              }
+              "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+              "right": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000000202"}
             }
           }
         ]
       },
       "answers_json": "{}",
       "expected": {
-        "error": {
-          "code": "type_mismatch",
-          "question_id": "00000000-0000-4000-8000-000000000004"
-        }
+        "error": {"code": "type_mismatch", "question_id": "00000000-0000-4000-8000-000000000004"}
       }
     },
     {
       "name": "规范化的大指数值可作为变量来源",
-      "overrides": {
-        "variables": [
-          {
-            "id": "00000000-0000-4000-8000-000000000201",
-            "value_type": "number",
-            "expression": {
-              "op": "answer",
-              "question_id": "00000000-0000-4000-8000-000000000004"
-            }
-          }
-        ],
-        "rules": []
-      },
+      "overrides": {"variables": ["v201_answer_q4"], "rules": []},
       "answers_json": "{\"00000000-0000-4000-8000-000000000004\":1e20}",
       "expected": {
         "order": ["00000000-0000-4000-8000-000000000201"],
         "value": {
-          "variables": { "00000000-0000-4000-8000-000000000201": { "type": "number", "value": 1e20 } },
+          "variables": {"00000000-0000-4000-8000-000000000201": {"type": "number", "value": 1e20}},
           "rules": {}
         }
       }
@@ -526,14 +264,8 @@
             "validate": {
               "op": "compare",
               "comparison": "ge",
-              "left": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000000004"
-              },
-              "right": {
-                "op": "number",
-                "value": "18"
-              }
+              "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+              "right": {"op": "number", "value": "18"}
             }
           }
         ]
@@ -547,10 +279,7 @@
             "00000000-0000-4000-8000-000000000004": {
               "visible_if": null,
               "required_if": null,
-              "validate": {
-                "type": "boolean",
-                "value": true
-              }
+              "validate": {"type": "boolean", "value": true}
             }
           }
         }

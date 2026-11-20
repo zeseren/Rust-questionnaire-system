@@ -10,6 +10,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+mod support;
+
 #[derive(Deserialize)]
 struct Fixtures {
     questions: Vec<Question>,
@@ -25,11 +27,11 @@ struct Case {
 }
 
 fn fixtures() -> Fixtures {
-    serde_json::from_str(include_str!("../../fixtures/survey-logic/expressions.json")).unwrap()
+    serde_json::from_value(support::expressions()).unwrap()
 }
 
 fn documents() -> Value {
-    serde_json::from_str(include_str!("../../fixtures/survey-logic/documents.json")).unwrap()
+    support::documents()
 }
 
 #[test]

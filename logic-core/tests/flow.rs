@@ -9,26 +9,22 @@ use questionnaire_logic::domain::{
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+mod support;
+
 fn id(value: u32) -> Uuid {
     Uuid::parse_str(&format!("00000000-0000-4000-8000-{value:012}")).unwrap()
 }
 
-fn fixtures() -> Value {
-    serde_json::from_str(include_str!("../../fixtures/survey-logic/flows.json")).unwrap()
-}
-
 fn document(name: &str) -> Document {
-    serde_json::from_value(fixtures()["documents"][name].clone()).unwrap()
+    serde_json::from_value(support::flow_document(name)).unwrap()
 }
 
 #[test]
 fn 配置路径与答案身份接受标准格式并拒绝非规范_uuid且选项值仍规范化() {
-    let contracts: Value = serde_json::from_str(include_str!(
-        "../../fixtures/survey-logic/input-contracts.json"
-    ))
-    .unwrap();
-    let fixtures = fixtures();
-    let source = &fixtures["documents"][contracts["document"].as_str().unwrap()];
+    let contracts = support::input_contracts();
+    let fixtures = support::flows();
+    let document_name = contracts["document"].as_str().unwrap();
+    let source = &fixtures["documents"][document_name];
     let canonical = contracts["canonical_id"].as_str().unwrap();
 
     // 配置侧：先同步替换声明和引用，保证标准写法仍构成有效问卷，再逐字段扰动。
@@ -137,9 +133,9 @@ fn 配置路径与答案身份接受标准格式并拒绝非规范_uuid且选项
 
 #[test]
 fn 共享流程拒绝非法拓扑和未保护的分支依赖() {
-    let fixtures = fixtures();
+    let fixtures = support::flows();
     for case in fixtures["compilation"].as_array().unwrap() {
-        let mut document = fixtures["documents"][case["document"].as_str().unwrap()].clone();
+        let mut document = support::flow_document(case["document"].as_str().unwrap());
         for edit in case["edits"].as_array().unwrap() {
             let mut target = &mut document;
             for segment in edit["path"].as_array().unwrap() {
@@ -232,12 +228,11 @@ fn 流程节点数量上限允许_256_并拒绝_257() {
 
 #[test]
 fn 共享事件序列保持路径清理回退和题型规范化一致() {
-    let fixtures = fixtures();
+    let fixtures = support::flows();
     for case in fixtures["sessions"].as_array().unwrap() {
-        let document: Document = serde_json::from_value(
-            fixtures["documents"][case["document"].as_str().unwrap()].clone(),
-        )
-        .unwrap();
+        let document: Document =
+            serde_json::from_value(support::flow_document(case["document"].as_str().unwrap()))
+                .unwrap();
         let mut session = FlowSession::new(&document).unwrap();
         for (index, step) in case["steps"].as_array().unwrap().iter().enumerate() {
             let before = serde_json::to_value(session.snapshot()).unwrap();
@@ -273,14 +268,11 @@ fn 共享事件序列保持路径清理回退和题型规范化一致() {
 
 #[test]
 fn 最终提交样例只通过流程求值重建答卷() {
-    let fixtures = fixtures();
-    let submissions: Value =
-        serde_json::from_str(include_str!("../../fixtures/survey-logic/submissions.json")).unwrap();
+    let submissions = support::submissions();
     for case in submissions["cases"].as_array().unwrap() {
-        let document: Document = serde_json::from_value(
-            fixtures["documents"][case["document"].as_str().unwrap()].clone(),
-        )
-        .unwrap();
+        let document: Document =
+            serde_json::from_value(support::flow_document(case["document"].as_str().unwrap()))
+                .unwrap();
         let answers: Vec<Answer> =
             serde_json::from_str(case["answers_json"].as_str().unwrap()).unwrap();
         let actual = match FlowEvaluator::new(&document)

@@ -9,6 +9,8 @@ use questionnaire_logic::domain::{
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+mod support;
+
 fn id(value: u128) -> Uuid {
     Uuid::from_u128(value)
 }
@@ -438,10 +440,7 @@ fn 发布态校验逐项拦截未完成内容() {
     }
 
     // 筛选结束与正常完成同样可以发布；落库分类由提交求值的 outcome 决定。
-    let flows: Value =
-        serde_json::from_str(include_str!("../../fixtures/survey-logic/flows.json")).unwrap();
-    let screened: Document =
-        serde_json::from_value(flows["documents"]["priority"].clone()).unwrap();
+    let screened: Document = serde_json::from_value(support::flow_document("priority")).unwrap();
     let question_id = screened.questions[0].id;
     let option_id = screened.questions[0].kind.options().unwrap()[1].id;
     screened.validate_draft().unwrap();
@@ -837,10 +836,7 @@ fn 普通文档复制后题目与选项身份全部重写() {
 
 #[test]
 fn 带规则与流程的文档复制后引用关系保持一致() {
-    let fixtures: Value =
-        serde_json::from_str(include_str!("../../fixtures/survey-logic/flows.json")).unwrap();
-    let mut doc: Document =
-        serde_json::from_value(fixtures["documents"]["diamond"].clone()).unwrap();
+    let mut doc: Document = serde_json::from_value(support::flow_document("diamond")).unwrap();
 
     let old_question_ids: Vec<Uuid> = doc.questions.iter().map(|item| item.id).collect();
     let old_option_ids = option_ids(&doc.questions[0].kind);

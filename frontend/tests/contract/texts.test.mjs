@@ -21,6 +21,16 @@ function formatCaseField(item, field) {
   return source[field]
 }
 
+/** 格式样例规则：logic_overrides 覆盖命名文档的 logic，缺省时改用 format_base_logic。 */
+function formatCaseLogic(item) {
+  if (item.logic_overrides === undefined) return formatCaseField(item, 'logic')
+  const source = flows[item.document]
+  if (!source) throw new Error(`${item.name}：未知流程文档 ${item.document}`)
+  const base = source.logic ?? fixtures.format_base_logic
+  if (!base) throw new Error(`${item.name}：缺少 logic 基底`)
+  return { ...base, ...item.logic_overrides }
+}
+
 /** 共享样例用替换构造单处错误，因此错误不依赖两端文案。 */
 function buildSource(item) {
   let source = fixtures.source_lines.join('\n')
@@ -51,7 +61,7 @@ test('共享文本样例保持身份优先级、解析结果与错误行列一�
 test('共享格式化样例逐字节输出、二次解析等值且二次格式化幂等', () => {
   for (const item of fixtures.format_cases) {
     const questions = formatCaseField(item, 'questions')
-    const logic = formatCaseField(item, 'logic')
+    const logic = formatCaseLogic(item)
     const text = formatLogicText(logic, questions)
     assert.equal(text, item.expected, `${item.name}：逐字节输出`)
     const reparsed = parseLogicText(text, questions)

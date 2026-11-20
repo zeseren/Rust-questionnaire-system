@@ -7,14 +7,8 @@
       "required": false,
       "type": "single_choice",
       "options": [
-        {
-          "id": "00000000-0000-4000-8000-000000000101",
-          "label": "甲"
-        },
-        {
-          "id": "00000000-0000-4000-8000-000000000102",
-          "label": "乙"
-        }
+        {"id": "00000000-0000-4000-8000-000000000101", "label": "甲"},
+        {"id": "00000000-0000-4000-8000-000000000102", "label": "乙"}
       ]
     },
     {
@@ -23,14 +17,8 @@
       "required": false,
       "type": "multiple_choice",
       "options": [
-        {
-          "id": "00000000-0000-4000-8000-000000000103",
-          "label": "丙"
-        },
-        {
-          "id": "00000000-0000-4000-8000-000000000104",
-          "label": "丁"
-        }
+        {"id": "00000000-0000-4000-8000-000000000103", "label": "丙"},
+        {"id": "00000000-0000-4000-8000-000000000104", "label": "丁"}
       ],
       "min_choices": 1,
       "max_choices": 2
@@ -68,11 +56,7 @@
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "value": {
-          "type": "missing"
-        }
-      }
+      "expected": {"value": {"type": "missing"}}
     },
     {
       "name": "未知与明确假合取为假",
@@ -87,20 +71,12 @@
               "question_id": "00000000-0000-4000-8000-000000000001",
               "option_id": "00000000-0000-4000-8000-000000000101"
             },
-            {
-              "op": "boolean",
-              "value": false
-            }
+            {"op": "boolean", "value": false}
           ]
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": false
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": false}}
     },
     {
       "name": "未知与明确真析取为真",
@@ -115,20 +91,12 @@
               "question_id": "00000000-0000-4000-8000-000000000001",
               "option_id": "00000000-0000-4000-8000-000000000101"
             },
-            {
-              "op": "boolean",
-              "value": true
-            }
+            {"op": "boolean", "value": true}
           ]
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": true
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": true}}
     },
     {
       "name": "选择缺失可以显式设置默认值",
@@ -145,19 +113,11 @@
               "option_id": "00000000-0000-4000-8000-000000000101"
             }
           },
-          "fallback": {
-            "op": "boolean",
-            "value": false
-          }
+          "fallback": {"op": "boolean", "value": false}
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": false
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": false}}
     },
     {
       "name": "已回答检查和选择分支共同判断",
@@ -167,10 +127,7 @@
         "expression": {
           "op": "all",
           "expressions": [
-            {
-              "op": "answered",
-              "question_id": "00000000-0000-4000-8000-000000000001"
-            },
+            {"op": "answered", "question_id": "00000000-0000-4000-8000-000000000001"},
             {
               "op": "selected",
               "question_id": "00000000-0000-4000-8000-000000000001",
@@ -180,12 +137,7 @@
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000001\":\"00000000-0000-4000-8000-000000000101\"}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": true
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": true}}
     },
     {
       "name": "多选无序集合与Unicode标量长度参与条件",
@@ -208,26 +160,15 @@
               "comparison": "eq",
               "left": {
                 "op": "length",
-                "value": {
-                  "op": "answer",
-                  "question_id": "00000000-0000-4000-8000-000000000003"
-                }
+                "value": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000003"}
               },
-              "right": {
-                "op": "number",
-                "value": "4"
-              }
+              "right": {"op": "number", "value": "4"}
             }
           ]
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000002\":[\"00000000-0000-4000-8000-000000000104\",\"00000000-0000-4000-8000-000000000103\"],\"00000000-0000-4000-8000-000000000003\":\"中😀é\"}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": true
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": true}}
     },
     {
       "name": "多选部分包含和集合长度一致",
@@ -250,26 +191,15 @@
               "comparison": "eq",
               "left": {
                 "op": "length",
-                "value": {
-                  "op": "answer",
-                  "question_id": "00000000-0000-4000-8000-000000000002"
-                }
+                "value": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000002"}
               },
-              "right": {
-                "op": "number",
-                "value": "1"
-              }
+              "right": {"op": "number", "value": "1"}
             }
           ]
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000002\":[\"00000000-0000-4000-8000-000000000104\"]}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": true
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": true}}
     },
     {
       "name": "跨题数字比较先检查类型",
@@ -279,23 +209,12 @@
         "expression": {
           "op": "compare",
           "comparison": "ge",
-          "left": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000004"
-          },
-          "right": {
-            "op": "number",
-            "value": "18"
-          }
+          "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+          "right": {"op": "number", "value": "18"}
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000004\":18}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": true
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": true}}
     },
     {
       "name": "不将数字字符串作为数字答案",
@@ -305,14 +224,8 @@
         "expression": {
           "op": "compare",
           "comparison": "ge",
-          "left": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000004"
-          },
-          "right": {
-            "op": "number",
-            "value": "18"
-          }
+          "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+          "right": {"op": "number", "value": "18"}
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000004\":\"18\"}",
@@ -332,40 +245,22 @@
         "expression": {
           "op": "compare",
           "comparison": "lt",
-          "left": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000004"
-          },
-          "right": {
-            "op": "number",
-            "value": "18"
-          }
+          "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+          "right": {"op": "number", "value": "18"}
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000004\":null}",
-      "expected": {
-        "value": {
-          "type": "missing"
-        }
-      }
+      "expected": {"value": {"type": "missing"}}
     },
     {
       "name": "零是存在的答案",
       "program": {
         "dsl_version": 1,
         "semantics_version": 1,
-        "expression": {
-          "op": "answered",
-          "question_id": "00000000-0000-4000-8000-000000000004"
-        }
+        "expression": {"op": "answered", "question_id": "00000000-0000-4000-8000-000000000004"}
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000004\":0}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": true
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": true}}
     },
     {
       "name": "真假短路不会执行除零",
@@ -375,40 +270,23 @@
         "expression": {
           "op": "any",
           "expressions": [
-            {
-              "op": "boolean",
-              "value": true
-            },
+            {"op": "boolean", "value": true},
             {
               "op": "compare",
               "comparison": "eq",
               "left": {
                 "op": "arithmetic",
                 "operator": "divide",
-                "left": {
-                  "op": "number",
-                  "value": "1"
-                },
-                "right": {
-                  "op": "number",
-                  "value": "0"
-                }
+                "left": {"op": "number", "value": "1"},
+                "right": {"op": "number", "value": "0"}
               },
-              "right": {
-                "op": "number",
-                "value": "1"
-              }
+              "right": {"op": "number", "value": "1"}
             }
           ]
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": true
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": true}}
     },
     {
       "name": "默认值不能吞掉计算错误",
@@ -420,28 +298,15 @@
           "value": {
             "op": "arithmetic",
             "operator": "divide",
-            "left": {
-              "op": "number",
-              "value": "1"
-            },
-            "right": {
-              "op": "number",
-              "value": "0"
-            }
+            "left": {"op": "number", "value": "1"},
+            "right": {"op": "number", "value": "0"}
           },
-          "fallback": {
-            "op": "number",
-            "value": "0"
-          }
+          "fallback": {"op": "number", "value": "0"}
         }
       },
       "answers_json": "{}",
       "expected": {
-        "error": {
-          "code": "arithmetic_error",
-          "path": "$.expression.value",
-          "question_id": null
-        }
+        "error": {"code": "arithmetic_error", "path": "$.expression.value", "question_id": null}
       }
     },
     {
@@ -452,23 +317,13 @@
         "expression": {
           "op": "arithmetic",
           "operator": "multiply",
-          "left": {
-            "op": "number",
-            "value": "1e308"
-          },
-          "right": {
-            "op": "number",
-            "value": "2"
-          }
+          "left": {"op": "number", "value": "1e308"},
+          "right": {"op": "number", "value": "2"}
         }
       },
       "answers_json": "{}",
       "expected": {
-        "error": {
-          "code": "arithmetic_error",
-          "path": "$.expression",
-          "question_id": null
-        }
+        "error": {"code": "arithmetic_error", "path": "$.expression", "question_id": null}
       }
     },
     {
@@ -482,36 +337,19 @@
           "left": {
             "op": "arithmetic",
             "operator": "multiply",
-            "left": {
-              "op": "number",
-              "value": "2.5"
-            },
-            "right": {
-              "op": "number",
-              "value": "4"
-            }
+            "left": {"op": "number", "value": "2.5"},
+            "right": {"op": "number", "value": "4"}
           },
           "right": {
             "op": "arithmetic",
             "operator": "divide",
-            "left": {
-              "op": "number",
-              "value": "6"
-            },
-            "right": {
-              "op": "number",
-              "value": "2"
-            }
+            "left": {"op": "number", "value": "6"},
+            "right": {"op": "number", "value": "2"}
           }
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "value": {
-          "type": "number",
-          "value": 7
-        }
-      }
+      "expected": {"value": {"type": "number", "value": 7}}
     },
     {
       "name": "不隐式引入浮点容差",
@@ -524,28 +362,14 @@
           "left": {
             "op": "arithmetic",
             "operator": "add",
-            "left": {
-              "op": "number",
-              "value": "0.1"
-            },
-            "right": {
-              "op": "number",
-              "value": "0.2"
-            }
+            "left": {"op": "number", "value": "0.1"},
+            "right": {"op": "number", "value": "0.2"}
           },
-          "right": {
-            "op": "number",
-            "value": "0.3"
-          }
+          "right": {"op": "number", "value": "0.3"}
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": false
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": false}}
     },
     {
       "name": "正负零比较等价",
@@ -555,41 +379,23 @@
         "expression": {
           "op": "compare",
           "comparison": "eq",
-          "left": {
-            "op": "number",
-            "value": "-0"
-          },
-          "right": {
-            "op": "number",
-            "value": "0"
-          }
+          "left": {"op": "number", "value": "-0"},
+          "right": {"op": "number", "value": "0"}
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": true
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": true}}
     },
     {
       "name": "拒绝超出有限浮点数范围的数字常量",
       "program": {
         "dsl_version": 1,
         "semantics_version": 1,
-        "expression": {
-          "op": "number",
-          "value": "1e400"
-        }
+        "expression": {"op": "number", "value": "1e400"}
       },
       "answers_json": "{}",
       "expected": {
-        "error": {
-          "code": "invalid_number",
-          "path": "$.expression",
-          "question_id": null
-        }
+        "error": {"code": "invalid_number", "path": "$.expression", "question_id": null}
       }
     },
     {
@@ -599,10 +405,7 @@
         "semantics_version": 1,
         "expression": {
           "op": "length",
-          "value": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000002"
-          }
+          "value": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000002"}
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000002\":[\"00000000-0000-4000-8000-000000000103\",\"00000000-0000-4000-8000-000000000103\"]}",
@@ -621,26 +424,11 @@
         "semantics_version": 1,
         "expression": {
           "op": "all",
-          "expressions": [
-            {
-              "op": "boolean",
-              "value": false
-            },
-            {
-              "op": "number",
-              "value": "1"
-            }
-          ]
+          "expressions": [{"op": "boolean", "value": false}, {"op": "number", "value": "1"}]
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "error": {
-          "code": "type_mismatch",
-          "path": "$.expression",
-          "question_id": null
-        }
-      }
+      "expected": {"error": {"code": "type_mismatch", "path": "$.expression", "question_id": null}}
     },
     {
       "name": "选项不能跨题引用",
@@ -670,62 +458,33 @@
         "expression": {
           "op": "compare",
           "comparison": "eq",
-          "left": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000001"
-          },
-          "right": {
-            "op": "text",
-            "value": "00000000-0000-4000-8000-000000000101"
-          }
+          "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000001"},
+          "right": {"op": "text", "value": "00000000-0000-4000-8000-000000000101"}
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "error": {
-          "code": "type_mismatch",
-          "path": "$.expression",
-          "question_id": null
-        }
-      }
+      "expected": {"error": {"code": "type_mismatch", "path": "$.expression", "question_id": null}}
     },
     {
       "name": "不接受拼错的字段",
       "program": {
         "dsl_version": 1,
         "semantics_version": 1,
-        "expression": {
-          "op": "boolean",
-          "value": true,
-          "typo": true
-        }
+        "expression": {"op": "boolean", "value": true, "typo": true}
       },
       "answers_json": "{}",
-      "expected": {
-        "error": {
-          "code": "invalid_syntax",
-          "path": "$",
-          "question_id": null
-        }
-      }
+      "expected": {"error": {"code": "invalid_syntax", "path": "$", "question_id": null}}
     },
     {
       "name": "拒绝空逻辑列表",
       "program": {
         "dsl_version": 1,
         "semantics_version": 1,
-        "expression": {
-          "op": "all",
-          "expressions": []
-        }
+        "expression": {"op": "all", "expressions": []}
       },
       "answers_json": "{}",
       "expected": {
-        "error": {
-          "code": "invalid_syntax",
-          "path": "$.expression",
-          "question_id": null
-        }
+        "error": {"code": "invalid_syntax", "path": "$.expression", "question_id": null}
       }
     },
     {
@@ -736,41 +495,23 @@
         "expression": {
           "op": "compare",
           "comparison": "eq",
-          "left": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000003"
-          },
-          "right": {
-            "op": "text",
-            "value": "反馈"
-          }
+          "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000003"},
+          "right": {"op": "text", "value": "反馈"}
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000003\":\" 反馈 \"}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": false
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": false}}
     },
     {
       "name": "数字常量不能接受尾随换行",
       "program": {
         "dsl_version": 1,
         "semantics_version": 1,
-        "expression": {
-          "op": "number",
-          "value": "1\n"
-        }
+        "expression": {"op": "number", "value": "1\n"}
       },
       "answers_json": "{}",
       "expected": {
-        "error": {
-          "code": "invalid_number",
-          "path": "$.expression",
-          "question_id": null
-        }
+        "error": {"code": "invalid_number", "path": "$.expression", "question_id": null}
       }
     },
     {
@@ -778,19 +519,10 @@
       "program": {
         "dsl_version": 1,
         "semantics_version": 2,
-        "expression": {
-          "op": "boolean",
-          "value": true
-        }
+        "expression": {"op": "boolean", "value": true}
       },
       "answers_json": "{}",
-      "expected": {
-        "error": {
-          "code": "unsupported_version",
-          "path": "$",
-          "question_id": null
-        }
-      }
+      "expected": {"error": {"code": "unsupported_version", "path": "$", "question_id": null}}
     },
     {
       "name": "三元条件只求值命中的分支",
@@ -799,27 +531,13 @@
         "semantics_version": 1,
         "expression": {
           "op": "if",
-          "condition": {
-            "op": "answered",
-            "question_id": "00000000-0000-4000-8000-000000000004"
-          },
-          "then_branch": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000004"
-          },
-          "else_branch": {
-            "op": "number",
-            "value": "0"
-          }
+          "condition": {"op": "answered", "question_id": "00000000-0000-4000-8000-000000000004"},
+          "then_branch": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+          "else_branch": {"op": "number", "value": "0"}
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000004\":3}",
-      "expected": {
-        "value": {
-          "type": "number",
-          "value": 3
-        }
-      }
+      "expected": {"value": {"type": "number", "value": 3}}
     },
     {
       "name": "缺失条件短路三元且不读取分支",
@@ -833,22 +551,12 @@
             "question_id": "00000000-0000-4000-8000-000000000001",
             "option_id": "00000000-0000-4000-8000-000000000101"
           },
-          "then_branch": {
-            "op": "number",
-            "value": "1"
-          },
-          "else_branch": {
-            "op": "number",
-            "value": "0"
-          }
+          "then_branch": {"op": "number", "value": "1"},
+          "else_branch": {"op": "number", "value": "0"}
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "value": {
-          "type": "missing"
-        }
-      }
+      "expected": {"value": {"type": "missing"}}
     },
     {
       "name": "三元分支静态类型必须一致",
@@ -857,49 +565,23 @@
         "semantics_version": 1,
         "expression": {
           "op": "if",
-          "condition": {
-            "op": "boolean",
-            "value": true
-          },
-          "then_branch": {
-            "op": "number",
-            "value": "1"
-          },
-          "else_branch": {
-            "op": "text",
-            "value": "甲"
-          }
+          "condition": {"op": "boolean", "value": true},
+          "then_branch": {"op": "number", "value": "1"},
+          "else_branch": {"op": "text", "value": "甲"}
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "error": {
-          "code": "type_mismatch",
-          "path": "$.expression",
-          "question_id": null
-        }
-      }
+      "expected": {"error": {"code": "type_mismatch", "path": "$.expression", "question_id": null}}
     },
     {
       "name": "一元负号保留有限数值语义",
       "program": {
         "dsl_version": 1,
         "semantics_version": 1,
-        "expression": {
-          "op": "negate",
-          "value": {
-            "op": "number",
-            "value": "2.5"
-          }
-        }
+        "expression": {"op": "negate", "value": {"op": "number", "value": "2.5"}}
       },
       "answers_json": "{}",
-      "expected": {
-        "value": {
-          "type": "number",
-          "value": -2.5
-        }
-      }
+      "expected": {"value": {"type": "number", "value": -2.5}}
     },
     {
       "name": "负号作用于缺失答案仍为缺失",
@@ -908,18 +590,11 @@
         "semantics_version": 1,
         "expression": {
           "op": "negate",
-          "value": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000004"
-          }
+          "value": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"}
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000004\":null}",
-      "expected": {
-        "value": {
-          "type": "missing"
-        }
-      }
+      "expected": {"value": {"type": "missing"}}
     },
     {
       "name": "单选身份支持相等比较",
@@ -929,23 +604,12 @@
         "expression": {
           "op": "compare",
           "comparison": "eq",
-          "left": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000001"
-          },
-          "right": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000001"
-          }
+          "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000001"},
+          "right": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000001"}
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000001\":\"00000000-0000-4000-8000-000000000101\"}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": true
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": true}}
     },
     {
       "name": "单选身份不允许大小排序",
@@ -955,24 +619,12 @@
         "expression": {
           "op": "compare",
           "comparison": "gt",
-          "left": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000001"
-          },
-          "right": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000001"
-          }
+          "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000001"},
+          "right": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000001"}
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "error": {
-          "code": "type_mismatch",
-          "path": "$.expression",
-          "question_id": null
-        }
-      }
+      "expected": {"error": {"code": "type_mismatch", "path": "$.expression", "question_id": null}}
     },
     {
       "name": "文本包含与前缀判断支持缺失值",
@@ -984,36 +636,19 @@
           "expressions": [
             {
               "op": "contains",
-              "text": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000000003"
-              },
-              "substring": {
-                "op": "text",
-                "value": "反馈"
-              }
+              "text": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000003"},
+              "substring": {"op": "text", "value": "反馈"}
             },
             {
               "op": "starts_with",
-              "text": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000000003"
-              },
-              "prefix": {
-                "op": "text",
-                "value": " 反"
-              }
+              "text": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000003"},
+              "prefix": {"op": "text", "value": " 反"}
             }
           ]
         }
       },
       "answers_json": "{\"00000000-0000-4000-8000-000000000003\":\" 反馈 \"}",
-      "expected": {
-        "value": {
-          "type": "boolean",
-          "value": true
-        }
-      }
+      "expected": {"value": {"type": "boolean", "value": true}}
     },
     {
       "name": "文本包含缺失返回未知",
@@ -1022,22 +657,12 @@
         "semantics_version": 1,
         "expression": {
           "op": "contains",
-          "text": {
-            "op": "answer",
-            "question_id": "00000000-0000-4000-8000-000000000003"
-          },
-          "substring": {
-            "op": "text",
-            "value": "反馈"
-          }
+          "text": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000003"},
+          "substring": {"op": "text", "value": "反馈"}
         }
       },
       "answers_json": "{}",
-      "expected": {
-        "value": {
-          "type": "missing"
-        }
-      }
+      "expected": {"value": {"type": "missing"}}
     }
   ]
 }

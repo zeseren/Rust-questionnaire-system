@@ -1,5 +1,55 @@
 {
   "description": "共享人工预期：编译案例只替换指定字段；每步检查列出的快照字段，失败事件还必须保持整个状态不变。",
+  "fragments": {
+    "q1_optional": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "title": "入口选择",
+      "required": false,
+      "type": "single_choice",
+      "options": [
+        {"id": "00000000-0000-4000-8000-000000000101", "label": "甲"},
+        {"id": "00000000-0000-4000-8000-000000000102", "label": "乙"}
+      ]
+    },
+    "q2_number": {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "title": "数字",
+      "required": false,
+      "type": "number",
+      "integer": false,
+      "min": null,
+      "max": null
+    },
+    "q2_text": {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "title": "文字",
+      "type": "text",
+      "required": false,
+      "max_length": 200
+    },
+    "q3_text": {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "title": "文字",
+      "type": "text",
+      "required": false,
+      "max_length": 200
+    },
+    "v_answer_q2": {
+      "id": "00000000-0000-4000-8000-000000002001",
+      "value_type": "number",
+      "expression": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000002"}
+    },
+    "v_divide_zero": {
+      "id": "00000000-0000-4000-8000-000000002002",
+      "value_type": "number",
+      "expression": {
+        "op": "arithmetic",
+        "operator": "divide",
+        "left": {"op": "number", "value": "1"},
+        "right": {"op": "number", "value": "0"}
+      }
+    }
+  },
   "documents": {
     "diamond": {
       "title": "流程回归",
@@ -13,25 +63,11 @@
           "required": true,
           "type": "single_choice",
           "options": [
-            {
-              "id": "00000000-0000-4000-8000-000000000101",
-              "label": "甲"
-            },
-            {
-              "id": "00000000-0000-4000-8000-000000000102",
-              "label": "乙"
-            }
+            {"id": "00000000-0000-4000-8000-000000000101", "label": "甲"},
+            {"id": "00000000-0000-4000-8000-000000000102", "label": "乙"}
           ]
         },
-        {
-          "id": "00000000-0000-4000-8000-000000000002",
-          "title": "数字",
-          "required": false,
-          "type": "number",
-          "integer": false,
-          "min": null,
-          "max": null
-        },
+        "q2_number",
         {
           "id": "00000000-0000-4000-8000-000000000003",
           "title": "文字",
@@ -50,46 +86,15 @@
       "logic": {
         "dsl_version": 1,
         "semantics_version": 1,
-        "variables": [
-          {
-            "id": "00000000-0000-4000-8000-000000002001",
-            "value_type": "number",
-            "expression": {
-              "op": "answer",
-              "question_id": "00000000-0000-4000-8000-000000000002"
-            }
-          },
-          {
-            "id": "00000000-0000-4000-8000-000000002002",
-            "value_type": "number",
-            "expression": {
-              "op": "arithmetic",
-              "operator": "divide",
-              "left": {
-                "op": "number",
-                "value": "1"
-              },
-              "right": {
-                "op": "number",
-                "value": "0"
-              }
-            }
-          }
-        ],
+        "variables": ["v_answer_q2", "v_divide_zero"],
         "rules": [
           {
             "question_id": "00000000-0000-4000-8000-000000000002",
             "validate": {
               "op": "compare",
               "comparison": "ge",
-              "left": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000000002"
-              },
-              "right": {
-                "op": "number",
-                "value": "0"
-              }
+              "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000002"},
+              "right": {"op": "number", "value": "0"}
             }
           },
           {
@@ -99,19 +104,10 @@
               "value": {
                 "op": "compare",
                 "comparison": "gt",
-                "left": {
-                  "op": "variable",
-                  "variable_id": "00000000-0000-4000-8000-000000002001"
-                },
-                "right": {
-                  "op": "number",
-                  "value": "0"
-                }
+                "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002001"},
+                "right": {"op": "number", "value": "0"}
               },
-              "fallback": {
-                "op": "boolean",
-                "value": false
-              }
+              "fallback": {"op": "boolean", "value": false}
             }
           }
         ],
@@ -121,9 +117,7 @@
             {
               "type": "page",
               "id": "00000000-0000-4000-8000-000000001001",
-              "question_ids": [
-                "00000000-0000-4000-8000-000000000001"
-              ],
+              "question_ids": ["00000000-0000-4000-8000-000000000001"],
               "next": "00000000-0000-4000-8000-000000001002"
             },
             {
@@ -144,32 +138,22 @@
             {
               "type": "page",
               "id": "00000000-0000-4000-8000-000000001003",
-              "question_ids": [
-                "00000000-0000-4000-8000-000000000002"
-              ],
+              "question_ids": ["00000000-0000-4000-8000-000000000002"],
               "next": "00000000-0000-4000-8000-000000001005"
             },
             {
               "type": "page",
               "id": "00000000-0000-4000-8000-000000001004",
-              "question_ids": [
-                "00000000-0000-4000-8000-000000000003"
-              ],
+              "question_ids": ["00000000-0000-4000-8000-000000000003"],
               "next": "00000000-0000-4000-8000-000000001005"
             },
             {
               "type": "page",
               "id": "00000000-0000-4000-8000-000000001005",
-              "question_ids": [
-                "00000000-0000-4000-8000-000000000004"
-              ],
+              "question_ids": ["00000000-0000-4000-8000-000000000004"],
               "next": "00000000-0000-4000-8000-000000001006"
             },
-            {
-              "type": "end",
-              "id": "00000000-0000-4000-8000-000000001006",
-              "outcome": "complete"
-            }
+            {"type": "end", "id": "00000000-0000-4000-8000-000000001006", "outcome": "complete"}
           ]
         }
       }
@@ -179,24 +163,7 @@
       "description": "",
       "purpose": "验证流程契约",
       "thank_you": "完成",
-      "questions": [
-        {
-          "id": "00000000-0000-4000-8000-000000000001",
-          "title": "入口选择",
-          "required": false,
-          "type": "single_choice",
-          "options": [
-            {
-              "id": "00000000-0000-4000-8000-000000000101",
-              "label": "甲"
-            },
-            {
-              "id": "00000000-0000-4000-8000-000000000102",
-              "label": "乙"
-            }
-          ]
-        }
-      ],
+      "questions": ["q1_optional"],
       "logic": {
         "dsl_version": 1,
         "semantics_version": 1,
@@ -208,9 +175,7 @@
             {
               "type": "page",
               "id": "00000000-0000-4000-8000-000000001001",
-              "question_ids": [
-                "00000000-0000-4000-8000-000000000001"
-              ],
+              "question_ids": ["00000000-0000-4000-8000-000000000001"],
               "next": "00000000-0000-4000-8000-000000001002"
             },
             {
@@ -226,25 +191,14 @@
                   "target": "00000000-0000-4000-8000-000000001006"
                 },
                 {
-                  "when": {
-                    "op": "boolean",
-                    "value": true
-                  },
+                  "when": {"op": "boolean", "value": true},
                   "target": "00000000-0000-4000-8000-000000001007"
                 }
               ],
               "otherwise": "00000000-0000-4000-8000-000000001007"
             },
-            {
-              "type": "end",
-              "id": "00000000-0000-4000-8000-000000001006",
-              "outcome": "complete"
-            },
-            {
-              "type": "end",
-              "id": "00000000-0000-4000-8000-000000001007",
-              "outcome": "screen_out"
-            }
+            {"type": "end", "id": "00000000-0000-4000-8000-000000001006", "outcome": "complete"},
+            {"type": "end", "id": "00000000-0000-4000-8000-000000001007", "outcome": "screen_out"}
           ]
         }
       }
@@ -255,22 +209,7 @@
       "purpose": "验证流程契约",
       "thank_you": "完成",
       "questions": [
-        {
-          "id": "00000000-0000-4000-8000-000000000001",
-          "title": "入口选择",
-          "required": false,
-          "type": "single_choice",
-          "options": [
-            {
-              "id": "00000000-0000-4000-8000-000000000101",
-              "label": "甲"
-            },
-            {
-              "id": "00000000-0000-4000-8000-000000000102",
-              "label": "乙"
-            }
-          ]
-        },
+        "q1_optional",
         {
           "id": "00000000-0000-4000-8000-000000000002",
           "title": "文字",
@@ -299,24 +238,7 @@
       "logic": {
         "dsl_version": 1,
         "semantics_version": 1,
-        "variables": [
-          {
-            "id": "00000000-0000-4000-8000-000000002002",
-            "value_type": "number",
-            "expression": {
-              "op": "arithmetic",
-              "operator": "divide",
-              "left": {
-                "op": "number",
-                "value": "1"
-              },
-              "right": {
-                "op": "number",
-                "value": "0"
-              }
-            }
-          }
-        ],
+        "variables": ["v_divide_zero"],
         "rules": [
           {
             "question_id": "00000000-0000-4000-8000-000000000002",
@@ -328,22 +250,13 @@
             "required_if": {
               "op": "compare",
               "comparison": "gt",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000002002"
-              },
-              "right": {
-                "op": "number",
-                "value": "0"
-              }
+              "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002002"},
+              "right": {"op": "number", "value": "0"}
             }
           },
           {
             "question_id": "00000000-0000-4000-8000-000000000003",
-            "visible_if": {
-              "op": "answered",
-              "question_id": "00000000-0000-4000-8000-000000000002"
-            },
+            "visible_if": {"op": "answered", "question_id": "00000000-0000-4000-8000-000000000002"},
             "required_if": {
               "op": "selected",
               "question_id": "00000000-0000-4000-8000-000000000001",
@@ -352,22 +265,13 @@
             "validate": {
               "op": "compare",
               "comparison": "le",
-              "left": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000000003"
-              },
-              "right": {
-                "op": "number",
-                "value": "3"
-              }
+              "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000003"},
+              "right": {"op": "number", "value": "3"}
             }
           },
           {
             "question_id": "00000000-0000-4000-8000-000000000004",
-            "visible_if": {
-              "op": "boolean",
-              "value": false
-            }
+            "visible_if": {"op": "boolean", "value": false}
           }
         ],
         "flow": {
@@ -386,16 +290,10 @@
             {
               "type": "page",
               "id": "00000000-0000-4000-8000-000000001003",
-              "question_ids": [
-                "00000000-0000-4000-8000-000000000004"
-              ],
+              "question_ids": ["00000000-0000-4000-8000-000000000004"],
               "next": "00000000-0000-4000-8000-000000001006"
             },
-            {
-              "type": "end",
-              "id": "00000000-0000-4000-8000-000000001006",
-              "outcome": "complete"
-            }
+            {"type": "end", "id": "00000000-0000-4000-8000-000000001006", "outcome": "complete"}
           ]
         }
       }
@@ -405,52 +303,11 @@
       "description": "",
       "purpose": "验证流程契约",
       "thank_you": "完成",
-      "questions": [
-        {
-          "id": "00000000-0000-4000-8000-000000000001",
-          "title": "入口选择",
-          "required": false,
-          "type": "single_choice",
-          "options": [
-            {
-              "id": "00000000-0000-4000-8000-000000000101",
-              "label": "甲"
-            },
-            {
-              "id": "00000000-0000-4000-8000-000000000102",
-              "label": "乙"
-            }
-          ]
-        },
-        {
-          "id": "00000000-0000-4000-8000-000000000002",
-          "title": "文字",
-          "type": "text",
-          "required": false,
-          "max_length": 200
-        }
-      ],
+      "questions": ["q1_optional", "q2_text"],
       "logic": {
         "dsl_version": 1,
         "semantics_version": 1,
-        "variables": [
-          {
-            "id": "00000000-0000-4000-8000-000000002002",
-            "value_type": "number",
-            "expression": {
-              "op": "arithmetic",
-              "operator": "divide",
-              "left": {
-                "op": "number",
-                "value": "1"
-              },
-              "right": {
-                "op": "number",
-                "value": "0"
-              }
-            }
-          }
-        ],
+        "variables": ["v_divide_zero"],
         "rules": [
           {
             "question_id": "00000000-0000-4000-8000-000000000002",
@@ -467,14 +324,8 @@
                 {
                   "op": "compare",
                   "comparison": "gt",
-                  "left": {
-                    "op": "variable",
-                    "variable_id": "00000000-0000-4000-8000-000000002002"
-                  },
-                  "right": {
-                    "op": "number",
-                    "value": "0"
-                  }
+                  "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002002"},
+                  "right": {"op": "number", "value": "0"}
                 }
               ]
             }
@@ -488,47 +339,20 @@
       "purpose": "验证流程契约",
       "thank_you": "完成",
       "questions": [
-        {
-          "id": "00000000-0000-4000-8000-000000000001",
-          "title": "入口选择",
-          "required": false,
-          "type": "single_choice",
-          "options": [
-            {
-              "id": "00000000-0000-4000-8000-000000000101",
-              "label": "甲"
-            },
-            {
-              "id": "00000000-0000-4000-8000-000000000102",
-              "label": "乙"
-            }
-          ]
-        },
+        "q1_optional",
         {
           "id": "00000000-0000-4000-8000-000000000002",
           "title": "多选",
           "type": "multiple_choice",
           "required": false,
           "options": [
-            {
-              "id": "00000000-0000-4000-8000-000000000103",
-              "label": "丙"
-            },
-            {
-              "id": "00000000-0000-4000-8000-000000000104",
-              "label": "丁"
-            }
+            {"id": "00000000-0000-4000-8000-000000000103", "label": "丙"},
+            {"id": "00000000-0000-4000-8000-000000000104", "label": "丁"}
           ],
           "min_choices": 1,
           "max_choices": 2
         },
-        {
-          "id": "00000000-0000-4000-8000-000000000003",
-          "title": "文字",
-          "type": "text",
-          "required": false,
-          "max_length": 200
-        },
+        "q3_text",
         {
           "id": "00000000-0000-4000-8000-000000000004",
           "title": "数字",
@@ -562,31 +386,7 @@
       "description": "",
       "purpose": "验证流程契约",
       "thank_you": "完成",
-      "questions": [
-        {
-          "id": "00000000-0000-4000-8000-000000000001",
-          "title": "入口选择",
-          "required": false,
-          "type": "single_choice",
-          "options": [
-            {
-              "id": "00000000-0000-4000-8000-000000000101",
-              "label": "甲"
-            },
-            {
-              "id": "00000000-0000-4000-8000-000000000102",
-              "label": "乙"
-            }
-          ]
-        },
-        {
-          "id": "00000000-0000-4000-8000-000000000002",
-          "title": "文字",
-          "type": "text",
-          "required": false,
-          "max_length": 200
-        }
-      ],
+      "questions": ["q1_optional", "q2_text"],
       "logic": {
         "dsl_version": 1,
         "semantics_version": 1,
@@ -608,53 +408,11 @@
       "description": "",
       "purpose": "验证流程契约",
       "thank_you": "完成",
-      "questions": [
-        {
-          "id": "00000000-0000-4000-8000-000000000001",
-          "title": "入口选择",
-          "required": false,
-          "type": "single_choice",
-          "options": [
-            {
-              "id": "00000000-0000-4000-8000-000000000101",
-              "label": "甲"
-            },
-            {
-              "id": "00000000-0000-4000-8000-000000000102",
-              "label": "乙"
-            }
-          ]
-        },
-        {
-          "id": "00000000-0000-4000-8000-000000000002",
-          "title": "数字",
-          "required": false,
-          "type": "number",
-          "integer": false,
-          "min": null,
-          "max": null
-        },
-        {
-          "id": "00000000-0000-4000-8000-000000000003",
-          "title": "文字",
-          "type": "text",
-          "required": false,
-          "max_length": 200
-        }
-      ],
+      "questions": ["q1_optional", "q2_number", "q3_text"],
       "logic": {
         "dsl_version": 1,
         "semantics_version": 1,
-        "variables": [
-          {
-            "id": "00000000-0000-4000-8000-000000002001",
-            "value_type": "number",
-            "expression": {
-              "op": "answer",
-              "question_id": "00000000-0000-4000-8000-000000000002"
-            }
-          }
-        ],
+        "variables": ["v_answer_q2"],
         "rules": [
           {
             "question_id": "00000000-0000-4000-8000-000000000002",
@@ -666,14 +424,8 @@
             "validate": {
               "op": "compare",
               "comparison": "ge",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000002001"
-              },
-              "right": {
-                "op": "number",
-                "value": "0"
-              }
+              "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002001"},
+              "right": {"op": "number", "value": "0"}
             }
           },
           {
@@ -681,14 +433,8 @@
             "visible_if": {
               "op": "compare",
               "comparison": "gt",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000002001"
-              },
-              "right": {
-                "op": "number",
-                "value": "0"
-              }
+              "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002001"},
+              "right": {"op": "number", "value": "0"}
             }
           }
         ]
@@ -696,24 +442,13 @@
     }
   },
   "compilation": [
-    {
-      "name": "完整菱形流程与受保护的变量引用可编译",
-      "document": "diamond",
-      "edits": [],
-      "error": null
-    },
+    {"name": "完整菱形流程与受保护的变量引用可编译", "document": "diamond", "edits": [], "error": null},
     {
       "name": "回边被拒绝",
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "flow",
-            "nodes",
-            2,
-            "next"
-          ],
+          "path": ["logic", "flow", "nodes", 2, "next"],
           "value": "00000000-0000-4000-8000-000000001001"
         }
       ],
@@ -724,13 +459,7 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "flow",
-            "nodes",
-            2,
-            "next"
-          ],
+          "path": ["logic", "flow", "nodes", 2, "next"],
           "value": "00000000-0000-4000-8000-000000009999"
         }
       ],
@@ -741,13 +470,7 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "flow",
-            "nodes",
-            1,
-            "otherwise"
-          ],
+          "path": ["logic", "flow", "nodes", 1, "otherwise"],
           "value": "00000000-0000-4000-8000-000000001003"
         }
       ],
@@ -758,16 +481,8 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "flow",
-            "nodes",
-            3,
-            "question_ids"
-          ],
-          "value": [
-            "00000000-0000-4000-8000-000000000002"
-          ]
+          "path": ["logic", "flow", "nodes", 3, "question_ids"],
+          "value": ["00000000-0000-4000-8000-000000000002"]
         }
       ],
       "error": "invalid_flow"
@@ -775,18 +490,7 @@
     {
       "name": "题目遗漏被拒绝",
       "document": "diamond",
-      "edits": [
-        {
-          "path": [
-            "logic",
-            "flow",
-            "nodes",
-            4,
-            "question_ids"
-          ],
-          "value": []
-        }
-      ],
+      "edits": [{"path": ["logic", "flow", "nodes", 4, "question_ids"], "value": []}],
       "error": "invalid_flow"
     },
     {
@@ -794,13 +498,7 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "flow",
-            "nodes",
-            5,
-            "id"
-          ],
+          "path": ["logic", "flow", "nodes", 5, "id"],
           "value": "00000000-0000-4000-8000-000000002001"
         }
       ],
@@ -811,33 +509,16 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "flow",
-            "nodes",
-            1,
-            "branches",
-            0,
-            "when"
-          ],
+          "path": ["logic", "flow", "nodes", 1, "branches", 0, "when"],
           "value": {
             "op": "coalesce",
             "value": {
               "op": "compare",
               "comparison": "gt",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000002001"
-              },
-              "right": {
-                "op": "number",
-                "value": "0"
-              }
+              "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002001"},
+              "right": {"op": "number", "value": "0"}
             },
-            "fallback": {
-              "op": "boolean",
-              "value": false
-            }
+            "fallback": {"op": "boolean", "value": false}
           }
         }
       ],
@@ -848,23 +529,12 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "rules",
-            1,
-            "required_if"
-          ],
+          "path": ["logic", "rules", 1, "required_if"],
           "value": {
             "op": "compare",
             "comparison": "gt",
-            "left": {
-              "op": "answer",
-              "question_id": "00000000-0000-4000-8000-000000000002"
-            },
-            "right": {
-              "op": "number",
-              "value": "0"
-            }
+            "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000002"},
+            "right": {"op": "number", "value": "0"}
           }
         }
       ],
@@ -875,23 +545,12 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "rules",
-            1,
-            "required_if"
-          ],
+          "path": ["logic", "rules", 1, "required_if"],
           "value": {
             "op": "compare",
             "comparison": "gt",
-            "left": {
-              "op": "variable",
-              "variable_id": "00000000-0000-4000-8000-000000002001"
-            },
-            "right": {
-              "op": "number",
-              "value": "0"
-            }
+            "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002001"},
+            "right": {"op": "number", "value": "0"}
           }
         }
       ],
@@ -902,30 +561,16 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "rules",
-            1,
-            "required_if"
-          ],
+          "path": ["logic", "rules", 1, "required_if"],
           "value": {
             "op": "all",
             "expressions": [
-              {
-                "op": "answered",
-                "question_id": "00000000-0000-4000-8000-000000000002"
-              },
+              {"op": "answered", "question_id": "00000000-0000-4000-8000-000000000002"},
               {
                 "op": "compare",
                 "comparison": "gt",
-                "left": {
-                  "op": "variable",
-                  "variable_id": "00000000-0000-4000-8000-000000002001"
-                },
-                "right": {
-                  "op": "number",
-                  "value": "0"
-                }
+                "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002001"},
+                "right": {"op": "number", "value": "0"}
               }
             ]
           }
@@ -938,31 +583,17 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "rules",
-            1,
-            "required_if"
-          ],
+          "path": ["logic", "rules", 1, "required_if"],
           "value": {
             "op": "all",
             "expressions": [
               {
                 "op": "compare",
                 "comparison": "gt",
-                "left": {
-                  "op": "variable",
-                  "variable_id": "00000000-0000-4000-8000-000000002001"
-                },
-                "right": {
-                  "op": "number",
-                  "value": "0"
-                }
+                "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002001"},
+                "right": {"op": "number", "value": "0"}
               },
-              {
-                "op": "answered",
-                "question_id": "00000000-0000-4000-8000-000000000002"
-              }
+              {"op": "answered", "question_id": "00000000-0000-4000-8000-000000000002"}
             ]
           }
         }
@@ -974,12 +605,7 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "rules",
-            1,
-            "required_if"
-          ],
+          "path": ["logic", "rules", 1, "required_if"],
           "value": {
             "op": "any",
             "expressions": [
@@ -993,14 +619,8 @@
               {
                 "op": "compare",
                 "comparison": "gt",
-                "left": {
-                  "op": "variable",
-                  "variable_id": "00000000-0000-4000-8000-000000002001"
-                },
-                "right": {
-                  "op": "number",
-                  "value": "0"
-                }
+                "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002001"},
+                "right": {"op": "number", "value": "0"}
               }
             ]
           }
@@ -1013,19 +633,8 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "flow",
-            "nodes",
-            1,
-            "branches",
-            0,
-            "when"
-          ],
-          "value": {
-            "op": "number",
-            "value": "1"
-          }
+          "path": ["logic", "flow", "nodes", 1, "branches", 0, "when"],
+          "value": {"op": "number", "value": "1"}
         }
       ],
       "error": "type_mismatch"
@@ -1035,19 +644,8 @@
       "document": "diamond",
       "edits": [
         {
-          "path": [
-            "logic",
-            "flow",
-            "nodes",
-            1,
-            "branches",
-            0,
-            "when"
-          ],
-          "value": {
-            "op": "boolean",
-            "value": false
-          }
+          "path": ["logic", "flow", "nodes", 1, "branches", 0, "when"],
+          "value": {"op": "boolean", "value": false}
         }
       ],
       "error": "invalid_flow"
@@ -1057,19 +655,8 @@
       "document": "priority",
       "edits": [
         {
-          "path": [
-            "logic",
-            "flow",
-            "nodes",
-            1,
-            "branches",
-            0,
-            "when"
-          ],
-          "value": {
-            "op": "boolean",
-            "value": true
-          }
+          "path": ["logic", "flow", "nodes", 1, "branches", 0, "when"],
+          "value": {"op": "boolean", "value": true}
         }
       ],
       "error": "invalid_flow"
@@ -1083,30 +670,18 @@
         {
           "expected": {
             "current_node": "00000000-0000-4000-8000-000000001001",
-            "path": [
-              "00000000-0000-4000-8000-000000001001"
-            ],
-            "visible": [
-              "00000000-0000-4000-8000-000000000001"
-            ],
+            "path": ["00000000-0000-4000-8000-000000001001"],
+            "visible": ["00000000-0000-4000-8000-000000000001"],
             "answers": {},
-            "errors": {
-              "00000000-0000-4000-8000-000000000001": "required_answer"
-            },
+            "errors": {"00000000-0000-4000-8000-000000000001": "required_answer"},
             "route_error": "unknown_condition",
             "outcome": null,
-            "history": [
-              "00000000-0000-4000-8000-000000001001"
-            ],
+            "history": ["00000000-0000-4000-8000-000000001001"],
             "cleared": []
           },
           "error": null
         },
-        {
-          "event_json": "{\"type\":\"next\"}",
-          "expected": {},
-          "error": "required_answer"
-        },
+        {"event_json": "{\"type\":\"next\"}", "expected": {}, "error": "required_answer"},
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":3}",
           "expected": {},
@@ -1153,17 +728,13 @@
               "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101",
               "00000000-0000-4000-8000-000000000002": 7
             },
-            "errors": {
-              "00000000-0000-4000-8000-000000000004": "required_answer"
-            }
+            "errors": {"00000000-0000-4000-8000-000000000004": "required_answer"}
           },
           "error": null
         },
         {
           "event_json": "{\"type\":\"next\"}",
-          "expected": {
-            "current_node": "00000000-0000-4000-8000-000000001005"
-          },
+          "expected": {"current_node": "00000000-0000-4000-8000-000000001005"},
           "error": null
         },
         {
@@ -1180,9 +751,7 @@
         },
         {
           "event_json": "{\"type\":\"previous\"}",
-          "expected": {
-            "current_node": "00000000-0000-4000-8000-000000001003"
-          },
+          "expected": {"current_node": "00000000-0000-4000-8000-000000001003"},
           "error": null
         },
         {
@@ -1192,22 +761,14 @@
               "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101",
               "00000000-0000-4000-8000-000000000004": "汇合答案"
             },
-            "errors": {
-              "00000000-0000-4000-8000-000000000002": "constraint_failed"
-            }
+            "errors": {"00000000-0000-4000-8000-000000000002": "constraint_failed"}
           },
           "error": null
         },
-        {
-          "event_json": "{\"type\":\"next\"}",
-          "expected": {},
-          "error": "constraint_failed"
-        },
+        {"event_json": "{\"type\":\"next\"}", "expected": {}, "error": "constraint_failed"},
         {
           "event_json": "{\"type\":\"previous\"}",
-          "expected": {
-            "current_node": "00000000-0000-4000-8000-000000001001"
-          },
+          "expected": {"current_node": "00000000-0000-4000-8000-000000001001"},
           "error": null
         },
         {
@@ -1229,30 +790,20 @@
               "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000102",
               "00000000-0000-4000-8000-000000000004": "汇合答案"
             },
-            "errors": {
-              "00000000-0000-4000-8000-000000000003": "required_answer"
-            },
-            "cleared": [
-              "00000000-0000-4000-8000-000000000002"
-            ],
-            "history": [
-              "00000000-0000-4000-8000-000000001001"
-            ]
+            "errors": {"00000000-0000-4000-8000-000000000003": "required_answer"},
+            "cleared": ["00000000-0000-4000-8000-000000000002"],
+            "history": ["00000000-0000-4000-8000-000000001001"]
           },
           "error": null
         },
         {
           "event_json": "{\"type\":\"next\"}",
-          "expected": {
-            "current_node": "00000000-0000-4000-8000-000000001004"
-          },
+          "expected": {"current_node": "00000000-0000-4000-8000-000000001004"},
           "error": null
         },
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000003\",\"value\":\"乙路\"}",
-          "expected": {
-            "errors": {}
-          },
+          "expected": {"errors": {}},
           "error": null
         },
         {
@@ -1269,16 +820,12 @@
         },
         {
           "event_json": "{\"type\":\"previous\"}",
-          "expected": {
-            "current_node": "00000000-0000-4000-8000-000000001004"
-          },
+          "expected": {"current_node": "00000000-0000-4000-8000-000000001004"},
           "error": null
         },
         {
           "event_json": "{\"type\":\"previous\"}",
-          "expected": {
-            "current_node": "00000000-0000-4000-8000-000000001001"
-          },
+          "expected": {"current_node": "00000000-0000-4000-8000-000000001001"},
           "error": null
         },
         {
@@ -1289,9 +836,7 @@
               "00000000-0000-4000-8000-000000000004": "汇合答案"
             },
             "errors": {},
-            "cleared": [
-              "00000000-0000-4000-8000-000000000003"
-            ],
+            "cleared": ["00000000-0000-4000-8000-000000000003"],
             "path": [
               "00000000-0000-4000-8000-000000001001",
               "00000000-0000-4000-8000-000000001003",
@@ -1303,16 +848,12 @@
         },
         {
           "event_json": "{\"type\":\"next\"}",
-          "expected": {
-            "current_node": "00000000-0000-4000-8000-000000001003"
-          },
+          "expected": {"current_node": "00000000-0000-4000-8000-000000001003"},
           "error": null
         },
         {
           "event_json": "{\"type\":\"next\"}",
-          "expected": {
-            "current_node": "00000000-0000-4000-8000-000000001005"
-          },
+          "expected": {"current_node": "00000000-0000-4000-8000-000000001005"},
           "error": null
         },
         {
@@ -1329,11 +870,7 @@
           },
           "error": null
         },
-        {
-          "event_json": "{\"type\":\"next\"}",
-          "expected": {},
-          "error": "invalid_event"
-        },
+        {"event_json": "{\"type\":\"next\"}", "expected": {}, "error": "invalid_event"},
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000004\",\"value\":\"不能改\"}",
           "expected": {},
@@ -1341,10 +878,7 @@
         },
         {
           "event_json": "{\"type\":\"previous\"}",
-          "expected": {
-            "current_node": "00000000-0000-4000-8000-000000001005",
-            "outcome": null
-          },
+          "expected": {"current_node": "00000000-0000-4000-8000-000000001005", "outcome": null},
           "error": null
         }
       ]
@@ -1355,25 +889,15 @@
       "steps": [
         {
           "expected": {
-            "path": [
-              "00000000-0000-4000-8000-000000001001"
-            ],
+            "path": ["00000000-0000-4000-8000-000000001001"],
             "errors": {},
             "route_error": "unknown_condition",
             "outcome": null
           },
           "error": null
         },
-        {
-          "event_json": "{\"type\":\"next\"}",
-          "expected": {},
-          "error": "unknown_condition"
-        },
-        {
-          "event_json": "{\"type\":\"previous\"}",
-          "expected": {},
-          "error": "invalid_event"
-        },
+        {"event_json": "{\"type\":\"next\"}", "expected": {}, "error": "unknown_condition"},
+        {"event_json": "{\"type\":\"previous\"}", "expected": {}, "error": "invalid_event"},
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000102\"}",
           "expected": {
@@ -1398,11 +922,7 @@
           },
           "error": null
         },
-        {
-          "event_json": "{\"type\":\"next\"}",
-          "expected": {},
-          "error": "invalid_event"
-        }
+        {"event_json": "{\"type\":\"next\"}", "expected": {}, "error": "invalid_event"}
       ]
     },
     {
@@ -1411,9 +931,7 @@
       "steps": [
         {
           "expected": {
-            "visible": [
-              "00000000-0000-4000-8000-000000000001"
-            ],
+            "visible": ["00000000-0000-4000-8000-000000000001"],
             "errors": {},
             "path": [
               "00000000-0000-4000-8000-000000001001",
@@ -1435,9 +953,7 @@
               "00000000-0000-4000-8000-000000000001",
               "00000000-0000-4000-8000-000000000002"
             ],
-            "errors": {
-              "00000000-0000-4000-8000-000000000002": "required_answer"
-            }
+            "errors": {"00000000-0000-4000-8000-000000000002": "required_answer"}
           },
           "error": null
         },
@@ -1449,9 +965,7 @@
               "00000000-0000-4000-8000-000000000002",
               "00000000-0000-4000-8000-000000000003"
             ],
-            "errors": {
-              "00000000-0000-4000-8000-000000000003": "required_answer"
-            },
+            "errors": {"00000000-0000-4000-8000-000000000003": "required_answer"},
             "answers": {
               "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101",
               "00000000-0000-4000-8000-000000000002": "😀😀😀😀"
@@ -1462,9 +976,7 @@
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000003\",\"value\":4}",
           "expected": {
-            "errors": {
-              "00000000-0000-4000-8000-000000000003": "constraint_failed"
-            },
+            "errors": {"00000000-0000-4000-8000-000000000003": "constraint_failed"},
             "answers": {
               "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101",
               "00000000-0000-4000-8000-000000000002": "😀😀😀😀"
@@ -1479,12 +991,8 @@
               "00000000-0000-4000-8000-000000000001",
               "00000000-0000-4000-8000-000000000002"
             ],
-            "errors": {
-              "00000000-0000-4000-8000-000000000002": "invalid_answer"
-            },
-            "cleared": [
-              "00000000-0000-4000-8000-000000000003"
-            ],
+            "errors": {"00000000-0000-4000-8000-000000000002": "invalid_answer"},
+            "cleared": ["00000000-0000-4000-8000-000000000003"],
             "answers": {
               "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101"
             }
@@ -1499,25 +1007,19 @@
               "00000000-0000-4000-8000-000000000002",
               "00000000-0000-4000-8000-000000000003"
             ],
-            "errors": {
-              "00000000-0000-4000-8000-000000000003": "required_answer"
-            }
+            "errors": {"00000000-0000-4000-8000-000000000003": "required_answer"}
           },
           "error": null
         },
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000003\",\"value\":3}",
-          "expected": {
-            "errors": {}
-          },
+          "expected": {"errors": {}},
           "error": null
         },
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000102\"}",
           "expected": {
-            "visible": [
-              "00000000-0000-4000-8000-000000000001"
-            ],
+            "visible": ["00000000-0000-4000-8000-000000000001"],
             "errors": {},
             "cleared": [
               "00000000-0000-4000-8000-000000000002",
@@ -1564,17 +1066,11 @@
               "00000000-0000-4000-8000-000000000001",
               "00000000-0000-4000-8000-000000000002"
             ],
-            "errors": {
-              "00000000-0000-4000-8000-000000000002": "arithmetic_error"
-            }
+            "errors": {"00000000-0000-4000-8000-000000000002": "arithmetic_error"}
           },
           "error": null
         },
-        {
-          "event_json": "{\"type\":\"next\"}",
-          "expected": {},
-          "error": "arithmetic_error"
-        },
+        {"event_json": "{\"type\":\"next\"}", "expected": {}, "error": "arithmetic_error"},
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":null}",
           "expected": {
@@ -1624,62 +1120,40 @@
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":[\"00000000-0000-4000-8000-000000000103\",\"00000000-0000-4000-8000-000000000103\"]}",
           "expected": {
             "answers": {},
-            "errors": {
-              "00000000-0000-4000-8000-000000000002": "invalid_answer"
-            }
+            "errors": {"00000000-0000-4000-8000-000000000002": "invalid_answer"}
           },
           "error": null
         },
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":[]}",
-          "expected": {
-            "errors": {}
-          },
+          "expected": {"errors": {}},
           "error": null
         },
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000003\",\"value\":\"\\n\"}",
-          "expected": {
-            "errors": {
-              "00000000-0000-4000-8000-000000000003": "invalid_answer"
-            }
-          },
+          "expected": {"errors": {"00000000-0000-4000-8000-000000000003": "invalid_answer"}},
           "error": null
         },
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000003\",\"value\":\" \\t\"}",
-          "expected": {
-            "errors": {},
-            "answers": {}
-          },
+          "expected": {"errors": {}, "answers": {}},
           "error": null
         },
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000005\",\"value\":\"\"}",
-          "expected": {
-            "answers": {},
-            "errors": {}
-          },
+          "expected": {"answers": {}, "errors": {}},
           "error": null
         },
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000005\",\"value\":\"﻿\"}",
-          "expected": {
-            "answers": {
-              "00000000-0000-4000-8000-000000000005": "﻿"
-            }
-          },
+          "expected": {"answers": {"00000000-0000-4000-8000-000000000005": "﻿"}},
           "error": null
         },
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000004\",\"value\":\"invalid\"}",
           "expected": {
-            "errors": {
-              "00000000-0000-4000-8000-000000000004": "invalid_answer"
-            },
-            "answers": {
-              "00000000-0000-4000-8000-000000000005": "﻿"
-            }
+            "errors": {"00000000-0000-4000-8000-000000000004": "invalid_answer"},
+            "answers": {"00000000-0000-4000-8000-000000000005": "﻿"}
           },
           "error": null
         },
@@ -1696,27 +1170,15 @@
         },
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000006\",\"value\":\"3\"}",
-          "expected": {
-            "errors": {
-              "00000000-0000-4000-8000-000000000006": "invalid_answer"
-            }
-          },
+          "expected": {"errors": {"00000000-0000-4000-8000-000000000006": "invalid_answer"}},
           "error": null
         },
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000006\",\"value\":3}",
-          "expected": {
-            "errors": {}
-          },
+          "expected": {"errors": {}},
           "error": null
         },
-        {
-          "event_json": "{\"type\":\"next\"}",
-          "expected": {
-            "outcome": "complete"
-          },
-          "error": null
-        }
+        {"event_json": "{\"type\":\"next\"}", "expected": {"outcome": "complete"}, "error": null}
       ]
     },
     {
@@ -1725,9 +1187,7 @@
       "steps": [
         {
           "expected": {
-            "errors": {
-              "00000000-0000-4000-8000-000000000002": "unknown_condition"
-            },
+            "errors": {"00000000-0000-4000-8000-000000000002": "unknown_condition"},
             "answers": {}
           },
           "error": null
@@ -1736,17 +1196,11 @@
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000002\",\"value\":\"保留输入\"}",
           "expected": {
             "answers": {},
-            "errors": {
-              "00000000-0000-4000-8000-000000000002": "unknown_condition"
-            }
+            "errors": {"00000000-0000-4000-8000-000000000002": "unknown_condition"}
           },
           "error": null
         },
-        {
-          "event_json": "{\"type\":\"next\"}",
-          "expected": {},
-          "error": "unknown_condition"
-        },
+        {"event_json": "{\"type\":\"next\"}", "expected": {}, "error": "unknown_condition"},
         {
           "event_json": "{\"type\":\"change\",\"question_id\":\"00000000-0000-4000-8000-000000000001\",\"value\":\"00000000-0000-4000-8000-000000000102\"}",
           "expected": {
@@ -1775,9 +1229,7 @@
             "answers": {
               "00000000-0000-4000-8000-000000000001": "00000000-0000-4000-8000-000000000101"
             },
-            "errors": {
-              "00000000-0000-4000-8000-000000000002": "required_answer"
-            }
+            "errors": {"00000000-0000-4000-8000-000000000002": "required_answer"}
           },
           "error": null
         }
@@ -1794,9 +1246,7 @@
               "00000000-0000-4000-8000-000000000002"
             ],
             "answers": {},
-            "errors": {
-              "00000000-0000-4000-8000-000000000002": "unknown_condition"
-            }
+            "errors": {"00000000-0000-4000-8000-000000000002": "unknown_condition"}
           },
           "error": null
         },
@@ -1808,9 +1258,7 @@
               "00000000-0000-4000-8000-000000000002"
             ],
             "answers": {},
-            "errors": {
-              "00000000-0000-4000-8000-000000000002": "unknown_condition"
-            }
+            "errors": {"00000000-0000-4000-8000-000000000002": "unknown_condition"}
           },
           "error": null
         },

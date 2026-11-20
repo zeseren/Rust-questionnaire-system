@@ -2,14 +2,38 @@
 import { readFileSync } from 'node:fs'
 import { LogicError } from '../../src/logic.ts'
 
-/** 夹具在整个测试进程内只解析一次；调用方不得就地修改返回值。 */
+/** 夹具在整个测试进程内只解析并展开一次；调用方不得就地修改返回值。 */
 const cache = new Map()
 
-/** 读取 `fixtures/survey-logic/<name>.json`。 */
+/** 展开命名片段：`questions`/`variables`/`rules` 数组中的字符串按名称取片段。 */
+function expandFragments(fixture) {
+  const fragments = fixture.fragments ?? {}
+  const visit = (node) => {
+    if (Array.isArray(node)) return node.forEach(visit)
+    if (node === null || typeof node !== 'object') return
+    for (const [key, child] of Object.entries(node)) {
+      if (key === 'questions' || key === 'variables' || key === 'rules') {
+        if (Array.isArray(child)) {
+          node[key] = child.map((item) => {
+            if (typeof item !== 'string') return item
+            if (!Object.hasOwn(fragments, item)) throw new Error(`未知夹具片段：${item}`)
+            return structuredClone(fragments[item])
+          })
+        }
+      }
+      visit(node[key])
+    }
+  }
+  visit(fixture)
+}
+
+/** 读取并展开 `fixtures/survey-logic/<name>.json`。 */
 export function loadFixture(name) {
   if (!cache.has(name)) {
     const url = new URL(`../../../fixtures/survey-logic/${name}.json`, import.meta.url)
-    cache.set(name, JSON.parse(readFileSync(url, 'utf8')))
+    const fixture = JSON.parse(readFileSync(url, 'utf8'))
+    expandFragments(fixture)
+    cache.set(name, fixture)
   }
   return cache.get(name)
 }

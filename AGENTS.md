@@ -110,7 +110,9 @@ pnpm run wasm:build                                           # 仅在改动 log
 | `frontend` 契约 | `frontend/tests/contract/` | 与 Rust 共读 `fixtures/survey-logic/` 的 `flows`、`input-contracts` 与 `texts` 三份夹具，断言两端语义一致 |
 | `frontend` 单元 | `frontend/tests/unit/` | 18 个模块：`value-contract`、`numbers`、`json`、`format`、`logic-errors`、`answers`、`documents`、`condition-builder`、`flow-tools`、`editor-logic`、`survey-templates`、`logic-text-tools`、`api`、`resource`、`stores`、`router`、`wasm-envelope`、`uuid` |
 | `frontend` 集成 | `frontend/tests/integration/` | `editor-workflow`、`flow-inputs`：编辑器工具与 `FlowSession` 输入适配的跨模块流程 |
-| 共享测试基建 | `backend/src/tests/support.rs`、`frontend/tests/helpers/` | 后端无连接 DB/原始 HTTP 测试桩 `support.rs`（由 `mod.rs` 聚合）；前端 `fixtures.mjs` 夹具缓存、`documents.mjs` 固定身份构造器、`browser.mjs` 按需安装且 `t.after` 自动清理的浏览器环境桩 |
+| 共享测试基建 | `backend/src/tests/support.rs`、`logic-core/src/tests/support.rs`、`logic-core/tests/support/mod.rs`、`frontend/tests/helpers/` | 后端无连接 DB/原始 HTTP 测试桩 `support.rs`（由 `mod.rs` 聚合）；`logic-core` 单元测试共用的身份、版本与最小题目构造；Rust 侧共享夹具读取与 `fragments` 命名片段展开（`logic-wasm/tests/smoke.rs` 经 `#[path]` 复用同一份）；前端 `fixtures.mjs` 夹具缓存与同语义片段展开、`documents.mjs` 固定身份构造器、`browser.mjs` 按需安装且 `t.after` 自动清理的浏览器环境桩 |
+
+共享夹具约定：`flows.json`、`documents.json` 顶层 `fragments` 存放被多处引用的题目、变量与规则，`questions`/`variables`/`rules` 数组里的字符串即片段名，未知名称两端都立即报错；`texts.json` 的格式样例用 `logic_overrides` 在命名文档规则或 `format_base_logic` 上按一级键覆盖。夹具按宽 100 的紧凑排版保存（能放进一行的对象与数组不换行）。
 
 - 修改 Rust 代码必跑：受影响的 `cargo test`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 与 `rustfmt`。
 - 修改前端代码必跑：`pnpm run test:regression`（递归执行 `frontend/tests/` 下的分层测试）、`pnpm run typecheck`（或 `pnpm run build`）与 `prettier`。

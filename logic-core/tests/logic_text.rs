@@ -6,19 +6,14 @@ use questionnaire_logic::domain::{
 };
 use serde_json::{Value, json};
 
-fn texts_fixture() -> Value {
-    serde_json::from_str(include_str!("../../fixtures/survey-logic/texts.json")).unwrap()
-}
-
-fn flows_fixture() -> Value {
-    serde_json::from_str(include_str!("../../fixtures/survey-logic/flows.json")).unwrap()
-}
+mod support;
 
 fn document() -> Document {
-    let fixture = texts_fixture();
-    let flows = flows_fixture();
-    serde_json::from_value(flows["documents"][fixture["document"].as_str().unwrap()].clone())
-        .unwrap()
+    let fixture = support::texts();
+    serde_json::from_value(support::flow_document(
+        fixture["document"].as_str().unwrap(),
+    ))
+    .unwrap()
 }
 
 fn parse_program(source: &str, questions: &[Question]) -> Result<DocumentLogic, LogicTextError> {
@@ -42,9 +37,36 @@ fn format_case_field<'a>(item: &'a Value, flows: &'a Value, field: &str) -> &'a 
         .unwrap_or_else(|| panic!("流程文档 {document_name} 缺少 {field} 字段"))
 }
 
+/// 格式样例规则：`logic_overrides` 覆盖命名文档的 logic，缺省时改用 `format_base_logic`。
+fn format_case_logic(item: &Value, fixture: &Value, flows: &Value) -> Value {
+    let Some(overrides) = item.get("logic_overrides") else {
+        return format_case_field(item, flows, "logic").clone();
+    };
+    let document = item["document"]
+        .as_str()
+        .unwrap_or_else(|| panic!("格式样例 {} 缺少 document 引用", item["name"]));
+    let source = flows["documents"]
+        .get(document)
+        .unwrap_or_else(|| panic!("格式样例 {document} 引用了未知流程文档"));
+    let mut logic = source
+        .get("logic")
+        .filter(|value| !value.is_null())
+        .unwrap_or(&fixture["format_base_logic"])
+        .as_object()
+        .expect("格式样例缺少 logic 基底")
+        .clone();
+    logic.extend(
+        overrides
+            .as_object()
+            .expect("logic_overrides 必须是对象")
+            .clone(),
+    );
+    Value::Object(logic)
+}
+
 #[test]
 fn 文本共享样例保留身份优先级并定位语法与语义错误() {
-    let fixture = texts_fixture();
+    let fixture = support::texts();
     let document = document();
     for item in fixture["cases"].as_array().unwrap() {
         let mut source = fixture["source_lines"]
@@ -313,14 +335,14 @@ fn 巡检接口在语法错误后仍返回已扫描绑定() {
 #[test]
 fn 共享格式化样例逐字节一致且二次解析与格式化幂等() {
     // 与前端同读 texts.json 的 format_cases；expected 为 TS 真实输出的字节快照。
-    let fixture = texts_fixture();
-    let flows = flows_fixture();
+    let fixture = support::texts();
+    let flows = support::flows();
     for item in fixture["format_cases"].as_array().unwrap() {
         let name = item["name"].as_str().unwrap();
         let questions: Vec<Question> =
             serde_json::from_value(format_case_field(item, &flows, "questions").clone()).unwrap();
         let logic: DocumentLogic =
-            serde_json::from_value(format_case_field(item, &flows, "logic").clone()).unwrap();
+            serde_json::from_value(format_case_logic(item, &fixture, &flows)).unwrap();
         let expected = item["expected"].as_str().unwrap();
         let formatted = format_logic_text(&logic, &questions)
             .unwrap_or_else(|error| panic!("{name} 格式化失败: {error:?}"));

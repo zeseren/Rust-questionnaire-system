@@ -33,65 +33,26 @@
     "end finish = complete;"
   ],
   "cases": [
-    {
-      "name": "完整分支别名解析为既有统一模型",
-      "replacements": [],
-      "edits": []
-    },
-    {
-      "name": "别名重命名不改变身份",
-      "replacements": [
-        [
-          "amount",
-          "quantity"
-        ]
-      ],
-      "edits": []
-    },
+    {"name": "完整分支别名解析为既有统一模型", "replacements": [], "edits": []},
+    {"name": "别名重命名不改变身份", "replacements": [["amount", "quantity"]], "edits": []},
     {
       "name": "布尔前缀及中缀优先级保留短路分组",
       "replacements": [
-        [
-          "let broken: number = 1 / 0;",
-          "let broken: boolean = !false && (true || false);"
-        ]
+        ["let broken: number = 1 / 0;", "let broken: boolean = !false && (true || false);"]
       ],
       "edits": [
+        {"path": ["variables", 1, "value_type"], "value": "boolean"},
         {
-          "path": [
-            "variables",
-            1,
-            "value_type"
-          ],
-          "value": "boolean"
-        },
-        {
-          "path": [
-            "variables",
-            1,
-            "expression"
-          ],
+          "path": ["variables", 1, "expression"],
           "value": {
             "op": "all",
             "expressions": [
-              {
-                "op": "not",
-                "expression": {
-                  "op": "boolean",
-                  "value": false
-                }
-              },
+              {"op": "not", "expression": {"op": "boolean", "value": false}},
               {
                 "op": "any",
                 "expressions": [
-                  {
-                    "op": "boolean",
-                    "value": true
-                  },
-                  {
-                    "op": "boolean",
-                    "value": false
-                  }
+                  {"op": "boolean", "value": true},
+                  {"op": "boolean", "value": false}
                 ]
               }
             ]
@@ -101,37 +62,19 @@
     },
     {
       "name": "乘法优先于加法并保留原始字面量",
-      "replacements": [
-        [
-          "1 / 0",
-          "1 + 2 * 3"
-        ]
-      ],
+      "replacements": [["1 / 0", "1 + 2 * 3"]],
       "edits": [
         {
-          "path": [
-            "variables",
-            1,
-            "expression"
-          ],
+          "path": ["variables", 1, "expression"],
           "value": {
             "op": "arithmetic",
             "operator": "add",
-            "left": {
-              "op": "number",
-              "value": "1"
-            },
+            "left": {"op": "number", "value": "1"},
             "right": {
               "op": "arithmetic",
               "operator": "multiply",
-              "left": {
-                "op": "number",
-                "value": "2"
-              },
-              "right": {
-                "op": "number",
-                "value": "3"
-              }
+              "left": {"op": "number", "value": "2"},
+              "right": {"op": "number", "value": "3"}
             }
           }
         }
@@ -139,145 +82,72 @@
     },
     {
       "name": "同级算术从左结合",
-      "replacements": [
-        [
-          "1 / 0",
-          "10 - 3 - 2"
-        ]
-      ],
+      "replacements": [["1 / 0", "10 - 3 - 2"]],
       "edits": [
         {
-          "path": [
-            "variables",
-            1,
-            "expression"
-          ],
+          "path": ["variables", 1, "expression"],
           "value": {
             "op": "arithmetic",
             "operator": "subtract",
             "left": {
               "op": "arithmetic",
               "operator": "subtract",
-              "left": {
-                "op": "number",
-                "value": "10"
-              },
-              "right": {
-                "op": "number",
-                "value": "3"
-              }
+              "left": {"op": "number", "value": "10"},
+              "right": {"op": "number", "value": "3"}
             },
-            "right": {
-              "op": "number",
-              "value": "2"
-            }
+            "right": {"op": "number", "value": "2"}
           }
         }
       ]
     },
     {
       "name": "数字函数保留原文",
-      "replacements": [
-        [
-          "1 / 0",
-          "number(\"-0.0\")"
-        ]
-      ],
+      "replacements": [["1 / 0", "number(\"-0.0\")"]],
       "edits": [
-        {
-          "path": [
-            "variables",
-            1,
-            "expression"
-          ],
-          "value": {
-            "op": "number",
-            "value": "-0.0"
-          }
-        }
+        {"path": ["variables", 1, "expression"], "value": {"op": "number", "value": "-0.0"}}
       ]
     },
     {
       "name": "字符串保留中文与补充平面字符",
-      "replacements": [
-        [
-          "1 / 0",
-          "length(\"中文😀\")"
-        ]
-      ],
+      "replacements": [["1 / 0", "length(\"中文😀\")"]],
       "edits": [
         {
-          "path": [
-            "variables",
-            1,
-            "expression"
-          ],
-          "value": {
-            "op": "length",
-            "value": {
-              "op": "text",
-              "value": "中文😀"
-            }
-          }
+          "path": ["variables", 1, "expression"],
+          "value": {"op": "length", "value": {"op": "text", "value": "中文😀"}}
         }
       ]
     },
     {
       "name": "Unicode错误列按标量而不是字节计数",
-      "replacements": [
-        [
-          "1 / 0",
-          "length(\"中文😀\") $"
-        ]
-      ],
+      "replacements": [["1 / 0", "length(\"中文😀\") $"]],
       "error": "invalid_syntax",
       "line": 17,
       "column": 36
     },
     {
       "name": "声明关键字不能与数字黏连",
-      "replacements": [
-        [
-          "dsl 1",
-          "dsl1"
-        ]
-      ],
+      "replacements": [["dsl 1", "dsl1"]],
       "error": "invalid_syntax",
       "line": 1,
       "column": 1
     },
     {
       "name": "未知别名不能穿过引用检查",
-      "replacements": [
-        [
-          "answer(amount)",
-          "answer(absent)"
-        ]
-      ],
+      "replacements": [["answer(amount)", "answer(absent)"]],
       "error": "invalid_reference",
       "line": 16,
       "column": 28
     },
     {
       "name": "选项别名不能冒充题目",
-      "replacements": [
-        [
-          "answer(amount)",
-          "answer(yes)"
-        ]
-      ],
+      "replacements": [["answer(amount)", "answer(yes)"]],
       "error": "invalid_reference",
       "line": 16,
       "column": 28
     },
     {
       "name": "重复别名必须拒绝",
-      "replacements": [
-        [
-          "bind question amount",
-          "bind question choose"
-        ]
-      ],
+      "replacements": [["bind question amount", "bind question choose"]],
       "error": "invalid_reference",
       "line": 4,
       "column": 6
@@ -292,24 +162,14 @@
     },
     {
       "name": "拒绝超出有限浮点数范围的数字字面量",
-      "replacements": [
-        [
-          "1 / 0",
-          "1e400"
-        ]
-      ],
+      "replacements": [["1 / 0", "1e400"]],
       "error": "invalid_number",
       "line": 17,
       "column": 1
     },
     {
       "name": "分支必须有默认出口",
-      "replacements": [
-        [
-          "else -> right;",
-          ""
-        ]
-      ],
+      "replacements": [["else -> right;", ""]],
       "error": "invalid_syntax",
       "line": 25,
       "column": 1
@@ -317,10 +177,7 @@
     {
       "name": "前向依赖仍定位到对应规则",
       "replacements": [
-        [
-          "validate amount = answer(amount) >= 0;",
-          "visible amount = answered(confirm);"
-        ]
+        ["validate amount = answer(amount) >= 0;", "visible amount = answered(confirm);"]
       ],
       "error": "forward_reference",
       "line": 18,
@@ -328,55 +185,31 @@
     },
     {
       "name": "拒绝未知语义版本",
-      "replacements": [
-        [
-          "semantics 1",
-          "semantics 2"
-        ]
-      ],
+      "replacements": [["semantics 1", "semantics 2"]],
       "error": "unsupported_version",
       "line": 1,
       "column": 1
     },
     {
       "name": "孤立代理项不是Unicode标量",
-      "replacements": [
-        [
-          "1 / 0",
-          "length(\"\\ud800\")"
-        ]
-      ],
+      "replacements": [["1 / 0", "length(\"\\ud800\")"]],
       "error": "invalid_syntax",
       "line": 17,
       "column": 29
     },
     {
       "name": "题目身份不可从标题猜测",
-      "replacements": [
-        [
-          "00000000-0000-4000-8000-000000000002",
-          "数字"
-        ]
-      ],
+      "replacements": [["00000000-0000-4000-8000-000000000002", "数字"]],
       "error": "invalid_reference",
       "line": 4,
       "column": 6
     },
     {
       "name": "三元条件编译为if且分支类型必须一致",
-      "replacements": [
-        [
-          "1 / 0",
-          "if selected(choose, yes) then 3 else 1"
-        ]
-      ],
+      "replacements": [["1 / 0", "if selected(choose, yes) then 3 else 1"]],
       "edits": [
         {
-          "path": [
-            "variables",
-            1,
-            "expression"
-          ],
+          "path": ["variables", 1, "expression"],
           "value": {
             "op": "if",
             "condition": {
@@ -384,39 +217,21 @@
               "question_id": "00000000-0000-4000-8000-000000000001",
               "option_id": "00000000-0000-4000-8000-000000000101"
             },
-            "then_branch": {
-              "op": "number",
-              "value": "3"
-            },
-            "else_branch": {
-              "op": "number",
-              "value": "1"
-            }
+            "then_branch": {"op": "number", "value": "3"},
+            "else_branch": {"op": "number", "value": "1"}
           }
         }
       ]
     },
     {
       "name": "一元负号允许空格并作用于答案",
-      "replacements": [
-        [
-          "1 / 0",
-          "- answer(amount)"
-        ]
-      ],
+      "replacements": [["1 / 0", "- answer(amount)"]],
       "edits": [
         {
-          "path": [
-            "variables",
-            1,
-            "expression"
-          ],
+          "path": ["variables", 1, "expression"],
           "value": {
             "op": "negate",
-            "value": {
-              "op": "answer",
-              "question_id": "00000000-0000-4000-8000-000000000002"
-            }
+            "value": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000002"}
           }
         }
       ]
@@ -424,36 +239,16 @@
     {
       "name": "文本包含函数编译为布尔判断",
       "replacements": [
-        [
-          "let broken: number = 1 / 0;",
-          "let broken: boolean = contains(\"反馈\", \"馈\");"
-        ]
+        ["let broken: number = 1 / 0;", "let broken: boolean = contains(\"反馈\", \"馈\");"]
       ],
       "edits": [
+        {"path": ["variables", 1, "value_type"], "value": "boolean"},
         {
-          "path": [
-            "variables",
-            1,
-            "value_type"
-          ],
-          "value": "boolean"
-        },
-        {
-          "path": [
-            "variables",
-            1,
-            "expression"
-          ],
+          "path": ["variables", 1, "expression"],
           "value": {
             "op": "contains",
-            "text": {
-              "op": "text",
-              "value": "反馈"
-            },
-            "substring": {
-              "op": "text",
-              "value": "馈"
-            }
+            "text": {"op": "text", "value": "反馈"},
+            "substring": {"op": "text", "value": "馈"}
           }
         }
       ]
@@ -461,36 +256,16 @@
     {
       "name": "文本前缀函数编译为布尔判断",
       "replacements": [
-        [
-          "let broken: number = 1 / 0;",
-          "let broken: boolean = starts_with(\"反馈\", \"反\");"
-        ]
+        ["let broken: number = 1 / 0;", "let broken: boolean = starts_with(\"反馈\", \"反\");"]
       ],
       "edits": [
+        {"path": ["variables", 1, "value_type"], "value": "boolean"},
         {
-          "path": [
-            "variables",
-            1,
-            "value_type"
-          ],
-          "value": "boolean"
-        },
-        {
-          "path": [
-            "variables",
-            1,
-            "expression"
-          ],
+          "path": ["variables", 1, "expression"],
           "value": {
             "op": "starts_with",
-            "text": {
-              "op": "text",
-              "value": "反馈"
-            },
-            "prefix": {
-              "op": "text",
-              "value": "反"
-            }
+            "text": {"op": "text", "value": "反馈"},
+            "prefix": {"op": "text", "value": "反"}
           }
         }
       ]
@@ -498,37 +273,17 @@
     {
       "name": "单选身份可以比较相等",
       "replacements": [
-        [
-          "let broken: number = 1 / 0;",
-          "let broken: boolean = answer(choose) == answer(choose);"
-        ]
+        ["let broken: number = 1 / 0;", "let broken: boolean = answer(choose) == answer(choose);"]
       ],
       "edits": [
+        {"path": ["variables", 1, "value_type"], "value": "boolean"},
         {
-          "path": [
-            "variables",
-            1,
-            "value_type"
-          ],
-          "value": "boolean"
-        },
-        {
-          "path": [
-            "variables",
-            1,
-            "expression"
-          ],
+          "path": ["variables", 1, "expression"],
           "value": {
             "op": "compare",
             "comparison": "eq",
-            "left": {
-              "op": "answer",
-              "question_id": "00000000-0000-4000-8000-000000000001"
-            },
-            "right": {
-              "op": "answer",
-              "question_id": "00000000-0000-4000-8000-000000000001"
-            }
+            "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000001"},
+            "right": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000001"}
           }
         }
       ]
@@ -546,6 +301,140 @@
       "column": 3
     }
   ],
+  "format_base_logic": {
+    "dsl_version": 1,
+    "semantics_version": 1,
+    "variables": [
+      {
+        "id": "00000000-0000-4000-8000-000000002001",
+        "value_type": "number",
+        "expression": {
+          "op": "arithmetic",
+          "operator": "add",
+          "left": {"op": "number", "value": "1.5"},
+          "right": {
+            "op": "arithmetic",
+            "operator": "multiply",
+            "left": {"op": "number", "value": "2"},
+            "right": {"op": "number", "value": "0.25"}
+          }
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000002002",
+        "value_type": "number",
+        "expression": {"op": "length", "value": {"op": "text", "value": "中文😀"}}
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000002003",
+        "value_type": "number",
+        "expression": {
+          "op": "coalesce",
+          "value": {
+            "op": "arithmetic",
+            "operator": "subtract",
+            "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002001"},
+            "right": {"op": "number", "value": "0"}
+          },
+          "fallback": {"op": "number", "value": "0"}
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000002004",
+        "value_type": "number",
+        "expression": {
+          "op": "arithmetic",
+          "operator": "divide",
+          "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002003"},
+          "right": {"op": "number", "value": "4"}
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000002005",
+        "value_type": "boolean",
+        "expression": {
+          "op": "not",
+          "expression": {"op": "answered", "question_id": "00000000-0000-4000-8000-000000000001"}
+        }
+      }
+    ],
+    "rules": [
+      {
+        "question_id": "00000000-0000-4000-8000-000000000003",
+        "visible_if": {
+          "op": "compare",
+          "comparison": "eq",
+          "left": {"op": "text", "value": "yes"},
+          "right": {"op": "text", "value": "yes"}
+        },
+        "required_if": {
+          "op": "compare",
+          "comparison": "ne",
+          "left": {"op": "text", "value": "a"},
+          "right": {"op": "text", "value": "b"}
+        }
+      },
+      {
+        "question_id": "00000000-0000-4000-8000-000000000004",
+        "validate": {
+          "op": "all",
+          "expressions": [
+            {
+              "op": "compare",
+              "comparison": "lt",
+              "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+              "right": {"op": "number", "value": "10"}
+            },
+            {
+              "op": "compare",
+              "comparison": "le",
+              "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+              "right": {"op": "number", "value": "9"}
+            },
+            {
+              "op": "compare",
+              "comparison": "gt",
+              "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+              "right": {"op": "number", "value": "0"}
+            },
+            {
+              "op": "compare",
+              "comparison": "ge",
+              "left": {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002001"},
+              "right": {"op": "number", "value": "2"}
+            }
+          ]
+        },
+        "visible_if": {
+          "op": "any",
+          "expressions": [
+            {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002005"},
+            {"op": "boolean", "value": false}
+          ]
+        }
+      },
+      {
+        "question_id": "00000000-0000-4000-8000-000000000002",
+        "validate": {
+          "op": "contains_all",
+          "question_id": "00000000-0000-4000-8000-000000000002",
+          "option_ids": [
+            "00000000-0000-4000-8000-000000000103",
+            "00000000-0000-4000-8000-000000000104"
+          ]
+        }
+      },
+      {
+        "question_id": "00000000-0000-4000-8000-000000000006",
+        "validate": {
+          "op": "compare",
+          "comparison": "eq",
+          "left": {"op": "number", "value": "1.2300e+2"},
+          "right": {"op": "number", "value": "-0.0"}
+        }
+      }
+    ]
+  },
   "format_cases": [
     {
       "name": "既有 diamond 文档输出全部 bind 类别与三类流程节点",
@@ -560,20 +449,7 @@
     {
       "name": "dynamic 文档附加最小流程后保留 selected 规则",
       "document": "dynamic",
-      "logic": {
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "variables": [],
-        "rules": [
-          {
-            "question_id": "00000000-0000-4000-8000-000000000002",
-            "required_if": {
-              "op": "selected",
-              "question_id": "00000000-0000-4000-8000-000000000001",
-              "option_id": "00000000-0000-4000-8000-000000000101"
-            }
-          }
-        ],
+      "logic_overrides": {
         "flow": {
           "entry": "00000000-0000-4000-8000-000000001001",
           "nodes": [
@@ -586,11 +462,7 @@
               ],
               "next": "00000000-0000-4000-8000-000000001002"
             },
-            {
-              "type": "end",
-              "id": "00000000-0000-4000-8000-000000001002",
-              "outcome": "complete"
-            }
+            {"type": "end", "id": "00000000-0000-4000-8000-000000001002", "outcome": "complete"}
           ]
         }
       },
@@ -599,440 +471,13 @@
     {
       "name": "无流程文档覆盖全部二元运算符与函数表达式",
       "document": "plain",
-      "logic": {
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "variables": [
-          {
-            "id": "00000000-0000-4000-8000-000000002001",
-            "value_type": "number",
-            "expression": {
-              "op": "arithmetic",
-              "operator": "add",
-              "left": {
-                "op": "number",
-                "value": "1.5"
-              },
-              "right": {
-                "op": "arithmetic",
-                "operator": "multiply",
-                "left": {
-                  "op": "number",
-                  "value": "2"
-                },
-                "right": {
-                  "op": "number",
-                  "value": "0.25"
-                }
-              }
-            }
-          },
-          {
-            "id": "00000000-0000-4000-8000-000000002002",
-            "value_type": "number",
-            "expression": {
-              "op": "length",
-              "value": {
-                "op": "text",
-                "value": "中文😀"
-              }
-            }
-          },
-          {
-            "id": "00000000-0000-4000-8000-000000002003",
-            "value_type": "number",
-            "expression": {
-              "op": "coalesce",
-              "value": {
-                "op": "arithmetic",
-                "operator": "subtract",
-                "left": {
-                  "op": "variable",
-                  "variable_id": "00000000-0000-4000-8000-000000002001"
-                },
-                "right": {
-                  "op": "number",
-                  "value": "0"
-                }
-              },
-              "fallback": {
-                "op": "number",
-                "value": "0"
-              }
-            }
-          },
-          {
-            "id": "00000000-0000-4000-8000-000000002004",
-            "value_type": "number",
-            "expression": {
-              "op": "arithmetic",
-              "operator": "divide",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000002003"
-              },
-              "right": {
-                "op": "number",
-                "value": "4"
-              }
-            }
-          },
-          {
-            "id": "00000000-0000-4000-8000-000000002005",
-            "value_type": "boolean",
-            "expression": {
-              "op": "not",
-              "expression": {
-                "op": "answered",
-                "question_id": "00000000-0000-4000-8000-000000000001"
-              }
-            }
-          }
-        ],
-        "rules": [
-          {
-            "question_id": "00000000-0000-4000-8000-000000000003",
-            "visible_if": {
-              "op": "compare",
-              "comparison": "eq",
-              "left": {
-                "op": "text",
-                "value": "yes"
-              },
-              "right": {
-                "op": "text",
-                "value": "yes"
-              }
-            },
-            "required_if": {
-              "op": "compare",
-              "comparison": "ne",
-              "left": {
-                "op": "text",
-                "value": "a"
-              },
-              "right": {
-                "op": "text",
-                "value": "b"
-              }
-            }
-          },
-          {
-            "question_id": "00000000-0000-4000-8000-000000000004",
-            "validate": {
-              "op": "all",
-              "expressions": [
-                {
-                  "op": "compare",
-                  "comparison": "lt",
-                  "left": {
-                    "op": "answer",
-                    "question_id": "00000000-0000-4000-8000-000000000004"
-                  },
-                  "right": {
-                    "op": "number",
-                    "value": "10"
-                  }
-                },
-                {
-                  "op": "compare",
-                  "comparison": "le",
-                  "left": {
-                    "op": "answer",
-                    "question_id": "00000000-0000-4000-8000-000000000004"
-                  },
-                  "right": {
-                    "op": "number",
-                    "value": "9"
-                  }
-                },
-                {
-                  "op": "compare",
-                  "comparison": "gt",
-                  "left": {
-                    "op": "answer",
-                    "question_id": "00000000-0000-4000-8000-000000000004"
-                  },
-                  "right": {
-                    "op": "number",
-                    "value": "0"
-                  }
-                },
-                {
-                  "op": "compare",
-                  "comparison": "ge",
-                  "left": {
-                    "op": "variable",
-                    "variable_id": "00000000-0000-4000-8000-000000002001"
-                  },
-                  "right": {
-                    "op": "number",
-                    "value": "2"
-                  }
-                }
-              ]
-            },
-            "visible_if": {
-              "op": "any",
-              "expressions": [
-                {
-                  "op": "variable",
-                  "variable_id": "00000000-0000-4000-8000-000000002005"
-                },
-                {
-                  "op": "boolean",
-                  "value": false
-                }
-              ]
-            }
-          },
-          {
-            "question_id": "00000000-0000-4000-8000-000000000002",
-            "validate": {
-              "op": "contains_all",
-              "question_id": "00000000-0000-4000-8000-000000000002",
-              "option_ids": [
-                "00000000-0000-4000-8000-000000000103",
-                "00000000-0000-4000-8000-000000000104"
-              ]
-            }
-          },
-          {
-            "question_id": "00000000-0000-4000-8000-000000000006",
-            "validate": {
-              "op": "compare",
-              "comparison": "eq",
-              "left": {
-                "op": "number",
-                "value": "1.2300e+2"
-              },
-              "right": {
-                "op": "number",
-                "value": "-0.0"
-              }
-            }
-          }
-        ]
-      },
+      "logic_overrides": {},
       "expected": "dsl 1 semantics 1;\nbind question q1 = \"00000000-0000-4000-8000-000000000001\";\nbind option q1_o1 = \"00000000-0000-4000-8000-000000000101\";\nbind option q1_o2 = \"00000000-0000-4000-8000-000000000102\";\nbind question q2 = \"00000000-0000-4000-8000-000000000002\";\nbind option q2_o1 = \"00000000-0000-4000-8000-000000000103\";\nbind option q2_o2 = \"00000000-0000-4000-8000-000000000104\";\nbind question q3 = \"00000000-0000-4000-8000-000000000003\";\nbind question q4 = \"00000000-0000-4000-8000-000000000004\";\nbind question q5 = \"00000000-0000-4000-8000-000000000005\";\nbind question q6 = \"00000000-0000-4000-8000-000000000006\";\nbind variable v1 = \"00000000-0000-4000-8000-000000002001\";\nbind variable v2 = \"00000000-0000-4000-8000-000000002002\";\nbind variable v3 = \"00000000-0000-4000-8000-000000002003\";\nbind variable v4 = \"00000000-0000-4000-8000-000000002004\";\nbind variable v5 = \"00000000-0000-4000-8000-000000002005\";\n\nlet v1: number = (number(\"1.5\") + (number(\"2\") * number(\"0.25\")));\nlet v2: number = length(\"中文😀\");\nlet v3: number = coalesce((variable(v1) - number(\"0\")), number(\"0\"));\nlet v4: number = (variable(v3) / number(\"4\"));\nlet v5: boolean = !(answered(q1));\nvisible q3 = (\"yes\" == \"yes\");\nrequired q3 = (\"a\" != \"b\");\nvisible q4 = any(variable(v5), false);\nvalidate q4 = all((answer(q4) < number(\"10\")), (answer(q4) <= number(\"9\")), (answer(q4) > number(\"0\")), (variable(v1) >= number(\"2\")));\nvalidate q2 = contains_all(q2, [q2_o1, q2_o2]);\nvalidate q6 = (number(\"1.2300e+2\") == number(\"-0.0\"));\n"
     },
     {
       "name": "带流程文档覆盖 contains_all 与多分支缩进",
       "document": "plain",
-      "logic": {
-        "dsl_version": 1,
-        "semantics_version": 1,
-        "variables": [
-          {
-            "id": "00000000-0000-4000-8000-000000002001",
-            "value_type": "number",
-            "expression": {
-              "op": "arithmetic",
-              "operator": "add",
-              "left": {
-                "op": "number",
-                "value": "1.5"
-              },
-              "right": {
-                "op": "arithmetic",
-                "operator": "multiply",
-                "left": {
-                  "op": "number",
-                  "value": "2"
-                },
-                "right": {
-                  "op": "number",
-                  "value": "0.25"
-                }
-              }
-            }
-          },
-          {
-            "id": "00000000-0000-4000-8000-000000002002",
-            "value_type": "number",
-            "expression": {
-              "op": "length",
-              "value": {
-                "op": "text",
-                "value": "中文😀"
-              }
-            }
-          },
-          {
-            "id": "00000000-0000-4000-8000-000000002003",
-            "value_type": "number",
-            "expression": {
-              "op": "coalesce",
-              "value": {
-                "op": "arithmetic",
-                "operator": "subtract",
-                "left": {
-                  "op": "variable",
-                  "variable_id": "00000000-0000-4000-8000-000000002001"
-                },
-                "right": {
-                  "op": "number",
-                  "value": "0"
-                }
-              },
-              "fallback": {
-                "op": "number",
-                "value": "0"
-              }
-            }
-          },
-          {
-            "id": "00000000-0000-4000-8000-000000002004",
-            "value_type": "number",
-            "expression": {
-              "op": "arithmetic",
-              "operator": "divide",
-              "left": {
-                "op": "variable",
-                "variable_id": "00000000-0000-4000-8000-000000002003"
-              },
-              "right": {
-                "op": "number",
-                "value": "4"
-              }
-            }
-          },
-          {
-            "id": "00000000-0000-4000-8000-000000002005",
-            "value_type": "boolean",
-            "expression": {
-              "op": "not",
-              "expression": {
-                "op": "answered",
-                "question_id": "00000000-0000-4000-8000-000000000001"
-              }
-            }
-          }
-        ],
-        "rules": [
-          {
-            "question_id": "00000000-0000-4000-8000-000000000003",
-            "visible_if": {
-              "op": "compare",
-              "comparison": "eq",
-              "left": {
-                "op": "text",
-                "value": "yes"
-              },
-              "right": {
-                "op": "text",
-                "value": "yes"
-              }
-            },
-            "required_if": {
-              "op": "compare",
-              "comparison": "ne",
-              "left": {
-                "op": "text",
-                "value": "a"
-              },
-              "right": {
-                "op": "text",
-                "value": "b"
-              }
-            }
-          },
-          {
-            "question_id": "00000000-0000-4000-8000-000000000004",
-            "validate": {
-              "op": "all",
-              "expressions": [
-                {
-                  "op": "compare",
-                  "comparison": "lt",
-                  "left": {
-                    "op": "answer",
-                    "question_id": "00000000-0000-4000-8000-000000000004"
-                  },
-                  "right": {
-                    "op": "number",
-                    "value": "10"
-                  }
-                },
-                {
-                  "op": "compare",
-                  "comparison": "le",
-                  "left": {
-                    "op": "answer",
-                    "question_id": "00000000-0000-4000-8000-000000000004"
-                  },
-                  "right": {
-                    "op": "number",
-                    "value": "9"
-                  }
-                },
-                {
-                  "op": "compare",
-                  "comparison": "gt",
-                  "left": {
-                    "op": "answer",
-                    "question_id": "00000000-0000-4000-8000-000000000004"
-                  },
-                  "right": {
-                    "op": "number",
-                    "value": "0"
-                  }
-                },
-                {
-                  "op": "compare",
-                  "comparison": "ge",
-                  "left": {
-                    "op": "variable",
-                    "variable_id": "00000000-0000-4000-8000-000000002001"
-                  },
-                  "right": {
-                    "op": "number",
-                    "value": "2"
-                  }
-                }
-              ]
-            },
-            "visible_if": {
-              "op": "any",
-              "expressions": [
-                {
-                  "op": "variable",
-                  "variable_id": "00000000-0000-4000-8000-000000002005"
-                },
-                {
-                  "op": "boolean",
-                  "value": false
-                }
-              ]
-            }
-          },
-          {
-            "question_id": "00000000-0000-4000-8000-000000000002",
-            "validate": {
-              "op": "contains_all",
-              "question_id": "00000000-0000-4000-8000-000000000002",
-              "option_ids": [
-                "00000000-0000-4000-8000-000000000103",
-                "00000000-0000-4000-8000-000000000104"
-              ]
-            }
-          },
-          {
-            "question_id": "00000000-0000-4000-8000-000000000006",
-            "validate": {
-              "op": "compare",
-              "comparison": "eq",
-              "left": {
-                "op": "number",
-                "value": "1.2300e+2"
-              },
-              "right": {
-                "op": "number",
-                "value": "-0.0"
-              }
-            }
-          }
-        ],
+      "logic_overrides": {
         "flow": {
           "entry": "00000000-0000-4000-8000-000000001001",
           "nodes": [
@@ -1061,9 +506,7 @@
                   "when": {
                     "op": "contains_any",
                     "question_id": "00000000-0000-4000-8000-000000000002",
-                    "option_ids": [
-                      "00000000-0000-4000-8000-000000000104"
-                    ]
+                    "option_ids": ["00000000-0000-4000-8000-000000000104"]
                   },
                   "target": "00000000-0000-4000-8000-000000001004"
                 },
@@ -1071,14 +514,8 @@
                   "when": {
                     "op": "all",
                     "expressions": [
-                      {
-                        "op": "boolean",
-                        "value": true
-                      },
-                      {
-                        "op": "variable",
-                        "variable_id": "00000000-0000-4000-8000-000000002005"
-                      }
+                      {"op": "boolean", "value": true},
+                      {"op": "variable", "variable_id": "00000000-0000-4000-8000-000000002005"}
                     ]
                   },
                   "target": "00000000-0000-4000-8000-000000001005"
@@ -1109,15 +546,9 @@
                         "op": "variable",
                         "variable_id": "00000000-0000-4000-8000-000000002004"
                       },
-                      "right": {
-                        "op": "number",
-                        "value": "0"
-                      }
+                      "right": {"op": "number", "value": "0"}
                     },
-                    "fallback": {
-                      "op": "boolean",
-                      "value": false
-                    }
+                    "fallback": {"op": "boolean", "value": false}
                   },
                   "target": "00000000-0000-4000-8000-000000001005"
                 }
@@ -1127,29 +558,17 @@
             {
               "type": "page",
               "id": "00000000-0000-4000-8000-000000001004",
-              "question_ids": [
-                "00000000-0000-4000-8000-000000000005"
-              ],
+              "question_ids": ["00000000-0000-4000-8000-000000000005"],
               "next": "00000000-0000-4000-8000-000000001006"
             },
             {
               "type": "page",
               "id": "00000000-0000-4000-8000-000000001005",
-              "question_ids": [
-                "00000000-0000-4000-8000-000000000006"
-              ],
+              "question_ids": ["00000000-0000-4000-8000-000000000006"],
               "next": "00000000-0000-4000-8000-000000001008"
             },
-            {
-              "type": "end",
-              "id": "00000000-0000-4000-8000-000000001006",
-              "outcome": "screen_out"
-            },
-            {
-              "type": "end",
-              "id": "00000000-0000-4000-8000-000000001008",
-              "outcome": "complete"
-            }
+            {"type": "end", "id": "00000000-0000-4000-8000-000000001006", "outcome": "screen_out"},
+            {"type": "end", "id": "00000000-0000-4000-8000-000000001008", "outcome": "complete"}
           ]
         }
       },
@@ -1177,26 +596,11 @@
               "op": "if",
               "condition": {
                 "op": "contains",
-                "text": {
-                  "op": "answer",
-                  "question_id": "00000000-0000-4000-8000-000000003001"
-                },
-                "substring": {
-                  "op": "text",
-                  "value": "甲"
-                }
+                "text": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000003001"},
+                "substring": {"op": "text", "value": "甲"}
               },
-              "then_branch": {
-                "op": "negate",
-                "value": {
-                  "op": "number",
-                  "value": "2"
-                }
-              },
-              "else_branch": {
-                "op": "number",
-                "value": "1"
-              }
+              "then_branch": {"op": "negate", "value": {"op": "number", "value": "2"}},
+              "else_branch": {"op": "number", "value": "1"}
             }
           },
           {
@@ -1204,14 +608,8 @@
             "value_type": "boolean",
             "expression": {
               "op": "starts_with",
-              "text": {
-                "op": "answer",
-                "question_id": "00000000-0000-4000-8000-000000003001"
-              },
-              "prefix": {
-                "op": "text",
-                "value": "甲"
-              }
+              "text": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000003001"},
+              "prefix": {"op": "text", "value": "甲"}
             }
           }
         ],
