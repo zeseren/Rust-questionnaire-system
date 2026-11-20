@@ -44,12 +44,6 @@ export const router = createRouter({
       meta: { auth: true, title: '答卷与统计' },
     },
     {
-      path: '/surveys/:id/preview',
-      name: 'preview',
-      component: () => import('./views/PreviewView.vue'),
-      meta: { auth: true, standalone: true, title: '预览问卷' },
-    },
-    {
       path: '/settings',
       name: 'settings',
       component: () => import('./views/SettingsView.vue'),

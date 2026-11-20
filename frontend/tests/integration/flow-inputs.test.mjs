@@ -4,7 +4,12 @@ import test from 'node:test'
 import { FlowInputs } from '../../src/flow-inputs.ts'
 import { LogicError } from '../../src/logic.ts'
 import { readFlowDocument } from '../helpers/fixtures.mjs'
-import { numberQuestion, ratingQuestion, surveyDocument } from '../helpers/documents.mjs'
+import {
+  numberQuestion,
+  ratingQuestion,
+  surveyDocument,
+  textQuestion,
+} from '../helpers/documents.mjs'
 
 test('评分原文转成原生数字，非法整数交给引擎报错', () => {
   const question = ratingQuestion({ required: false })
@@ -134,4 +139,29 @@ test('最终答案按题目字典序导出且数组彼此隔离', () => {
   const exported = [...answers[0].value]
   answers[0].value.push('mutated')
   assert.deepEqual(form.submissionAnswers()[0].value, exported, '多选答案数组彼此隔离')
+})
+
+test('未配置流程的问卷缺必填时拒绝前进，补全后可提交并退回编辑页', () => {
+  const required = textQuestion()
+  const optional = numberQuestion({ required: false })
+  const form = new FlowInputs(surveyDocument([required, optional]))
+  assert.throws(
+    () => form.next(),
+    (error) => {
+      assert.ok(error instanceof LogicError)
+      assert.equal(error.code, 'required_answer')
+      assert.equal(error.question_id, required.id)
+      return true
+    },
+  )
+  assert.equal(form.snapshot().outcome, null, '校验失败留在原页')
+
+  form.change(required.id, '补全后的回答')
+  form.next()
+  assert.equal(form.snapshot().outcome, 'complete')
+  assert.deepEqual(form.submissionAnswers(), [{ question_id: required.id, value: '补全后的回答' }])
+
+  form.previous()
+  assert.equal(form.snapshot().outcome, null, '提交后回到可编辑页')
+  assert.equal(form.values()[required.id], '补全后的回答')
 })

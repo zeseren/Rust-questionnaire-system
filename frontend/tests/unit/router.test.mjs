@@ -98,8 +98,8 @@ test('路由表配置完整：懒加载、唯一名称与关键权限元数据',
       assert.equal(route.meta.auth, true, `${route.name} 必须要求登录`)
   }
   assert.equal(byName.get('admin').meta.admin, true)
-  // 独立布局路由不套用主框架：预览、登录、注册、填写与兜底页。
-  for (const name of ['preview', 'login', 'register', 'fill', 'not-found'])
+  // 独立布局路由不套用主框架：登录、注册、填写与兜底页。
+  for (const name of ['login', 'register', 'fill', 'not-found'])
     assert.equal(byName.get(name).meta.standalone, true, `${name} 必须使用独立布局`)
 })
 

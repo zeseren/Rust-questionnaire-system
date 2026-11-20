@@ -1,6 +1,6 @@
-<!-- [入口在哪] 填写页与预览页的流程会话；每一页只渲染当前节点可见的题目。 -->
-<!-- [用户在第 1 步后悔了怎么删/退] 底栏左侧常驻「上一步」与「清空重填/重新预览」，核对页每道题旁可就地「修改」。 -->
-<!-- [主提交通道在哪] 底栏右侧唯一主操作：「下一步」或「确认提交答卷/确认预览结果」。 -->
+<!-- [入口在哪] 填写页与预览页的题面会话；普通问卷单页呈现，规则问卷只渲染当前节点可见的题目。 -->
+<!-- [用户在第 1 步后悔了怎么删/退] 底栏左侧常驻「上一步」（规则问卷）与「清空重填/重新预览」，核对页每道题旁可就地「修改」。 -->
+<!-- [主提交通道在哪] 底栏右侧唯一主操作：普通问卷「提交答卷/检查填写结果」，规则问卷「下一步」或「确认提交答卷/确认预览结果」。 -->
 <!-- 预览和填写共用同一会话；只有显式确认才交付当前有效答案。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, watch } from 'vue'
@@ -30,7 +30,7 @@ const emit = defineEmits<{
   reset: []
 }>()
 let inputs: FlowInputs | undefined
-/** 本次会话已成功应用的事件序列；按顺序回放即可恢复同一进度。 */
+/** 规则问卷已应用的事件序列；普通问卷按每题最新输入派生，不保留按键历史。 */
 let recorded: FlowEvent[] = []
 const snapshot = shallowRef<FlowSnapshot>()
 const values = ref<Inputs>({})
@@ -39,22 +39,35 @@ const touched = ref<Set<string>>(new Set())
 const attempted = ref(false)
 const error = ref('')
 const root = ref<HTMLElement>()
+/** 没有流程定义时按单页普通问卷处理：提交前临时前进校验，成功后退回编辑态。 */
+const plain = computed(() => !props.document.logic)
+const answeredCount = computed(() => Object.values(values.value).filter(isAnswered).length)
 function refresh() {
   snapshot.value = inputs?.snapshot()
   values.value = inputs?.values() ?? {}
   unsettled.value = inputs?.unsettled() ?? new Set()
   for (const id of snapshot.value?.cleared ?? []) touched.value.delete(id)
 }
-/** 回放暂存进度；与当前题面不兼容时保留已恢复的部分并从头继续。 */
+/** 回放暂存进度；遇到不支持或与当前题面不兼容的事件时，保留已成功回放的前缀并停止。 */
 function replay(events: readonly FlowEvent[]) {
   if (!inputs) return
   const session = inputs
   for (const event of events) {
     try {
-      if (event.type === 'change') session.change(event.question_id, event.value as InputValue)
-      else session[event.type]()
-      recorded.push(event)
+      if (!event || typeof event !== 'object') break
+      if (event.type === 'change') {
+        if (typeof event.question_id !== 'string') break
+        session.change(event.question_id, event.value as InputValue)
+      } else if (event.type === 'next') {
+        if (plain.value) break
+        session.next()
+      } else if (event.type === 'previous') {
+        if (plain.value) break
+        session.previous()
+      } else break
+      if (!plain.value) recorded.push(event)
     } catch {
+      // 未可信草稿可能包含不适用事件：保留此前已成功回放的前缀。
       break
     }
   }
@@ -96,6 +109,20 @@ function progress() {
 }
 /** 当前进度的事件序列副本，供填写页按版本暂存。 */
 function events(): FlowEvent[] {
+  // 普通问卷只保留每题最新输入（含数字过渡原文）；逐键历史会让草稿体积按输入长度平方增长。
+  if (plain.value) {
+    const latest: FlowEvent[] = []
+    for (const question of props.document.questions) {
+      const value = values.value[question.id]
+      if (!isAnswered(value)) continue
+      latest.push({
+        type: 'change',
+        question_id: question.id,
+        value: Array.isArray(value) ? [...value] : value,
+      })
+    }
+    return latest
+  }
   return recorded.map((event) =>
     event.type === 'change'
       ? {
@@ -166,11 +193,12 @@ function change(id: string, value: InputValue) {
   if (!inputs || props.disabled) return
   try {
     inputs.change(id, value)
-    recorded.push({
-      type: 'change',
-      question_id: id,
-      value: Array.isArray(value) ? [...value] : value,
-    })
+    if (!plain.value)
+      recorded.push({
+        type: 'change',
+        question_id: id,
+        value: Array.isArray(value) ? [...value] : value,
+      })
     touched.value.add(id)
     error.value = ''
   } catch (reason) {
@@ -207,6 +235,37 @@ function navigate(direction: 'next' | 'previous') {
 }
 function submissionAnswers(): Answer[] | undefined {
   if (!inputs || props.disabled || props.submitDisabled) return
+  if (plain.value) {
+    // 普通问卷没有核对页：next() 只做本页必填与格式校验，成功后立刻退回编辑态。
+    if (!snapshot.value?.outcome) {
+      attempted.value = true
+      try {
+        inputs.next()
+      } catch (reason) {
+        error.value = message(reason, '无法提交')
+        refresh()
+        void focus()
+        return
+      }
+      attempted.value = false
+      refresh()
+      if (!snapshot.value?.outcome) return
+    }
+    try {
+      error.value = ''
+      return inputs.submissionAnswers()
+    } catch (reason) {
+      error.value = message(reason, '无法提交')
+      void focus()
+      return
+    } finally {
+      // 临时 next/previous 不属于草稿导航，不写入事件序列；失败时也尽量回到可编辑页。
+      try {
+        inputs.previous()
+      } catch {}
+      refresh()
+    }
+  }
   if (!snapshot.value?.outcome) {
     navigate('next')
     return
@@ -239,8 +298,8 @@ defineExpose({ submissionAnswers, focusQuestion, reset, events })
   <div ref="root" tabindex="-1" class="flow-fields">
     <p v-if="error" class="notice mt" role="alert">{{ error }}</p>
     <template v-if="snapshot">
-      <template v-if="!snapshot.outcome">
-        <p class="hint mt" aria-live="polite">
+      <template v-if="!snapshot.outcome || plain">
+        <p v-if="!plain" class="hint mt" aria-live="polite">
           当前第 {{ snapshot.history.length }} 步 · 只需填写当前显示的题目
         </p>
         <SurveyFields
@@ -288,7 +347,7 @@ defineExpose({ submissionAnswers, focusQuestion, reset, events })
       <div v-if="!hideFooter" class="fill-footer actions between">
         <div class="actions fill-footer-left">
           <button
-            v-if="snapshot.history.length > 1"
+            v-if="!plain && snapshot.history.length > 1"
             type="button"
             class="button"
             :disabled="disabled"
@@ -304,10 +363,31 @@ defineExpose({ submissionAnswers, focusQuestion, reset, events })
           >
             {{ preview ? '重新预览' : '清空重填' }}
           </button>
+          <span v-if="plain" class="hint">
+            已回答 {{ answeredCount }} / {{ document.questions.length }} 题 ·
+            标注“必填”的题目必须回答
+          </span>
         </div>
         <div class="actions fill-footer-right">
           <button
-            v-if="!snapshot.outcome"
+            v-if="plain && preview"
+            type="button"
+            class="button"
+            :disabled="disabled || submitDisabled"
+            @click="confirm"
+          >
+            检查填写结果
+          </button>
+          <button
+            v-else-if="plain"
+            type="submit"
+            class="button button-primary"
+            :disabled="disabled || submitDisabled"
+          >
+            提交答卷
+          </button>
+          <button
+            v-else-if="!snapshot.outcome"
             type="button"
             class="button button-primary"
             :disabled="disabled"

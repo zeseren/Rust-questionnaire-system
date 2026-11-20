@@ -6,7 +6,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { onBeforeRouteLeave, RouterLink, useRoute } from 'vue-router'
 import { api, ApiError, message } from '../api'
-import { buildAnswers, isAnswered, isSubmission, type Inputs } from '../answers'
+import { isSubmission } from '../answers'
 import { dateTime, shareLink } from '../format'
 import { decode } from '../json'
 import { useAuth } from '../stores'
@@ -19,7 +19,6 @@ import type {
   Receipt,
   Submission,
 } from '../types'
-import SurveyFields from '../components/SurveyFields.vue'
 import FlowFields from '../components/FlowFields.vue'
 import AuthForm from '../components/AuthForm.vue'
 import Modal from '../components/Modal.vue'
@@ -32,14 +31,12 @@ const id = String(route.params.id)
 const STORAGE_PREFIX = 'wenxu:fill-draft:'
 /** 本地暂存按问卷与发布版本隔离，换版本后不会把旧输入带到新题面。 */
 interface FillDraft {
-  values?: Inputs
   events?: FlowEvent[]
 }
 const meta = shallowRef<PublicSurveyMeta | null>(null)
 const survey = shallowRef<PublicSurvey | null>(null)
 const receipt = shallowRef<Receipt | null>(null)
 const receiptPanel = ref<HTMLElement | null>(null)
-const values = ref<Inputs>({})
 const flowDraft = ref<FlowEvent[]>([])
 const errors = ref<Record<string, string>>({})
 const error = ref('')
@@ -66,15 +63,7 @@ function flowChanged(count: number) {
   errors.value = {}
   scheduleSave()
 }
-function fieldsChanged() {
-  errors.value = {}
-  scheduleSave()
-}
-const answered = computed(() =>
-  survey.value?.document.logic
-    ? flowAnswered.value
-    : Object.values(values.value).filter(isAnswered).length,
-)
+const answered = computed(() => flowAnswered.value)
 function readDraft(key: string): FillDraft | null {
   try {
     const raw = localStorage.getItem(key)
@@ -89,13 +78,8 @@ function readDraft(key: string): FillDraft | null {
 /** 立即写入当前进度；提交成功后回执已存在，不再改写本地暂存。 */
 function writeDraft() {
   if (!draftKey.value || receipt.value) return
-  const draft: FillDraft = {}
-  if (survey.value?.document.logic) draft.events = flowFields.value?.events() ?? []
-  else draft.values = values.value
-  const empty = survey.value?.document.logic
-    ? !draft.events?.length
-    : !Object.values(draft.values ?? {}).some(isAnswered)
-  if (empty) {
+  const draft: FillDraft = { events: flowFields.value?.events() ?? [] }
+  if (!draft.events?.length) {
     clearDraft()
     return
   }
@@ -148,19 +132,11 @@ function resetFlowDraft() {
   clearDraft()
 }
 function applyStoredDraft(result: PublicSurvey) {
-  values.value = {}
   flowDraft.value = []
   restored.value = false
   const draft = readDraft(`${STORAGE_PREFIX}${id}:${result.version_id}`)
-  if (!draft) return
-  if (result.document.logic) {
-    if (!Array.isArray(draft.events) || !draft.events.length) return
-    flowDraft.value = draft.events
-  } else {
-    if (!draft.values || typeof draft.values !== 'object') return
-    if (!Object.values(draft.values).some(isAnswered)) return
-    values.value = draft.values
-  }
+  if (!draft || !Array.isArray(draft.events) || !draft.events.length) return
+  flowDraft.value = draft.events
   restored.value = true
 }
 async function load() {
@@ -211,7 +187,6 @@ function resetFill() {
   if (busy.value || uncertain.value || versionChanged.value || !answered.value) return
   if (!window.confirm('确定清空当前已填写的回答吗？')) return
   error.value = ''
-  values.value = {}
   errors.value = {}
   flowAnswered.value = 0
   flowFields.value?.reset()
@@ -238,35 +213,20 @@ async function loginSuccess() {
 }
 async function focusError() {
   const first = survey.value?.document.questions.find((question) => errors.value[question.id])
-  if (first) {
-    if (survey.value?.document.logic) {
-      await flowFields.value?.focusQuestion(first.id)
-      return
-    }
-    await nextTick()
-    document.getElementById(`answer-${first.id}`)?.focus()
-  }
+  if (first) await flowFields.value?.focusQuestion(first.id)
 }
 async function submit(flowAnswers?: Answer[]) {
   if (!survey.value || busy.value || receipt.value || versionChanged.value) return
   error.value = ''
   if (!pending.value) {
-    if (survey.value.document.logic) flowAnswers ??= flowFields.value?.submissionAnswers()
-    if (survey.value.document.logic && !flowAnswers) return
-    const result = flowAnswers
-      ? { answers: flowAnswers, errors: {} }
-      : buildAnswers(survey.value.document, values.value)
-    errors.value = result.errors
-    if (Object.keys(result.errors).length) {
-      error.value = '请检查标记的问题后再提交。'
-      await focusError()
-      return
-    }
+    flowAnswers ??= flowFields.value?.submissionAnswers()
+    if (!flowAnswers) return
+    errors.value = {}
     pending.value = {
       version_id: survey.value.version_id,
       // UUIDv7 同样满足后端对幂等秘密的版本校验。
       idempotency_key: newId(),
-      answers: result.answers.map((answer) => ({
+      answers: flowAnswers.map((answer) => ({
         ...answer,
         value: Array.isArray(answer.value) ? [...answer.value] : answer.value,
       })),
@@ -454,7 +414,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <FlowFields
-          v-if="survey.document.logic"
+          v-if="survey.document.questions.length"
           ref="flowFields"
           :document="survey.document"
           :restore="flowDraft"
@@ -466,35 +426,11 @@ onBeforeUnmount(() => {
           @reset="resetFlowDraft"
           @submit="submit"
         />
-        <SurveyFields
-          v-else
-          v-model="values"
-          :document="survey.document"
-          :errors="errors"
-          :disabled="busy || uncertain || versionChanged"
-          @change="fieldsChanged"
-        />
-        <div
-          v-if="!survey.document.logic || uncertain || versionChanged"
-          class="fill-footer actions between"
-        >
+        <p v-else class="notice mt">本问卷没有需要回答的题目。</p>
+        <div v-if="uncertain || versionChanged" class="fill-footer actions between">
           <div class="actions fill-footer-left">
-            <template v-if="!uncertain && !versionChanged">
-              <button
-                type="button"
-                class="text-button danger-text"
-                :disabled="busy || !answered"
-                @click="resetFill"
-              >
-                清空重填
-              </button>
-              <span class="hint">
-                已回答 {{ answered }} / {{ survey.document.questions.length }} 题 ·
-                标注“必填”的题目必须回答
-              </span>
-            </template>
             <a
-              v-else-if="versionChanged"
+              v-if="versionChanged"
               :href="shareLink(id)"
               target="_blank"
               rel="noopener"
@@ -515,7 +451,7 @@ onBeforeUnmount(() => {
               加载最新题面重填
             </button>
             <button v-else class="button button-primary" :disabled="busy || loginNeeded">
-              {{ busy ? '正在提交…' : uncertain ? '重试原提交' : '提交答卷' }}
+              {{ busy ? '正在提交…' : '重试原提交' }}
             </button>
           </div>
         </div>
