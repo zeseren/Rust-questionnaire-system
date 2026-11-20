@@ -59,8 +59,20 @@ fn 表达式共享样例全部保持编译与三值求值语义() {
 fn 文档共享样例保持变量排序和间接依赖规则一致() {
     let fixtures = fixtures();
     let documents = documents();
+    let base_logic = documents["base_logic"]
+        .as_object()
+        .expect("documents.json 缺少 base_logic");
     for case in documents["cases"].as_array().unwrap() {
-        let logic: DocumentLogic = serde_json::from_value(case["logic"].clone()).unwrap();
+        let overrides = case["overrides"]
+            .as_object()
+            .unwrap_or_else(|| panic!("文档语义样例缺少 overrides：{}", case["name"]));
+        let mut logic = base_logic.clone();
+        logic.extend(
+            overrides
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        let logic: DocumentLogic = serde_json::from_value(Value::Object(logic)).unwrap();
         let answers: BTreeMap<Uuid, Value> =
             serde_json::from_str(case["answers_json"].as_str().unwrap()).unwrap();
         let result = logic.compile(&fixtures.questions).and_then(|compiled| {

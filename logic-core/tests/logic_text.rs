@@ -25,6 +25,23 @@ fn parse_program(source: &str, questions: &[Question]) -> Result<DocumentLogic, 
     parse_logic_text(source, questions)
 }
 
+/// 格式样例字段：显式值优先，否则按 `document` 名读取共享流程文档；无效引用必须报错。
+fn format_case_field<'a>(item: &'a Value, flows: &'a Value, field: &str) -> &'a Value {
+    if let Some(value) = item.get(field) {
+        return value;
+    }
+    let name = item["name"].as_str().unwrap_or("未命名");
+    let document_name = item["document"]
+        .as_str()
+        .unwrap_or_else(|| panic!("格式样例 {name} 缺少 {field} 或 document 引用"));
+    let document = flows["documents"]
+        .get(document_name)
+        .unwrap_or_else(|| panic!("格式样例 {name} 引用了未知流程文档 {document_name}"));
+    document
+        .get(field)
+        .unwrap_or_else(|| panic!("流程文档 {document_name} 缺少 {field} 字段"))
+}
+
 #[test]
 fn 文本共享样例保留身份优先级并定位语法与语义错误() {
     let fixture = texts_fixture();
@@ -297,10 +314,13 @@ fn 巡检接口在语法错误后仍返回已扫描绑定() {
 fn 共享格式化样例逐字节一致且二次解析与格式化幂等() {
     // 与前端同读 texts.json 的 format_cases；expected 为 TS 真实输出的字节快照。
     let fixture = texts_fixture();
+    let flows = flows_fixture();
     for item in fixture["format_cases"].as_array().unwrap() {
         let name = item["name"].as_str().unwrap();
-        let questions: Vec<Question> = serde_json::from_value(item["questions"].clone()).unwrap();
-        let logic: DocumentLogic = serde_json::from_value(item["logic"].clone()).unwrap();
+        let questions: Vec<Question> =
+            serde_json::from_value(format_case_field(item, &flows, "questions").clone()).unwrap();
+        let logic: DocumentLogic =
+            serde_json::from_value(format_case_field(item, &flows, "logic").clone()).unwrap();
         let expected = item["expected"].as_str().unwrap();
         let formatted = format_logic_text(&logic, &questions)
             .unwrap_or_else(|error| panic!("{name} 格式化失败: {error:?}"));
