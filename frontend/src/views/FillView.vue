@@ -57,8 +57,12 @@ const loadedScope = shallowRef<LoadedScope | null>(null)
 const flowFields = ref<InstanceType<typeof FlowFields>>()
 const flowAnswered = ref(0)
 let saveTimer: ReturnType<typeof setTimeout> | undefined
-/** 「登录限次」但当前没有会话：先展示上下文与登录引导，不直接撞 401。 */
-const loginRequired = computed(() => meta.value?.mode === 'login_once' && !auth.user)
+/**
+ * 「登录限次」且本次加载时没有会话：先展示上下文与登录引导，不直接撞 401。
+ * 显隐只在加载流程与登录成功回调里切换，不随 auth.user 立即隐藏——auth.login 一赋值就
+ * 卸载面板，会让表单在 await 之后发出的 success 事件被 Vue 丢弃，题面便不再加载。
+ */
+const loginPanel = ref(false)
 const draftKey = computed(() =>
   loadedScope.value ? draftKeyFor(id, loadedScope.value.versionId, loadedScope.value.scope) : '',
 )
@@ -168,7 +172,8 @@ async function load() {
     return
   }
   loading.value = false
-  if (!loginRequired.value) await loadSurvey()
+  loginPanel.value = meta.value?.mode === 'login_once' && !auth.user
+  if (!loginPanel.value) await loadSurvey()
 }
 async function loadSurvey() {
   loading.value = true
@@ -238,6 +243,7 @@ function abandonPending() {
   if (scope) removeStored(pendingKeyFor(id, scope))
 }
 async function loginSuccess() {
+  loginPanel.value = false
   loginNeeded.value = false
   error.value = ''
   // 冻结作用域是唯一依据：B 登录后既不发送 A 的载荷，也不把幂等键迁到 B。
@@ -421,7 +427,7 @@ onBeforeUnmount(() => {
       <p v-else class="hint mt">可以关闭此页面。</p>
     </section>
     <template v-else>
-      <ErrorNotice :message="error" :retry="!survey && !loginRequired" @retry="load" />
+      <ErrorNotice :message="error" :retry="!survey && !loginPanel" @retry="load" />
       <section v-if="meta" class="panel public-survey-header">
         <p class="eyebrow">
           {{ meta.mode === 'anonymous' ? '匿名填写' : '登录限次' }} · 填写前须知
@@ -443,7 +449,7 @@ onBeforeUnmount(() => {
           <p class="hint">{{ meta.privacy.public_link_notice }}</p>
         </details>
       </section>
-      <div v-if="loginRequired" class="panel">
+      <div v-if="loginPanel" class="panel">
         <h2>请先登录后填写</h2>
         <p class="subtle mt mb">
           这份问卷采用「登录限次」模式：需要登录，每个账号跨版本仅限一次，不属于完全匿名。登录后会自动加载题面。
