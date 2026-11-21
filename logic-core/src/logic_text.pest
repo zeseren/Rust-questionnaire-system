@@ -7,10 +7,10 @@ COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }
 lexicon = { SOI ~ token* ~ EOI }
 token = _{ identifier | number | string | symbol | keyword }
 identifier_continue = _{ ASCII_ALPHANUMERIC | "_" }
-// 三元条件与布尔字面量不能充当别名或引用名，否则表达式内部会出现无法消解的歧义。
-reserved = _{ ("if" | "then" | "else" | "true" | "false") ~ !identifier_continue }
+// 保留字与 Rust 侧 `RESERVED_WORDS` 必须保持一致；长名在短名前，避免前缀提前命中。
+reserved = _{ ("contains_all" | "contains_any" | "starts_with" | "screen_out" | "semantics" | "question" | "variable" | "required" | "complete" | "validate" | "visible" | "choices" | "choice" | "matches" | "option" | "boolean" | "answered" | "answer" | "selected" | "coalesce" | "contains" | "number" | "length" | "branch" | "round" | "floor" | "entry" | "bind" | "dsl" | "let" | "node" | "page" | "when" | "then" | "else" | "true" | "false" | "text" | "all" | "any" | "end" | "if" | "ceil") ~ !identifier_continue }
 identifier = @{ !reserved ~ (ASCII_ALPHA | "_") ~ identifier_continue* }
-keyword = @{ ("if" | "then" | "else" | "true" | "false") ~ !identifier_continue }
+keyword = @{ reserved }
 number = @{ ("0" | '1'..'9' ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT+)? ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
 version = @{ ASCII_DIGIT+ }
 string = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
@@ -36,9 +36,11 @@ references = { "[" ~ (identifier ~ ("," ~ identifier)*)? ~ "]" }
 
 expression = { prefix_operator* ~ primary ~ (infix ~ prefix_operator* ~ primary)* }
 primary = _{ number | string | boolean | if_expression | call | identifier | group }
-if_expression = { kw_if ~ expression ~ kw_then ~ expression ~ kw_else ~ expression }
+if_expression = { kw_if ~ expression ~ kw_then ~ expression ~ kw_else ~ expression ~ kw_end }
 boolean = @{ ("true" | "false") ~ !identifier_continue }
-call = { identifier ~ "(" ~ (argument ~ ("," ~ argument)*)? ~ ")" }
+// 函数名只接受内置函数；长名在短名前，`contains_any` 不能被 `contains` 提前截断。
+function_name = @{ ("contains_all" | "contains_any" | "starts_with" | "answered" | "selected" | "coalesce" | "contains" | "matches" | "length" | "number" | "answer" | "round" | "floor" | "ceil" | "all" | "any") ~ !identifier_continue }
+call = { function_name ~ "(" ~ (argument ~ ("," ~ argument)*)? ~ ")" }
 argument = _{ references | expression }
 group = { "(" ~ expression ~ ")" }
 infix = _{ logical_or | logical_and | equal | not_equal | less_equal | greater_equal | less | greater | add | subtract | multiply | divide }

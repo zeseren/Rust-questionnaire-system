@@ -141,7 +141,8 @@ function apply() {
 function format() {
   const parsed = check()
   if (!parsed) return
-  if (!window.confirm('整理文本会生成统一别名并移除注释，规则含义保持不变。是否继续？')) return
+  if (!window.confirm('整理文本会统一排版并移除注释，已有别名保持不变，规则含义不变。是否继续？'))
+    return
   text.value = formatLogicText(parsed, props.questions)
   check()
 }
@@ -247,11 +248,7 @@ onBeforeUnmount(() => {
             :title="binding.label"
             @click="
               source?.insert(
-                binding.category === 'question'
-                  ? `answer(${binding.alias})`
-                  : binding.category === 'variable'
-                    ? `variable(${binding.alias})`
-                    : binding.alias,
+                binding.category === 'question' ? `answer(${binding.alias})` : binding.alias,
               )
             "
           >

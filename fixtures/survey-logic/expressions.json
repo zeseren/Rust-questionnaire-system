@@ -663,6 +663,199 @@
       },
       "answers_json": "{}",
       "expected": {"value": {"type": "missing"}}
+    },
+    {
+      "name": "选项字面量与同题单选答案相等",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "eq",
+          "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000001"},
+          "right": {"op": "option", "option_id": "00000000-0000-4000-8000-000000000101"}
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000001\":\"00000000-0000-4000-8000-000000000101\"}",
+      "expected": {"value": {"type": "boolean", "value": true}}
+    },
+    {
+      "name": "跨题选项字面量比较类型不匹配",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "compare",
+          "comparison": "eq",
+          "left": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000001"},
+          "right": {"op": "option", "option_id": "00000000-0000-4000-8000-000000000103"}
+        }
+      },
+      "answers_json": "{}",
+      "expected": {"error": {"code": "type_mismatch", "path": "$.expression", "question_id": null}}
+    },
+    {
+      "name": "选项字面量引用未知选项",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {"op": "option", "option_id": "00000000-0000-4000-8000-000000000999"}
+      },
+      "answers_json": "{}",
+      "expected": {"error": {"code": "invalid_reference", "path": "$.expression", "question_id": null}}
+    },
+    {
+      "name": "正则按整串匹配",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "matches",
+          "text": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000003"},
+          "pattern": "反."
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000003\":\"反馈\"}",
+      "expected": {"value": {"type": "boolean", "value": true}}
+    },
+    {
+      "name": "正则不匹配尾部多余字符",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "matches",
+          "text": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000003"},
+          "pattern": "反."
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000003\":\"反馈后\"}",
+      "expected": {"value": {"type": "boolean", "value": false}}
+    },
+    {
+      "name": "正则匹配缺失文本返回未知",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "matches",
+          "text": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000003"},
+          "pattern": "反.*"
+        }
+      },
+      "answers_json": "{}",
+      "expected": {"value": {"type": "missing"}}
+    },
+    {
+      "name": "非法正则模式在编译期拒绝",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "matches",
+          "text": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000003"},
+          "pattern": "["
+        }
+      },
+      "answers_json": "{}",
+      "expected": {"error": {"code": "invalid_syntax", "path": "$.expression", "question_id": null}}
+    },
+    {
+      "name": "超长正则模式拒绝编译",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "matches",
+          "text": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000003"},
+          "pattern": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "answers_json": "{}",
+      "expected": {"error": {"code": "limit_exceeded", "path": "$.expression", "question_id": null}}
+    },
+    {
+      "name": "舍入消除浮点噪声",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "round",
+          "value": {
+            "op": "arithmetic",
+            "operator": "add",
+            "left": {"op": "number", "value": "0.1"},
+            "right": {"op": "number", "value": "0.2"}
+          },
+          "digits": 2
+        }
+      },
+      "answers_json": "{}",
+      "expected": {"value": {"type": "number", "value": 0.3}}
+    },
+    {
+      "name": "负数四舍五入远离零",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {"op": "round", "value": {"op": "number", "value": "-2.5"}, "digits": 0}
+      },
+      "answers_json": "{}",
+      "expected": {"value": {"type": "number", "value": -3}}
+    },
+    {
+      "name": "向下取整到小数位",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {"op": "floor", "value": {"op": "number", "value": "1.239"}, "digits": 2}
+      },
+      "answers_json": "{}",
+      "expected": {"value": {"type": "number", "value": 1.23}}
+    },
+    {
+      "name": "向上取整到小数位",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {"op": "ceil", "value": {"op": "number", "value": "1.231"}, "digits": 2}
+      },
+      "answers_json": "{}",
+      "expected": {"value": {"type": "number", "value": 1.24}}
+    },
+    {
+      "name": "舍入位数越界拒绝编译",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {"op": "round", "value": {"op": "number", "value": "1"}, "digits": 7}
+      },
+      "answers_json": "{}",
+      "expected": {"error": {"code": "invalid_syntax", "path": "$.expression", "question_id": null}}
+    },
+    {
+      "name": "舍入缺失操作数保持未知",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {
+          "op": "round",
+          "value": {"op": "answer", "question_id": "00000000-0000-4000-8000-000000000004"},
+          "digits": 2
+        }
+      },
+      "answers_json": "{\"00000000-0000-4000-8000-000000000004\":null}",
+      "expected": {"value": {"type": "missing"}}
+    },
+    {
+      "name": "舍入缩放溢出报算术错误",
+      "program": {
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "expression": {"op": "round", "value": {"op": "number", "value": "1e308"}, "digits": 2}
+      },
+      "answers_json": "{}",
+      "expected": {"error": {"code": "arithmetic_error", "path": "$.expression", "question_id": null}}
     }
   ]
 }

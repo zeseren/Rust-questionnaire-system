@@ -3,7 +3,9 @@
 use crate::domain::{Question, QuestionKind};
 use crate::identity::Uuid;
 use crate::logic::{LogicErrorCode, error};
-use crate::logic_text::{check_text_budget, inspect_logic_text, located};
+use crate::logic_text::{
+    RESERVED_WORDS, check_text_budget, inspect_logic_text, located, parse_logic_text,
+};
 
 fn 位置(source: &str, offset: usize) -> (usize, usize) {
     let 错误 = located(
@@ -27,6 +29,28 @@ fn 定位按字节偏移换算行列() {
     // 列号按 Unicode 标量计数，中文占三字节、Emoji 占四字节但都只算一列。
     assert_eq!(位置("中文😀x", 10), (1, 4));
     assert_eq!(位置("a\n中文😀", 12), (2, 4));
+}
+
+#[test]
+fn 文法保留字与校验表逐一一致() {
+    // pest 的 reserved 与 Rust 的 RESERVED_WORDS 各维护一份；集合必须完全相同，
+    // 否则只加在一侧的词会让别名校验与解析器分歧，格式化出无法解析的文本。
+    let 文法 = include_str!("../logic_text.pest");
+    let 行 = 文法
+        .lines()
+        .find(|line| line.starts_with("reserved = "))
+        .expect("文法必须声明 reserved 规则");
+    let 文法词: std::collections::BTreeSet<&str> = 行.split('"').skip(1).step_by(2).collect();
+    let 校验词: std::collections::BTreeSet<&str> = RESERVED_WORDS.iter().copied().collect();
+    assert_eq!(文法词, 校验词);
+
+    for 保留字 in RESERVED_WORDS {
+        let 源码 = format!(
+            "dsl 1 semantics 1;\nbind question {保留字} = \"00000000-0000-7000-8000-000000000001\";"
+        );
+        let 错误 = parse_logic_text(&源码, &[]).unwrap_err();
+        assert_eq!(错误.error.code, LogicErrorCode::InvalidSyntax, "{保留字}");
+    }
 }
 
 #[test]
@@ -58,33 +82,30 @@ fn 文本预算超限错误定位到精确行列() {
 }
 
 #[test]
-fn 三元条件只统计同一层未结束的嵌套() {
-    // 逗号结束同一层的条件，`all` 下 63 个并列 if 不应被当成嵌套。
+fn 三元条件按显式end统计嵌套层() {
+    // `end` 关闭同层条件，`all` 下 63 个并列 if 不应被当成嵌套。
     let 并列 = format!(
         "all({})",
-        vec!["if true then true else false"; 63].join(", ")
+        vec!["if true then true else false end"; 63].join(", ")
     );
     assert!(
         check_text_budget(&并列).is_ok(),
-        "并列条件必须按当前层计数，而不是跨逗号累加"
+        "并列条件必须由 end 逐层关闭，而不是跨逗号累加"
     );
 
     // 真正的嵌套仍在第 64 层被拒绝。
-    assert!(
-        check_text_budget(&format!(
+    let 嵌套 = |depth: usize| {
+        format!(
             "{}true{}",
-            "if true then ".repeat(63),
-            " else false".repeat(63)
-        ))
-        .is_ok(),
+            "if true then ".repeat(depth),
+            " else false end".repeat(depth)
+        )
+    };
+    assert!(
+        check_text_budget(&嵌套(63)).is_ok(),
         "63 层三元嵌套仍在预算内"
     );
-    let 错误 = check_text_budget(&format!(
-        "{}true{}",
-        "if true then ".repeat(64),
-        " else false".repeat(64)
-    ))
-    .unwrap_err();
+    let 错误 = check_text_budget(&嵌套(64)).unwrap_err();
     assert_eq!(错误.error.code, LogicErrorCode::LimitExceeded);
     assert_eq!(
         (错误.line, 错误.column),

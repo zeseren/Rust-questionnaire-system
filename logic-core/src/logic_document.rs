@@ -30,6 +30,14 @@ pub struct DocumentLogic {
     pub variables: Vec<ComputedVariable>,
     /// 每道题最多一组规则。
     pub rules: Vec<QuestionRule>,
+    /// 文本 DSL 的展示别名；键为题目、选项、变量或流程节点身份。
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::identity::deserialize_map"
+    )]
+    #[schema(value_type = BTreeMap<String, String>)]
+    pub aliases: BTreeMap<Uuid, String>,
 }
 
 /// 计算变量有独立身份和声明类型，不写入用户答案。
@@ -259,6 +267,7 @@ impl DocumentLogic {
     /// # Errors
     /// 不接受未知版本、重复身份、空规则、类型错误、环或非法题目顺序。
     pub fn compile(&self, questions: &[Question]) -> Result<CompiledDocumentLogic, LogicError> {
+        self.check_aliases()?;
         if self.variables.len() > MAX_QUESTIONS || self.rules.len() > MAX_QUESTIONS {
             return Err(error(LogicErrorCode::LimitExceeded, "$.logic", None));
         }
@@ -344,6 +353,21 @@ impl DocumentLogic {
             )?);
         }
         Ok(compiled)
+    }
+
+    /// 别名值必须是合法标识符、不是保留字且互不重复；键可以指向已删除实体。
+    fn check_aliases(&self) -> Result<(), LogicError> {
+        let mut seen = BTreeSet::new();
+        for alias in self.aliases.values() {
+            if !crate::logic_text::is_valid_alias(alias) || !seen.insert(alias.as_str()) {
+                return Err(error(
+                    LogicErrorCode::InvalidReference,
+                    "$.logic.aliases",
+                    None,
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// 规则包中的表达式逐条检查原始预算，避免编译前消耗过多资源。
@@ -516,9 +540,22 @@ impl DocumentLogic {
                 rewrite(expression, questions, options, &variables);
             }
         }
+        let mut nodes = BTreeMap::new();
         if let Some(flow) = &mut self.flow {
-            flow.renew_ids(questions, options, &variables);
+            nodes = flow.renew_ids(questions, options, &variables);
         }
+        // 别名键随实体身份一起改写；找不到新身份的条目（已删除实体）直接丢弃。
+        self.aliases = std::mem::take(&mut self.aliases)
+            .into_iter()
+            .filter_map(|(id, alias)| {
+                nodes
+                    .get(&id)
+                    .or_else(|| questions.get(&id))
+                    .or_else(|| options.get(&id))
+                    .or_else(|| variables.get(&id))
+                    .map(|next| (*next, alias))
+            })
+            .collect();
     }
 }
 

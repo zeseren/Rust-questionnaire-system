@@ -1,5 +1,7 @@
 //! 文本 DSL 回归：共享人工期望、格式化往返幂等、文法负例与函数签名校验。
 
+use std::collections::BTreeMap;
+
 use questionnaire_logic::domain::{
     Document, DocumentLogic, LogicErrorCode, LogicTextError, Question, format_logic_text,
     inspect_logic_text, parse_logic_text,
@@ -105,12 +107,15 @@ fn 文本共享样例保留身份优先级并定位语法与语义错误() {
                 }
                 *target = edit["value"].clone();
             }
-            assert_eq!(
-                serde_json::to_value(result.unwrap()).unwrap(),
-                expected,
-                "{}",
-                item["name"]
-            );
+            // 别名提示只影响文本展示，不改变身份与表达式结构；共享样例单独校验 AST。
+            let mut actual = serde_json::to_value(result.unwrap()).unwrap();
+            for value in [&mut actual, &mut expected] {
+                value
+                    .as_object_mut()
+                    .expect("规则包必须是 JSON 对象")
+                    .remove("aliases");
+            }
+            assert_eq!(actual, expected, "{}", item["name"]);
         }
     }
 }
@@ -163,6 +168,13 @@ fn 内置函数检查参数元数与引用种类() {
         "contains(1)",
         "contains(1, 2, 3)",
         "starts_with(1)",
+        "matches(\"甲\")",
+        "matches(\"甲\", 1)",
+        "round()",
+        "round(1, 2, 3)",
+        "round(1, 1.5)",
+        "round(1, -1)",
+        "float_round(1)",
     ] {
         let error = parse_program(&format!("{prefix}{expression};"), &[]).unwrap_err();
         assert_eq!(
@@ -250,7 +262,7 @@ fn 一元负号与三元条件解析为统一表达式节点() {
     );
 
     let logic = parse_program(
-        &format!("{prefix}if answer(amount) > 0 then -1 else 1;"),
+        &format!("{prefix}if answer(amount) > 0 then -1 else 1 end;"),
         &document.questions,
     )
     .unwrap();
@@ -277,7 +289,51 @@ fn 一元负号与三元条件解析为统一表达式节点() {
 fn 保留关键字不能用作别名或引用名() {
     let document = document();
     let header = "dsl 1 semantics 1;\n";
-    for alias in ["if", "then", "else", "true", "false"] {
+    for alias in [
+        "dsl",
+        "semantics",
+        "bind",
+        "question",
+        "option",
+        "variable",
+        "node",
+        "let",
+        "visible",
+        "required",
+        "validate",
+        "entry",
+        "page",
+        "branch",
+        "when",
+        "if",
+        "then",
+        "else",
+        "end",
+        "complete",
+        "screen_out",
+        "true",
+        "false",
+        "boolean",
+        "number",
+        "text",
+        "choice",
+        "choices",
+        "answer",
+        "answered",
+        "selected",
+        "contains_any",
+        "contains_all",
+        "contains",
+        "starts_with",
+        "matches",
+        "coalesce",
+        "length",
+        "all",
+        "any",
+        "round",
+        "floor",
+        "ceil",
+    ] {
         let source =
             format!("{header}bind question {alias} = \"00000000-0000-4000-8000-000000000001\";");
         assert_eq!(
@@ -363,8 +419,8 @@ fn 共享格式化样例逐字节一致且二次解析与格式化幂等() {
 }
 
 #[test]
-fn 三元条件作为二元操作数时加括号并往返一致() {
-    // 左右操作数都必须是三元条件：否则 else 分支会吞掉相邻运算符。
+fn 三元条件作为二元操作数时显式闭合并往返一致() {
+    // 左右操作数都必须是三元条件：`end` 必须阻止 else 分支吞掉相邻运算符。
     let logic: DocumentLogic = serde_json::from_value(json!({
         "dsl_version": 1,
         "semantics_version": 1,
@@ -420,15 +476,15 @@ fn 三元条件作为二元操作数时加括号并往返一致() {
     .unwrap();
     let formatted = format_logic_text(&logic, &[]).unwrap();
     assert!(
-        formatted.contains("((if true then number(\"1\") else number(\"2\")) + number(\"3\"))"),
+        formatted.contains("(if true then number(\"1\") else number(\"2\") end + number(\"3\"))"),
         "{formatted}"
     );
     assert!(
-        formatted.contains("(number(\"9\") - (if false then number(\"1\") else number(\"2\")))"),
+        formatted.contains("(number(\"9\") - if false then number(\"1\") else number(\"2\") end)"),
         "{formatted}"
     );
     assert!(
-        formatted.contains("((if true then true else false) == true)"),
+        formatted.contains("(if true then true else false end == true)"),
         "{formatted}"
     );
     // 往返后必须得到同一棵 AST，而不是分支被相邻运算符改写。
@@ -524,8 +580,290 @@ fn 题目与选项身份撞车时拒绝格式化() {
         variables: Vec::new(),
         rules: Vec::new(),
         flow: None,
+        aliases: BTreeMap::new(),
     };
     let error = format_logic_text(&logic, &questions).unwrap_err();
     assert_eq!(error.code, LogicErrorCode::InvalidReference);
     assert_eq!(error.path, "$");
+}
+
+#[test]
+fn 长逻辑链扁平化为单层all() {
+    let prefix = "dsl 1 semantics 1; bind variable v = \"00000000-0000-4000-8000-000000007001\"; let v: boolean = ";
+    let chain = (0..40)
+        .map(|index| format!("number(\"{index}\") >= number(\"0\")"))
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let logic = parse_program(&format!("{prefix}{chain};"), &[]).unwrap();
+    let expression = &logic.variables[0].expression;
+    assert_eq!(expression["op"], "all");
+    let expressions = expression["expressions"].as_array().unwrap();
+    assert_eq!(expressions.len(), 40, "同运算符链必须合并到同一个 all 节点");
+    assert!(
+        expressions.iter().all(|child| child["op"] == "compare"),
+        "链上不应出现嵌套 all"
+    );
+
+    // 混合运算符保留优先级分组，不能跨运算符扁平化。
+    let logic = parse_program(&format!("{prefix}true && true || false;"), &[]).unwrap();
+    assert_eq!(logic.variables[0].expression["op"], "any");
+    assert_eq!(logic.variables[0].expression["expressions"][0]["op"], "all");
+}
+
+#[test]
+fn 三元条件显式闭合后可与相邻运算符组合() {
+    let prefix = "dsl 1 semantics 1; bind variable v = \"00000000-0000-4000-8000-000000007002\"; let v: number = ";
+    let logic = parse_program(&format!("{prefix}if true then 1 else 2 end + 3;"), &[]).unwrap();
+    assert_eq!(
+        logic.variables[0].expression,
+        json!({
+            "op": "arithmetic",
+            "operator": "add",
+            "left": {
+                "op": "if",
+                "condition": {"op": "boolean", "value": true},
+                "then_branch": {"op": "number", "value": "1"},
+                "else_branch": {"op": "number", "value": "2"}
+            },
+            "right": {"op": "number", "value": "3"}
+        })
+    );
+
+    let error = parse_error(&format!("{prefix}if true then 1 else 2 + 3;"), &[]);
+    assert_eq!(error.error.code, LogicErrorCode::InvalidSyntax);
+}
+
+#[test]
+fn 自定义别名经格式化保留并参与往返() {
+    let document = document();
+    let logic: DocumentLogic = serde_json::from_value(json!({
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [{
+            "id": "00000000-0000-4000-8000-000000007101",
+            "value_type": "number",
+            "expression": {
+                "op": "answer",
+                "question_id": "00000000-0000-4000-8000-000000000002"
+            }
+        }],
+        "rules": [],
+        "aliases": {
+            "00000000-0000-4000-8000-000000000002": "amount",
+            "00000000-0000-4000-8000-000000007101": "total"
+        }
+    }))
+    .unwrap();
+    let formatted = format_logic_text(&logic, &document.questions).unwrap();
+    assert!(
+        formatted.contains("bind question amount = \"00000000-0000-4000-8000-000000000002\";"),
+        "{formatted}"
+    );
+    assert!(
+        formatted.contains("bind variable total = \"00000000-0000-4000-8000-000000007101\";"),
+        "{formatted}"
+    );
+    assert!(
+        formatted.contains("let total: number = answer(amount);"),
+        "{formatted}"
+    );
+    assert_eq!(
+        parse_logic_text(&formatted, &document.questions).unwrap(),
+        logic
+    );
+}
+
+#[test]
+fn 默认名与自定义别名冲突时追加后缀() {
+    let document = document();
+    let logic: DocumentLogic = serde_json::from_value(json!({
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [],
+        "rules": [],
+        "aliases": {"00000000-0000-4000-8000-000000000002": "q1"}
+    }))
+    .unwrap();
+    let formatted = format_logic_text(&logic, &document.questions).unwrap();
+    assert!(
+        formatted.contains("bind question q1_2 = \"00000000-0000-4000-8000-000000000001\";"),
+        "{formatted}"
+    );
+    assert!(
+        formatted.contains("bind question q1 = \"00000000-0000-4000-8000-000000000002\";"),
+        "{formatted}"
+    );
+    // 后缀名是格式化器自行生成的，二次解析不得把它固化成自定义别名。
+    let reparsed = parse_logic_text(&formatted, &document.questions).unwrap();
+    assert_eq!(reparsed, logic);
+    assert_eq!(
+        format_logic_text(&reparsed, &document.questions).unwrap(),
+        formatted
+    );
+
+    // 文本只绑定被顶替的题目时，parse(format(parse(t))) 与 parse(t) 一致。
+    let source =
+        "dsl 1 semantics 1;\nbind question q1 = \"00000000-0000-4000-8000-000000000002\";\n";
+    let parsed = parse_logic_text(source, &document.questions).unwrap();
+    let formatted = format_logic_text(&parsed, &document.questions).unwrap();
+    assert_eq!(
+        parse_logic_text(&formatted, &document.questions).unwrap(),
+        parsed
+    );
+}
+
+#[test]
+fn 空逻辑组即使经运算符扁平化也拒绝() {
+    let prefix = "dsl 1 semantics 1; bind variable v = \"00000000-0000-4000-8000-000000007003\"; let v: boolean = ";
+    for body in ["all()", "all() && true", "any() || false"] {
+        let error = parse_error(&format!("{prefix}{body};"), &[]);
+        assert_eq!(error.error.code, LogicErrorCode::InvalidSyntax, "{body}");
+    }
+}
+
+#[test]
+fn 未闭合三元条件在语句结束后不累积嵌套预算() {
+    // 每条语句缺少 `end` 是语法错误，应定位到首条语句，而不是被累积成预算超限。
+    let statement = "validate q = if true then true else false;\n";
+    let source = format!(
+        "dsl 1 semantics 1;\nbind question q = \"00000000-0000-4000-8000-000000000001\";\n{}",
+        statement.repeat(80)
+    );
+    let error = parse_error(&source, &document().questions);
+    assert_eq!(error.error.code, LogicErrorCode::InvalidSyntax);
+    assert_eq!(error.line, 3);
+}
+
+#[test]
+fn 解析只为偏离默认名的绑定保存别名() {
+    let document = document();
+    let source = concat!(
+        "dsl 1 semantics 1;\n",
+        "bind question q1 = \"00000000-0000-4000-8000-000000000001\";\n",
+        "bind question amount = \"00000000-0000-4000-8000-000000000002\";\n",
+        "bind option yes = \"00000000-0000-4000-8000-000000000101\";\n",
+        "bind variable v1 = \"00000000-0000-4000-8000-000000002001\";\n",
+        "bind variable total = \"00000000-0000-4000-8000-000000002002\";\n",
+        "let v1: number = answer(amount);\n",
+        "let total: number = v1 + number(\"1\");\n",
+    );
+    let logic = parse_program(source, &document.questions).unwrap();
+    let expected = BTreeMap::from([
+        (
+            "00000000-0000-4000-8000-000000000002".parse().unwrap(),
+            "amount".to_owned(),
+        ),
+        (
+            "00000000-0000-4000-8000-000000000101".parse().unwrap(),
+            "yes".to_owned(),
+        ),
+        (
+            "00000000-0000-4000-8000-000000002002".parse().unwrap(),
+            "total".to_owned(),
+        ),
+    ]);
+    assert_eq!(logic.aliases, expected, "默认名不应写入别名表");
+}
+
+#[test]
+fn 选项别名在表达式位置生成option节点并参与往返() {
+    let document = document();
+    let source = concat!(
+        "dsl 1 semantics 1;\n",
+        "bind question choose = \"00000000-0000-4000-8000-000000000001\";\n",
+        "bind option yes = \"00000000-0000-4000-8000-000000000101\";\n",
+        "bind variable v = \"00000000-0000-4000-8000-000000007301\";\n",
+        "let v: choice = yes;\n",
+    );
+    let logic = parse_program(source, &document.questions).unwrap();
+    assert_eq!(
+        logic.variables[0].expression,
+        json!({"op": "option", "option_id": "00000000-0000-4000-8000-000000000101"})
+    );
+    let formatted = format_logic_text(&logic, &document.questions).unwrap();
+    assert!(formatted.contains("let v: choice = yes;"), "{formatted}");
+    assert_eq!(
+        parse_logic_text(&formatted, &document.questions).unwrap(),
+        logic
+    );
+
+    // 题目别名不是值，裸写必须按无效引用拒绝。
+    let error = parse_error(
+        "dsl 1 semantics 1;\n\
+         bind question choose = \"00000000-0000-4000-8000-000000000001\";\n\
+         bind variable v = \"00000000-0000-4000-8000-000000007301\";\n\
+         let v: choice = choose;",
+        &document.questions,
+    );
+    assert_eq!(error.error.code, LogicErrorCode::InvalidReference);
+}
+
+#[test]
+fn 匹配与取整函数文本往返() {
+    let document = document();
+    let logic: DocumentLogic = serde_json::from_value(json!({
+        "dsl_version": 1,
+        "semantics_version": 1,
+        "variables": [
+            {
+                "id": "00000000-0000-4000-8000-000000007201",
+                "value_type": "boolean",
+                "expression": {
+                    "op": "matches",
+                    "text": {
+                        "op": "answer",
+                        "question_id": "00000000-0000-4000-8000-000000000003"
+                    },
+                    "pattern": "a\\d+"
+                }
+            },
+            {
+                "id": "00000000-0000-4000-8000-000000007202",
+                "value_type": "number",
+                "expression": {
+                    "op": "round",
+                    "value": {"op": "number", "value": "1.2345"},
+                    "digits": 2
+                }
+            },
+            {
+                "id": "00000000-0000-4000-8000-000000007203",
+                "value_type": "number",
+                "expression": {
+                    "op": "floor",
+                    "value": {"op": "number", "value": "1.5"},
+                    "digits": 0
+                }
+            },
+            {
+                "id": "00000000-0000-4000-8000-000000007204",
+                "value_type": "number",
+                "expression": {
+                    "op": "ceil",
+                    "value": {"op": "number", "value": "1.5"},
+                    "digits": 1
+                }
+            }
+        ],
+        "rules": []
+    }))
+    .unwrap();
+    let formatted = format_logic_text(&logic, &document.questions).unwrap();
+    assert!(
+        formatted.contains("matches(answer(q3), \"a\\\\d+\")"),
+        "{formatted}"
+    );
+    assert!(
+        formatted.contains("round(number(\"1.2345\"), 2)"),
+        "{formatted}"
+    );
+    assert!(formatted.contains("floor(number(\"1.5\"))"), "{formatted}");
+    assert!(
+        formatted.contains("ceil(number(\"1.5\"), 1)"),
+        "{formatted}"
+    );
+    assert_eq!(
+        parse_logic_text(&formatted, &document.questions).unwrap(),
+        logic
+    );
 }

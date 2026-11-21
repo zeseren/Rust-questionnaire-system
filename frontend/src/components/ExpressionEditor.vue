@@ -4,7 +4,7 @@
 <!-- 每次编辑替换 AST 节点，数字常量保留原文，引用始终绑定稳定身份。 -->
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
-import type { ComputedVariable, Question } from '../types'
+import type { Choice, ComputedVariable, Question } from '../types'
 import { comparisonNames, inputValue, selectValue } from '../condition-builder'
 import { editorDisabledKey } from '../editor-context'
 import { numberedQuestionLabel } from '../flow-tools'
@@ -39,6 +39,7 @@ const ops = {
   answer: '题目答案',
   answered: '题目已回答',
   selected: '选中选项',
+  option: '选项常量',
   contains_any: '包含任一选项',
   contains_all: '包含全部选项',
   variable: '计算变量',
@@ -52,7 +53,11 @@ const ops = {
   negate: '取负',
   contains: '包含子串',
   starts_with: '前缀匹配',
+  matches: '正则匹配',
   arithmetic: '算术',
+  round: '四舍五入',
+  floor: '向下取整',
+  ceil: '向上取整',
 }
 // 高级编辑沿用原有「小于等于/大于等于」措辞；其余标签复用简洁条件的 comparisonNames。
 const comparisonLabels = {
@@ -69,6 +74,9 @@ const children = computed<readonly (readonly [string, string])[]>(() => {
       return [['expression', '条件'] as const]
     case 'length':
     case 'negate':
+    case 'round':
+    case 'floor':
+    case 'ceil':
       return [['value', '值'] as const]
     case 'coalesce':
       return [['value', '值'] as const, ['fallback', '缺失时使用'] as const]
@@ -82,6 +90,8 @@ const children = computed<readonly (readonly [string, string])[]>(() => {
       return [['text', '文本'] as const, ['substring', '包含的子串'] as const]
     case 'starts_with':
       return [['text', '文本'] as const, ['prefix', '前缀'] as const]
+    case 'matches':
+      return [['text', '文本'] as const]
     case 'compare':
     case 'arithmetic':
       return [['left', '左值'] as const, ['right', '右值'] as const]
@@ -97,6 +107,28 @@ const question = computed(() => props.questions.find((q) => q.id === node.value.
 const options = computed(() =>
   question.value && 'options' in question.value ? question.value.options : [],
 )
+const choiceQuestions = computed(() =>
+  props.questions.filter(
+    (question): question is Question & { options: Choice[] } => 'options' in question,
+  ),
+)
+const optionOwner = computed(() =>
+  choiceQuestions.value.find((question) =>
+    question.options.some((option) => option.id === node.value.option_id),
+  ),
+)
+const optionCandidates = computed(() => optionOwner.value?.options ?? [])
+// digits 是 JSON 整数：输入框越界或留空时收敛到最近的合法值，避免写出非法 AST。
+function digitsValue(event: Event): number {
+  const raw = inputValue(event)
+  const parsed = Number(raw)
+  if (raw.trim() === '' || !Number.isFinite(parsed)) return 0
+  return Math.min(6, Math.max(0, Math.trunc(parsed)))
+}
+function changeOptionQuestion(id: string) {
+  const target = choiceQuestions.value.find((question) => question.id === id)
+  update('option_id', target?.options[0]?.id ?? '')
+}
 function update(key: string, value: unknown) {
   emit('update:modelValue', { ...node.value, [key]: value })
 }
@@ -118,7 +150,7 @@ function changeQuestion(id: string) {
 function switchOp(op: string) {
   const literal = { op: 'boolean', value: true }
   const number = { op: 'number', value: '0' }
-  const selectedQuestion = props.questions.find((question) => 'options' in question)
+  const selectedQuestion = choiceQuestions.value[0]
   const question_id = props.questions[0]?.id ?? ''
   let fields: Record<string, unknown>
   switch (op) {
@@ -138,10 +170,7 @@ function switchOp(op: string) {
     case 'selected':
       fields = {
         question_id: selectedQuestion?.id ?? '',
-        option_id:
-          selectedQuestion && 'options' in selectedQuestion
-            ? (selectedQuestion.options[0]?.id ?? '')
-            : '',
+        option_id: selectedQuestion?.options[0]?.id ?? '',
       }
       break
     case 'contains_any':
@@ -150,6 +179,17 @@ function switchOp(op: string) {
       break
     case 'variable':
       fields = { variable_id: props.variables[0]?.id ?? '' }
+      break
+    case 'option':
+      fields = { option_id: selectedQuestion?.options[0]?.id ?? '' }
+      break
+    case 'matches':
+      fields = { text: { op: 'answer', question_id }, pattern: '' }
+      break
+    case 'round':
+    case 'floor':
+    case 'ceil':
+      fields = { value: number, digits: 0 }
       break
     case 'not':
       fields = { expression: literal }
@@ -250,6 +290,59 @@ function toggleOption(id: string) {
           options.map((option) => ({ value: option.id, label: option.label || '未命名选项' }))
         "
         @update:model-value="update('option_id', $event)"
+      />
+    </label>
+    <template v-if="node.op === 'option'">
+      <label class="field">
+        所属题目
+        <SearchSelect
+          :model-value="optionOwner?.id ?? ''"
+          label="所属题目"
+          :options="
+            choiceQuestions.map((question) => ({
+              value: question.id,
+              label: numberedQuestionLabel(
+                question,
+                questions.findIndex((item) => item.id === question.id),
+              ),
+            }))
+          "
+          @update:model-value="changeOptionQuestion"
+        />
+      </label>
+      <label class="field">
+        选项
+        <SearchSelect
+          :model-value="String(node.option_id ?? '')"
+          label="选项"
+          :options="
+            optionCandidates.map((option) => ({
+              value: option.id,
+              label: option.label || '未命名选项',
+            }))
+          "
+          @update:model-value="update('option_id', $event)"
+        />
+      </label>
+    </template>
+    <label v-if="node.op === 'matches'" class="field">
+      正则（整串匹配）
+      <input
+        :value="node.pattern"
+        :disabled="locked"
+        @input="update('pattern', inputValue($event))"
+      />
+    </label>
+    <label v-if="node.op === 'round' || node.op === 'floor' || node.op === 'ceil'" class="field">
+      保留小数位
+      <input
+        type="number"
+        min="0"
+        max="6"
+        step="1"
+        :value="node.digits"
+        :disabled="locked"
+        @input="update('digits', digitsValue($event))"
       />
     </label>
     <div v-if="node.op === 'contains_any' || node.op === 'contains_all'" class="form-stack">

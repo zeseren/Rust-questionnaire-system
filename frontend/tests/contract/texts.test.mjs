@@ -54,7 +54,10 @@ test('共享文本样例保持身份优先级、解析结果与错误行列一�
       continue
     }
     const expected = applyEdits(structuredClone(document.logic), item.edits)
-    assert.deepEqual(parseLogicText(source, document.questions), expected, item.name)
+    // 别名提示只影响文本展示，不改变身份与表达式结构；与 Rust 契约测试一致，单独校验 AST。
+    const { aliases: _aliases, ...actual } = parseLogicText(source, document.questions)
+    delete expected.aliases
+    assert.deepEqual(actual, expected, item.name)
   }
 })
 

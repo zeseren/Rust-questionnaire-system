@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
 use utoipa::ToSchema;
@@ -19,6 +20,10 @@ const MAX_NODES: usize = 256;
 const MAX_DEPTH: usize = 16;
 /// 数字字面量原文的字节上限，与共享规则包的预算一致。
 const MAX_NUMBER_LITERAL_BYTES: usize = 64;
+/// 正则原文的字符上限，避免单条规则消耗过多编译资源。
+const MAX_PATTERN_CHARS: usize = 256;
+/// 预编译正则的堆内存上限；超限按非法正则处理。
+const REGEX_SIZE_LIMIT: usize = 1 << 20;
 
 /// 两端共享的稳定错误分类；文案不参与分支判断。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -205,6 +210,10 @@ enum Expression {
     Answered {
         question_id: String,
     },
+    /// 选项字面量；值类型为单选身份，并记录选项所属题目。
+    Option {
+        option_id: String,
+    },
     Variable {
         variable_id: String,
     },
@@ -261,6 +270,26 @@ enum Expression {
         text: Box<Expression>,
         prefix: Box<Expression>,
     },
+    /// 整串正则匹配；模式必须在编译期预先验证。
+    Matches {
+        text: Box<Expression>,
+        pattern: String,
+    },
+    /// 四舍五入到指定小数位；`digits` 必须是 0 到 6 的 JSON 整数。
+    Round {
+        value: Box<Expression>,
+        digits: Number,
+    },
+    /// 向负无穷取整到指定小数位。
+    Floor {
+        value: Box<Expression>,
+        digits: Number,
+    },
+    /// 向正无穷取整到指定小数位。
+    Ceil {
+        value: Box<Expression>,
+        digits: Number,
+    },
     Arithmetic {
         operator: Arithmetic,
         left: Box<Expression>,
@@ -288,6 +317,13 @@ enum Arithmetic {
     Divide,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Rounding {
+    Round,
+    Floor,
+    Ceil,
+}
+
 #[derive(Debug)]
 pub(crate) struct Binding {
     pub(crate) value_type: LogicValueType,
@@ -300,6 +336,8 @@ pub(crate) struct Binding {
 struct Node {
     kind: NodeKind,
     value_type: LogicValueType,
+    /// 单选身份所属题目；仅用于比较两侧的选项域检查。
+    domain: Option<Uuid>,
     path: String,
 }
 
@@ -308,6 +346,7 @@ enum NodeKind {
     Literal(LogicValue),
     Answer(Uuid),
     Answered(Uuid),
+    Option(Uuid),
     Selected(Uuid, Vec<Uuid>, bool),
     Not(Box<Node>),
     Logical(Vec<Node>, bool),
@@ -318,6 +357,9 @@ enum NodeKind {
     Negate(Box<Node>),
     Contains(Box<Node>, Box<Node>),
     StartsWith(Box<Node>, Box<Node>),
+    Matches(Box<Node>, Regex),
+    /// 取整方式、操作数与编译期确定的缩放因子 `10^digits`。
+    Rounding(Rounding, Box<Node>, f64),
     Arithmetic(Arithmetic, Box<Node>, Box<Node>),
 }
 
@@ -431,6 +473,8 @@ pub fn compile_expression(
 /// 同一文档只构建一次绑定；表达式共享只读表，不复制题目与选项集合。
 pub(crate) struct CompilationContext {
     bindings: Arc<BTreeMap<Uuid, Binding>>,
+    /// 选项 → 所属题目；选项字面量据此确定身份域。
+    option_owners: Arc<BTreeMap<Uuid, Uuid>>,
 }
 
 pub(crate) fn validate_versions(
@@ -460,6 +504,7 @@ impl CompilationContext {
             return Err(error(LogicErrorCode::LimitExceeded, "$.questions", None));
         }
         let mut bindings = BTreeMap::new();
+        let mut option_owners = BTreeMap::new();
         for question in questions {
             let options = question.kind.options().unwrap_or(&[]);
             let value_type = match &question.kind {
@@ -468,13 +513,9 @@ impl CompilationContext {
                 QuestionKind::Text { .. } | QuestionKind::Textarea { .. } => LogicValueType::Text,
                 QuestionKind::Number { .. } | QuestionKind::Rating { .. } => LogicValueType::Number,
             };
-            // 排序只为让重复身份相邻，便于一次扫描发现。
-            let mut ids: Vec<Uuid> = options.iter().map(|option| option.id).collect();
-            ids.sort_unstable();
             if question.id.is_nil()
                 || bindings.contains_key(&question.id)
-                || ids.windows(2).any(|pair| pair[0] == pair[1])
-                || ids.contains(&Uuid::nil())
+                || options.iter().any(|option| option.id.is_nil())
             {
                 return Err(error(
                     LogicErrorCode::InvalidReference,
@@ -489,11 +530,21 @@ impl CompilationContext {
                     Some(question.id),
                 ));
             }
+            // 选项身份在整份问卷内唯一（同题重复同样拒绝）；否则选项字面量无法确定所属题目。
+            for option in options {
+                if option_owners.insert(option.id, question.id).is_some() {
+                    return Err(error(
+                        LogicErrorCode::InvalidReference,
+                        "$.questions",
+                        Some(question.id),
+                    ));
+                }
+            }
             bindings.insert(
                 question.id,
                 Binding {
                     value_type,
-                    options: ids,
+                    options: options.iter().map(|option| option.id).collect(),
                     variable: false,
                 },
             );
@@ -513,6 +564,7 @@ impl CompilationContext {
         }
         Ok(Self {
             bindings: Arc::new(bindings),
+            option_owners: Arc::new(option_owners),
         })
     }
 
@@ -530,6 +582,7 @@ impl CompilationContext {
             expression,
             "$.expression".into(),
             &self.bindings,
+            &self.option_owners,
             &mut dependencies,
         )?;
         let variable_dependencies = dependencies
@@ -610,6 +663,7 @@ fn compile_node(
     expr: Expression,
     path: String,
     bindings: &BTreeMap<Uuid, Binding>,
+    option_owners: &BTreeMap<Uuid, Uuid>,
     dependencies: &mut BTreeSet<Uuid>,
 ) -> Result<Node, LogicError> {
     use LogicValueType::{Boolean, Number, Text};
@@ -623,16 +677,30 @@ fn compile_node(
         &expr,
         Expression::ContainsAny { .. } | Expression::ContainsAll { .. }
     );
+    let rounding = match &expr {
+        Expression::Floor { .. } => Rounding::Floor,
+        Expression::Ceil { .. } => Rounding::Ceil,
+        _ => Rounding::Round,
+    };
     let mismatch = || error(LogicErrorCode::TypeMismatch, &path, None);
     let mut child = |expr, field| {
-        compile_node(expr, format!("{path}.{field}"), bindings, dependencies).map(Box::new)
+        compile_node(
+            expr,
+            format!("{path}.{field}"),
+            bindings,
+            option_owners,
+            dependencies,
+        )
+        .map(Box::new)
     };
-    let (kind, value_type) = match expr {
-        Expression::Boolean { value } => (NodeKind::Literal(LogicValue::Boolean(value)), Boolean),
+    let (kind, value_type, domain) = match expr {
+        Expression::Boolean { value } => {
+            (NodeKind::Literal(LogicValue::Boolean(value)), Boolean, None)
+        }
         Expression::Number { value } => {
             let value =
                 numeric(&value).ok_or_else(|| error(LogicErrorCode::InvalidNumber, &path, None))?;
-            (NodeKind::Literal(LogicValue::Number(value)), Number)
+            (NodeKind::Literal(LogicValue::Number(value)), Number, None)
         }
         Expression::Text { value } => {
             if value.contains('\0') {
@@ -641,7 +709,7 @@ fn compile_node(
             if value.chars().count() > MAX_TEXT_LENGTH {
                 return Err(error(LogicErrorCode::LimitExceeded, &path, None));
             }
-            (NodeKind::Literal(LogicValue::Text(value)), Text)
+            (NodeKind::Literal(LogicValue::Text(value)), Text, None)
         }
         Expression::Answer { question_id }
         | Expression::Answered { question_id }
@@ -660,11 +728,26 @@ fn compile_node(
                 ));
             }
             dependencies.insert(id);
+            // 只有题目单选答案携带身份域；计算变量与其它类型的答案不参与选项域检查。
+            let domain =
+                (!binding.variable && binding.value_type == LogicValueType::Choice).then_some(id);
             if answered {
-                (NodeKind::Answered(id), Boolean)
+                (NodeKind::Answered(id), Boolean, None)
             } else {
-                (NodeKind::Answer(id), binding.value_type)
+                (NodeKind::Answer(id), binding.value_type, domain)
             }
+        }
+        Expression::Option { option_id } => {
+            let option = reference(&option_id, &path)?;
+            // 选项索引由文档题目构建，查不到即引用无效。
+            let owner = *option_owners
+                .get(&option)
+                .ok_or_else(|| error(LogicErrorCode::InvalidReference, &path, None))?;
+            (
+                NodeKind::Option(option),
+                LogicValueType::Choice,
+                Some(owner),
+            )
         }
         Expression::Selected {
             question_id,
@@ -672,7 +755,7 @@ fn compile_node(
         } => {
             let (id, options) = selection(&question_id, vec![option_id], false, &path, bindings)?;
             dependencies.insert(id);
-            (NodeKind::Selected(id, options, false), Boolean)
+            (NodeKind::Selected(id, options, false), Boolean, None)
         }
         Expression::ContainsAny {
             question_id,
@@ -684,14 +767,14 @@ fn compile_node(
         } => {
             let (id, options) = selection(&question_id, option_ids, multiple, &path, bindings)?;
             dependencies.insert(id);
-            (NodeKind::Selected(id, options, all), Boolean)
+            (NodeKind::Selected(id, options, all), Boolean, None)
         }
         Expression::Not { expression } => {
             let expression = child(*expression, "expression")?;
             if expression.value_type != Boolean {
                 return Err(mismatch());
             }
-            (NodeKind::Not(expression), Boolean)
+            (NodeKind::Not(expression), Boolean, None)
         }
         Expression::All { expressions } | Expression::Any { expressions } => {
             if expressions.is_empty() {
@@ -703,6 +786,7 @@ fn compile_node(
                     expr,
                     format!("{path}.expressions[{index}]"),
                     bindings,
+                    option_owners,
                     dependencies,
                 )?;
                 if node.value_type != Boolean {
@@ -710,7 +794,7 @@ fn compile_node(
                 }
                 nodes.push(node);
             }
-            (NodeKind::Logical(nodes, all), Boolean)
+            (NodeKind::Logical(nodes, all), Boolean, None)
         }
         Expression::Compare {
             comparison,
@@ -729,7 +813,13 @@ fn compile_node(
             {
                 return Err(mismatch());
             }
-            (NodeKind::Compare(comparison, left, right), Boolean)
+            // 两侧都来自已知但不同的单选题时拒绝，避免跨题选项身份被静默当作可比。
+            if let (Some(left_owner), Some(right_owner)) = (left.domain, right.domain)
+                && left_owner != right_owner
+            {
+                return Err(mismatch());
+            }
+            (NodeKind::Compare(comparison, left, right), Boolean, None)
         }
         Expression::Coalesce { value, fallback } => {
             let value = child(*value, "value")?;
@@ -738,14 +828,18 @@ fn compile_node(
                 return Err(mismatch());
             }
             let value_type = value.value_type;
-            (NodeKind::Coalesce(value, fallback), value_type)
+            let domain = match (value.domain, fallback.domain) {
+                (Some(left), Some(right)) if left == right => Some(left),
+                _ => None,
+            };
+            (NodeKind::Coalesce(value, fallback), value_type, domain)
         }
         Expression::Length { value } => {
             let value = child(*value, "value")?;
             if !matches!(value.value_type, Text | LogicValueType::Choices) {
                 return Err(mismatch());
             }
-            (NodeKind::Length(value), Number)
+            (NodeKind::Length(value), Number, None)
         }
         Expression::If {
             condition,
@@ -759,9 +853,14 @@ fn compile_node(
                 return Err(mismatch());
             }
             let value_type = then_branch.value_type;
+            let domain = match (then_branch.domain, else_branch.domain) {
+                (Some(left), Some(right)) if left == right => Some(left),
+                _ => None,
+            };
             (
                 NodeKind::If(condition, then_branch, else_branch),
                 value_type,
+                domain,
             )
         }
         Expression::Negate { value } => {
@@ -769,7 +868,7 @@ fn compile_node(
             if value.value_type != Number {
                 return Err(mismatch());
             }
-            (NodeKind::Negate(value), Number)
+            (NodeKind::Negate(value), Number, None)
         }
         Expression::Contains { text, substring } => {
             let text = child(*text, "text")?;
@@ -777,7 +876,7 @@ fn compile_node(
             if text.value_type != Text || substring.value_type != Text {
                 return Err(mismatch());
             }
-            (NodeKind::Contains(text, substring), Boolean)
+            (NodeKind::Contains(text, substring), Boolean, None)
         }
         Expression::StartsWith { text, prefix } => {
             let text = child(*text, "text")?;
@@ -785,7 +884,36 @@ fn compile_node(
             if text.value_type != Text || prefix.value_type != Text {
                 return Err(mismatch());
             }
-            (NodeKind::StartsWith(text, prefix), Boolean)
+            (NodeKind::StartsWith(text, prefix), Boolean, None)
+        }
+        Expression::Matches { text, pattern } => {
+            let text = child(*text, "text")?;
+            if text.value_type != Text {
+                return Err(mismatch());
+            }
+            if pattern.chars().count() > MAX_PATTERN_CHARS {
+                return Err(error(LogicErrorCode::LimitExceeded, &path, None));
+            }
+            // 先单独编译原文：锚定包裹会掩盖 `a)|(b` 这类不平衡模式并破坏整串语义。
+            let compile = |pattern: &str| {
+                RegexBuilder::new(pattern)
+                    .size_limit(REGEX_SIZE_LIMIT)
+                    .build()
+                    .map_err(|_| error(LogicErrorCode::InvalidSyntax, &path, None))
+            };
+            compile(&pattern)?;
+            let regex = compile(&format!("^(?:{pattern})$"))?;
+            (NodeKind::Matches(text, regex), Boolean, None)
+        }
+        Expression::Round { value, digits }
+        | Expression::Floor { value, digits }
+        | Expression::Ceil { value, digits } => {
+            let value = child(*value, "value")?;
+            if value.value_type != Number {
+                return Err(mismatch());
+            }
+            let factor = rounding_factor(&digits, &path)?;
+            (NodeKind::Rounding(rounding, value, factor), Number, None)
         }
         Expression::Arithmetic {
             operator,
@@ -797,14 +925,25 @@ fn compile_node(
             if left.value_type != Number || right.value_type != Number {
                 return Err(mismatch());
             }
-            (NodeKind::Arithmetic(operator, left, right), Number)
+            (NodeKind::Arithmetic(operator, left, right), Number, None)
         }
     };
     Ok(Node {
         kind,
         value_type,
+        domain,
         path,
     })
+}
+
+/// `digits` 必须是 0 到 6 的 JSON 整数；返回编译期确定的缩放因子 `10^digits`。
+fn rounding_factor(digits: &Number, path: &str) -> Result<f64, LogicError> {
+    const FACTORS: [f64; 7] = [1.0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6];
+    digits
+        .as_u64()
+        .and_then(|digits| FACTORS.get(usize::try_from(digits).ok()?))
+        .copied()
+        .ok_or_else(|| error(LogicErrorCode::InvalidSyntax, path, None))
 }
 
 pub(crate) fn selection(
@@ -901,8 +1040,8 @@ impl Node {
         variables: &BTreeMap<Uuid, BTreeSet<Uuid>>,
     ) -> BTreeSet<Uuid> {
         match &self.kind {
-            // 常量与 answered 只判断有无答案，不读取答案内容。
-            NodeKind::Literal(_) | NodeKind::Answered(_) => BTreeSet::new(),
+            // 常量、选项字面量与 answered 都不读取答案内容。
+            NodeKind::Literal(_) | NodeKind::Answered(_) | NodeKind::Option(_) => BTreeSet::new(),
             NodeKind::Answer(id) => {
                 if bindings[id].variable {
                     // 拓扑序保证依赖已展开；缺失说明编译器漏填，直接崩而不是掩盖。
@@ -947,6 +1086,8 @@ impl Node {
                 reads
             }
             NodeKind::Length(value) => value.required_reads(bindings, variables),
+            NodeKind::Matches(text, _) => text.required_reads(bindings, variables),
+            NodeKind::Rounding(_, value, _) => value.required_reads(bindings, variables),
         }
     }
 
@@ -973,6 +1114,7 @@ impl Node {
             NodeKind::Literal(value) => Ok(value.clone()),
             NodeKind::Answer(id) => context(*id),
             NodeKind::Answered(id) => Ok(Boolean(!matches!(context(*id)?, Missing))),
+            NodeKind::Option(id) => Ok(LogicValue::Choice(*id)),
             NodeKind::Selected(id, expected, all) => match context(*id)? {
                 Missing => Ok(Missing),
                 LogicValue::Choice(option) => Ok(Boolean(expected.contains(&option))),
@@ -1073,6 +1215,31 @@ impl Node {
                     _ => Err(mismatch()),
                 }
             }
+            NodeKind::Matches(text, regex) => match text.evaluate(context)? {
+                Missing => Ok(Missing),
+                LogicValue::Text(text) => Ok(Boolean(regex.is_match(&text))),
+                _ => Err(mismatch()),
+            },
+            NodeKind::Rounding(operator, value, factor) => match value.evaluate(context)? {
+                Missing => Ok(Missing),
+                Number(value) => {
+                    // 缩放后取整再缩回；缩放溢出按算术错误拒绝，缩回不会再溢出。
+                    let scaled = value * factor;
+                    if !scaled.is_finite() {
+                        return Err(error(LogicErrorCode::ArithmeticError, &self.path, None));
+                    }
+                    let nearest = scaled.round();
+                    let rounded = match operator {
+                        Rounding::Round => nearest,
+                        // 已落在目标精度上的值（如 0.29）缩放后带有误差，直接保留，不能再向下/向上跳一格。
+                        Rounding::Floor | Rounding::Ceil if nearest / factor == value => nearest,
+                        Rounding::Floor => scaled.floor(),
+                        Rounding::Ceil => scaled.ceil(),
+                    };
+                    Ok(Number(canonical_zero(rounded / factor)))
+                }
+                _ => Err(mismatch()),
+            },
             NodeKind::Arithmetic(operator, left, right) => {
                 let left = left.evaluate(context)?;
                 let right = right.evaluate(context)?;

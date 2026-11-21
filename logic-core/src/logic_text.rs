@@ -47,6 +47,65 @@ static PRECEDENCE: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
 /// 文本源码与格式化输出的字节上限；格式化结果必须仍能通过同一预检。
 const MAX_LOGIC_TEXT_BYTES: usize = 1_048_576;
 
+/// 不能充当别名或标识符的保留字；与文法的 `reserved` 规则逐项保持一致。
+pub(crate) const RESERVED_WORDS: &[&str] = &[
+    "all",
+    "answered",
+    "any",
+    "answer",
+    "bind",
+    "boolean",
+    "branch",
+    "ceil",
+    "choice",
+    "choices",
+    "coalesce",
+    "complete",
+    "contains",
+    "contains_all",
+    "contains_any",
+    "dsl",
+    "else",
+    "end",
+    "entry",
+    "false",
+    "floor",
+    "if",
+    "length",
+    "let",
+    "matches",
+    "node",
+    "number",
+    "option",
+    "page",
+    "question",
+    "required",
+    "round",
+    "screen_out",
+    "selected",
+    "semantics",
+    "starts_with",
+    "text",
+    "then",
+    "true",
+    "validate",
+    "variable",
+    "visible",
+    "when",
+];
+
+/// 标识符只允许 ASCII 字母或 `_` 开头，后续为字母数字或 `_`。
+pub(crate) fn is_identifier(value: &str) -> bool {
+    let mut characters = value.chars();
+    matches!(characters.next(), Some(first) if first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+/// 合法别名必须同时满足标识符语法且不是保留字。
+pub(crate) fn is_valid_alias(value: &str) -> bool {
+    is_identifier(value) && !RESERVED_WORDS.contains(&value)
+}
+
 /// 文本错误携带源位置，语义错误同时保留原 AST 路径。
 #[derive(Debug, thiserror::Error, Serialize)]
 #[error("{error}（第 {line} 行，第 {column} 列）")]
@@ -105,13 +164,12 @@ pub(crate) fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
         return Err(failure(source, 0, LogicErrorCode::LimitExceeded));
     }
     let lexicon = next(&mut parse(source, Rule::lexicon)?);
-    // 每层记录尚未结束的前缀运算；括号、函数、! 与一元 - 共用递归深度预算。
-    let mut prefixes = vec![0_usize];
-    let mut depth = 1;
-    // 三元条件没有显式闭合符号，按括号层统计未结束的 if：逗号结束本层的条件，
-    // 分号结束整条语句；各层计数之和与 `depth` 一起参与解析递归预算。
-    let mut condition_levels = vec![0_usize];
-    let mut conditions = 0_usize;
+    // 每层记录尚未结束的前缀运算；括号、if 与 ! / 一元 - 共用递归深度预算。
+    let mut frames = vec![Frame {
+        kind: Layer::Statement,
+        prefixes: 0,
+    }];
+    let mut depth = 1_usize;
     // 区分二元与一元 `-`：只有紧接完整操作数之后的减号才是中缀运算符。
     let mut ends_primary = false;
     for token in lexicon.into_inner() {
@@ -126,13 +184,27 @@ pub(crate) fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
         }
         if matches!(token.as_rule(), Rule::identifier | Rule::keyword) {
             match token.as_str() {
-                // 条件与两个分支关键字之后都重新开始一个表达式，不能当作操作数结尾。
+                // `if` 显式开启新层，由配对的 `end` 关闭；`then` / `else` 重新开始表达式。
                 "if" => {
-                    *condition_levels.last_mut().expect("始终保留表达式外层") += 1;
-                    conditions += 1;
+                    frames.push(Frame {
+                        kind: Layer::If,
+                        prefixes: 0,
+                    });
+                    depth += 1;
                     ends_primary = false;
                 }
-                "then" | "else" => ends_primary = false,
+                "then" | "else" => {
+                    depth -= std::mem::take(
+                        &mut frames.last_mut().expect("始终保留表达式外层").prefixes,
+                    );
+                    ends_primary = false;
+                }
+                // 存在未闭合的 if 层时 `end` 是闭层符号；否则是结束节点的语句关键字。
+                "end" if frames.last().is_some_and(|frame| frame.kind == Layer::If) => {
+                    let frame = frames.pop().expect("已确认存在 if 层");
+                    depth -= 1 + frame.prefixes;
+                    ends_primary = true;
+                }
                 // `true` / `false` 是操作数，与被保留的别名关键字区分处理。
                 _ => ends_primary = true,
             }
@@ -142,44 +214,66 @@ pub(crate) fn check_text_budget(source: &str) -> Result<(), LogicTextError> {
         if token.as_rule() == Rule::symbol {
             match token.as_str() {
                 "!" => {
-                    *prefixes.last_mut().expect("始终保留表达式外层") += 1;
+                    frames.last_mut().expect("始终保留表达式外层").prefixes += 1;
                     depth += 1;
                 }
                 "-" if !ends_primary => {
-                    *prefixes.last_mut().expect("始终保留表达式外层") += 1;
+                    frames.last_mut().expect("始终保留表达式外层").prefixes += 1;
                     depth += 1;
                 }
                 "(" | "[" => {
-                    prefixes.push(0);
-                    condition_levels.push(0);
+                    frames.push(Frame {
+                        kind: Layer::Bracket,
+                        prefixes: 0,
+                    });
                     depth += 1;
                 }
-                ")" | "]" if prefixes.len() > 1 => {
-                    depth -= 1 + prefixes.pop().expect("已检查存在内层");
-                    conditions -= condition_levels.pop().expect("已检查存在内层");
+                ")" | "]" => {
+                    // 关闭最近的括号层；括号内未闭合的 if 随括号一起丢弃（完整文法会拒绝）。
+                    if let Some(position) = frames
+                        .iter()
+                        .rposition(|frame| frame.kind == Layer::Bracket)
+                    {
+                        while frames.len() > position {
+                            let frame = frames.pop().expect("已确认存在内层");
+                            depth -= 1 + frame.prefixes;
+                        }
+                    }
                 }
                 "&&" | "||" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "/"
-                | "," | ";" | "->" | "}" => {
-                    depth -= std::mem::take(prefixes.last_mut().expect("始终保留表达式外层"));
-                    // 逗号结束本层未闭合的三元条件；分号结束整条语句的条件。
-                    if token.as_str() == ";" {
-                        conditions = 0;
-                        condition_levels.fill(0);
-                    } else if token.as_str() == "," {
-                        conditions -= std::mem::take(
-                            condition_levels.last_mut().expect("始终保留表达式外层"),
-                        );
-                    }
+                | "," | "->" | "}" => {
+                    depth -= std::mem::take(
+                        &mut frames.last_mut().expect("始终保留表达式外层").prefixes,
+                    );
+                }
+                // 分号结束整条语句：未闭合的 if 或括号交给完整文法报错，不累积到后续语句。
+                ";" => {
+                    frames.truncate(1);
+                    frames[0].prefixes = 0;
+                    depth = 1;
                 }
                 _ => {}
             }
             ends_primary = matches!(token.as_str(), ")" | "]");
         }
-        if depth + conditions > 64 {
+        if depth > 64 {
             return Err(failure(source, offset, LogicErrorCode::LimitExceeded));
         }
     }
     Ok(())
+}
+
+/// 预检层的种类；括号与 if 都占用一层解析递归。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layer {
+    Statement,
+    Bracket,
+    If,
+}
+
+struct Frame {
+    kind: Layer,
+    prefixes: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -363,7 +457,7 @@ impl<'a> Compiler<'a> {
                 }
             })
             .map_infix(|left, op, right| {
-                let (left, left_budget) = left?;
+                let (mut left, left_budget) = left?;
                 let (right, right_budget) = right?;
                 let value = match op.as_rule() {
                     Rule::logical_or | Rule::logical_and => {
@@ -372,6 +466,19 @@ impl<'a> Compiler<'a> {
                         } else {
                             "all"
                         };
+                        // 同运算符链扁平化为单个节点；预算按追加右操作数逐次检查。
+                        if left.get("op").and_then(Value::as_str) == Some(name)
+                            && let Some(expressions) =
+                                left.get_mut("expressions").and_then(Value::as_array_mut)
+                        {
+                            expressions.push(right);
+                            let budget = Budget {
+                                depth: left_budget.depth.max(right_budget.depth + 1),
+                                nodes: left_budget.nodes + right_budget.nodes,
+                            }
+                            .checked(self.source, op.as_span().start())?;
+                            return Ok((left, budget));
+                        }
                         json!({"op":name, "expressions":[left,right]})
                     }
                     Rule::equal
@@ -417,6 +524,7 @@ impl<'a> Compiler<'a> {
         let (then_branch, then_budget) = self.build(next(&mut parts))?;
         next(&mut parts); // else
         let (else_branch, else_budget) = self.build(next(&mut parts))?;
+        next(&mut parts); // end
         let budget = Budget::parent([condition_budget, then_budget, else_budget])
             .checked(self.source, offset)?;
         Ok((
@@ -436,7 +544,20 @@ impl<'a> Compiler<'a> {
             Rule::string => json!({"op":"text", "value":string(self.source, &pair)?}),
             Rule::boolean => json!({"op":"boolean", "value":pair.as_str() == "true"}),
             Rule::identifier => {
-                json!({"op":"variable", "variable_id":self.reference(pair, Category::Variable)?})
+                // 表达式位置的裸别名按绑定类别生成节点；题目与节点别名不能直接充当值。
+                let binding = self
+                    .bindings
+                    .get(pair.as_str())
+                    .ok_or_else(|| self.failure(&pair, LogicErrorCode::InvalidReference))?;
+                match binding.category {
+                    Category::Variable => {
+                        json!({"op":"variable", "variable_id":binding.id})
+                    }
+                    Category::Option => json!({"op":"option", "option_id":binding.id}),
+                    Category::Question | Category::Node => {
+                        return Err(self.failure(&pair, LogicErrorCode::InvalidReference));
+                    }
+                }
             }
             Rule::group => return self.build(next(&mut pair.into_inner())),
             Rule::if_expression => return self.build_if(pair),
@@ -454,11 +575,22 @@ impl<'a> Compiler<'a> {
         let op = name.as_str();
         let arguments: Vec<_> = parts.collect();
         let arity = match op {
-            "answer" | "answered" | "variable" | "number" | "length" => Some(1),
+            "answer" | "answered" | "number" | "length" => Some(1),
             "selected" | "contains_any" | "contains_all" | "coalesce" | "contains"
-            | "starts_with" => Some(2),
+            | "starts_with" | "matches" => Some(2),
+            // 取整函数允许省略位数；位数范围由编译期统一核对。
+            "round" | "floor" | "ceil" => {
+                if !(1..=2).contains(&arguments.len()) {
+                    return Err(failure(self.source, end, LogicErrorCode::InvalidSyntax));
+                }
+                None
+            }
+            // 空的 all() / any() 不是合法条件；`&&` 扁平化也不能借此绕过。
+            "all" | "any" if arguments.is_empty() => {
+                return Err(failure(self.source, end, LogicErrorCode::InvalidSyntax));
+            }
             "all" | "any" => None,
-            _ => return Err(self.failure(&name, LogicErrorCode::InvalidSyntax)),
+            _ => unreachable!("function_name 文法只匹配内置函数"),
         };
         if arity.is_some_and(|arity| arguments.len() != arity) {
             return Err(failure(self.source, end, LogicErrorCode::InvalidSyntax));
@@ -467,10 +599,6 @@ impl<'a> Compiler<'a> {
         let (value, budget) = match op {
             "answer" | "answered" => (
                 json!({"op":op,"question_id":self.reference(argument(0), Category::Question)?}),
-                Budget::LEAF,
-            ),
-            "variable" => (
-                json!({"op":op,"variable_id":self.reference(argument(0), Category::Variable)?}),
                 Budget::LEAF,
             ),
             "number" => {
@@ -545,6 +673,41 @@ impl<'a> Compiler<'a> {
                 (
                     json!({"op":op,"text":text,"prefix":prefix}),
                     Budget::parent([text_budget, prefix_budget]),
+                )
+            }
+            "matches" => {
+                // 正则原文必须是字符串字面量，不能由表达式在运行时拼装。
+                let pattern = self.atom(argument(1))?;
+                if pattern.as_rule() != Rule::string {
+                    return Err(self.failure(&pattern, LogicErrorCode::InvalidSyntax));
+                }
+                let pattern = string(self.source, &pattern)?;
+                let (text, text_budget) = self.build(argument(0))?;
+                (
+                    json!({"op":op,"text":text,"pattern":pattern}),
+                    Budget::parent([text_budget]),
+                )
+            }
+            "round" | "floor" | "ceil" => {
+                let (value, child) = self.build(argument(0))?;
+                let digits = if arguments.len() == 2 {
+                    // 位数只接受非负整数字面量；小数点与指数形式在词法上就是数字，需显式拒绝。
+                    let digits = self.atom(argument(1))?;
+                    if digits.as_rule() != Rule::number
+                        || !digits.as_str().bytes().all(|byte| byte.is_ascii_digit())
+                    {
+                        return Err(self.failure(&digits, LogicErrorCode::InvalidSyntax));
+                    }
+                    digits
+                        .as_str()
+                        .parse::<u8>()
+                        .map_err(|_| self.failure(&digits, LogicErrorCode::InvalidSyntax))?
+                } else {
+                    0
+                };
+                (
+                    json!({"op":op,"value":value,"digits":digits}),
+                    Budget::parent([child]),
                 )
             }
             _ => {
@@ -765,6 +928,7 @@ impl<'a> Compiler<'a> {
             variables: Vec::new(),
             rules: Vec::new(),
             flow: None,
+            aliases: BTreeMap::new(),
         };
         Ok((declarations, logic))
     }
@@ -806,9 +970,34 @@ impl<'a> Compiler<'a> {
     /// 编译规则包，失败时把错误路径映射回最具体的声明位置。
     fn finish(
         self,
-        logic: DocumentLogic,
+        mut logic: DocumentLogic,
         questions: &[Question],
     ) -> Result<DocumentLogic, LogicTextError> {
+        // 只保存格式化器无法自行还原的绑定别名：既不是默认名，也不是默认名让位于
+        // 其它自定义别名后追加的后缀名，保证 parse(format(parse(t))) == parse(t)。
+        let defaults: BTreeMap<_, _> = binding_targets(&logic, questions)
+            .into_iter()
+            .map(|target| (target.id, target.default))
+            .collect();
+        let custom: Vec<(Uuid, &str)> = self
+            .binding_order
+            .iter()
+            .filter_map(|alias| {
+                let binding = self.bindings.get(*alias).expect("顺序表只记录已插入的别名");
+                let default = defaults.get(&binding.id)?.name();
+                (default != *alias).then_some((binding.id, *alias))
+            })
+            .collect();
+        let taken: BTreeSet<&str> = custom.iter().map(|(_, alias)| *alias).collect();
+        logic.aliases = custom
+            .iter()
+            .filter(|(id, alias)| {
+                unique_alias(defaults[id].name(), |name| {
+                    name != *alias && taken.contains(name)
+                }) != *alias
+            })
+            .map(|(id, alias)| (*id, (*alias).to_owned()))
+            .collect();
         logic.compile(questions).map_err(|error| {
             // 成功路径只保留轻量位置枚举；仅在报错时格式化路径并选最长前缀。
             let offset = self
@@ -1043,6 +1232,111 @@ fn read_string(source: &str, index: usize) -> Option<(&str, usize)> {
     None
 }
 
+/// 默认别名的位置编号；只在真正需要名称时才格式化成字符串。
+#[derive(Clone, Copy)]
+enum DefaultAlias {
+    Question(usize),
+    Option(usize, usize),
+    Variable(usize),
+    Node(usize),
+}
+
+impl DefaultAlias {
+    fn name(self) -> String {
+        match self {
+            Self::Question(index) => format!("q{index}"),
+            Self::Option(index, order) => format!("q{index}_o{order}"),
+            Self::Variable(index) => format!("v{index}"),
+            Self::Node(index) => format!("n{index}"),
+        }
+    }
+}
+
+/// 文本绑定目标：类别、身份与默认别名位置。
+struct BindingTarget {
+    category: &'static str,
+    id: Uuid,
+    default: DefaultAlias,
+}
+
+/// 按格式化器的绑定顺序枚举题目、选项、变量与流程节点。
+///
+/// 解析端据此判断 `bind` 别名是否偏离默认名；两端共用同一顺序与命名规则。
+fn binding_targets(logic: &DocumentLogic, questions: &[Question]) -> Vec<BindingTarget> {
+    let mut targets = Vec::new();
+    for (index, question) in questions.iter().enumerate() {
+        targets.push(BindingTarget {
+            category: "question",
+            id: question.id,
+            default: DefaultAlias::Question(index + 1),
+        });
+        if let Some(options) = question.kind.options() {
+            for (order, option) in options.iter().enumerate() {
+                targets.push(BindingTarget {
+                    category: "option",
+                    id: option.id,
+                    default: DefaultAlias::Option(index + 1, order + 1),
+                });
+            }
+        }
+    }
+    for (index, variable) in logic.variables.iter().enumerate() {
+        targets.push(BindingTarget {
+            category: "variable",
+            id: variable.id,
+            default: DefaultAlias::Variable(index + 1),
+        });
+    }
+    if let Some(flow) = &logic.flow {
+        for (index, node) in flow.nodes.iter().enumerate() {
+            targets.push(BindingTarget {
+                category: "node",
+                id: node.id(),
+                default: DefaultAlias::Node(index + 1),
+            });
+        }
+    }
+    targets
+}
+
+/// 默认名被自定义别名占用时追加 `_2`、`_3`…，直到得到未占用的别名。
+///
+/// 默认名形如 `q1`、`q1_o1`、`v1`、`n1`，加后缀后不会与其它默认名相撞，
+/// 因此只需避开自定义别名。
+fn unique_alias(base: String, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(&base) {
+        return base;
+    }
+    (2_u32..)
+        .map(|suffix| format!("{base}_{suffix}"))
+        .find(|candidate| !taken(candidate))
+        .expect("后缀序列无限，必然找到未占用的别名")
+}
+
+/// 分派最终别名：自定义别名优先，默认名与自定义别名冲突时追加后缀。
+fn assign_aliases(
+    logic: &DocumentLogic,
+    targets: &[BindingTarget],
+) -> Result<BTreeMap<Uuid, String>, LogicError> {
+    // 只预占仍存在实体的自定义别名；已删除实体的别名不参与。
+    let custom: BTreeSet<&str> = targets
+        .iter()
+        .filter_map(|target| logic.aliases.get(&target.id).map(String::as_str))
+        .collect();
+    let mut aliases = BTreeMap::new();
+    for target in targets {
+        let alias = match logic.aliases.get(&target.id) {
+            Some(alias) => alias.clone(),
+            None => unique_alias(target.default.name(), |name| custom.contains(name)),
+        };
+        // 题目与选项身份相撞时不能静默覆盖已有别名，否则文本会丢失一条绑定。
+        if aliases.insert(target.id, alias).is_some() {
+            return Err(error(LogicErrorCode::InvalidReference, "$", None));
+        }
+    }
+    Ok(aliases)
+}
+
 /// 二元运算符由 (op, 名称) 反查符号；`all` / `any` 由表达式分支单独处理。
 fn binary_symbol(op: &str, name: &str) -> Option<&'static str> {
     match (op, name) {
@@ -1067,24 +1361,22 @@ struct Formatter {
 }
 
 impl Formatter {
-    fn new(dsl_version: &Number, semantics_version: &Number) -> Self {
+    fn new(
+        dsl_version: &Number,
+        semantics_version: &Number,
+        aliases: BTreeMap<Uuid, String>,
+    ) -> Self {
         let mut output = String::with_capacity(256);
         write!(output, "dsl {dsl_version} semantics {semantics_version};")
             .expect("写入 String 不会失败");
-        Self {
-            aliases: BTreeMap::new(),
-            output,
-        }
+        Self { aliases, output }
     }
 
-    fn bind(&mut self, category: &str, id: Uuid, alias: String) -> Result<(), LogicError> {
-        // 题目与选项身份相撞时不能静默覆盖已有别名，否则文本会丢失一条绑定。
-        if self.aliases.contains_key(&id) {
-            return Err(error(LogicErrorCode::InvalidReference, "$", None));
-        }
+    fn bind(&mut self, category: &str, id: Uuid) -> Result<(), LogicError> {
+        // 预分派阶段已拒绝身份相撞；此处只按最终别名写出绑定。
+        let alias = alias(&self.aliases, id)?;
         self.output.push('\n');
         write!(self.output, "bind {category} {alias} = \"{id}\";").expect("写入 String 不会失败");
-        self.aliases.insert(id, alias);
         Ok(())
     }
 
@@ -1187,22 +1479,6 @@ fn reference<'a>(aliases: &'a BTreeMap<Uuid, String>, id: &Value) -> Result<&'a 
         .and_then(|id| alias(aliases, id))
 }
 
-/// 写入运算符操作数：三元条件没有显式闭合符号，必须整体加括号，
-/// 否则重新解析时 `else` 分支会吞掉相邻运算符。
-fn write_operand(
-    aliases: &BTreeMap<Uuid, String>,
-    output: &mut String,
-    raw: &Value,
-) -> Result<(), LogicError> {
-    if raw.get("op").and_then(Value::as_str) == Some("if") {
-        output.push('(');
-        write_expression(aliases, output, raw)?;
-        output.push(')');
-        return Ok(());
-    }
-    write_expression(aliases, output, raw)
-}
-
 /// 递归写入表达式节点；未知结构返回 `invalid_syntax`，运算符按 TS `binary` 表反查。
 fn write_expression(
     aliases: &BTreeMap<Uuid, String>,
@@ -1235,8 +1511,10 @@ fn write_expression(
             write!(output, "{op}({question})").expect("写入 String 不会失败");
         }
         "variable" => {
-            let variable = reference(aliases, field("variable_id")?)?;
-            write!(output, "variable({variable})").expect("写入 String 不会失败");
+            output.push_str(reference(aliases, field("variable_id")?)?);
+        }
+        "option" => {
+            output.push_str(reference(aliases, field("option_id")?)?);
         }
         "selected" => {
             let question = reference(aliases, field("question_id")?)?;
@@ -1293,6 +1571,7 @@ fn write_expression(
             write_expression(aliases, output, field("then_branch")?)?;
             output.push_str(" else ");
             write_expression(aliases, output, field("else_branch")?)?;
+            output.push_str(" end");
         }
         "negate" => {
             output.push_str("-(");
@@ -1312,6 +1591,21 @@ fn write_expression(
             write_expression(aliases, output, target)?;
             output.push(')');
         }
+        "matches" => {
+            let quoted = serde_json::to_string(text("pattern")?).map_err(|_| invalid_syntax())?;
+            output.push_str("matches(");
+            write_expression(aliases, output, field("text")?)?;
+            write!(output, ", {quoted})").expect("写入 String 不会失败");
+        }
+        "round" | "floor" | "ceil" => {
+            let digits = field("digits")?.as_u64().ok_or_else(invalid_syntax)?;
+            write!(output, "{op}(").expect("写入 String 不会失败");
+            write_expression(aliases, output, field("value")?)?;
+            if digits > 0 {
+                write!(output, ", {digits}").expect("写入 String 不会失败");
+            }
+            output.push(')');
+        }
         _ => {
             // 二元运算符按 (op, comparison/operator) 反查符号，无法反查即拒绝。
             let name = if op == "compare" {
@@ -1321,11 +1615,11 @@ fn write_expression(
             };
             let operator = binary_symbol(op, name).ok_or_else(invalid_syntax)?;
             output.push('(');
-            write_operand(aliases, output, field("left")?)?;
+            write_expression(aliases, output, field("left")?)?;
             output.push(' ');
             output.push_str(operator);
             output.push(' ');
-            write_operand(aliases, output, field("right")?)?;
+            write_expression(aliases, output, field("right")?)?;
             output.push(')');
         }
     }
@@ -1341,26 +1635,11 @@ pub fn format_logic_text(
     questions: &[Question],
 ) -> Result<String, LogicError> {
     logic.compile(questions)?;
-    let mut formatter = Formatter::new(&logic.dsl_version, &logic.semantics_version);
-    for (index, question) in questions.iter().enumerate() {
-        formatter.bind("question", question.id, format!("q{}", index + 1))?;
-        if let Some(options) = question.kind.options() {
-            for (order, option) in options.iter().enumerate() {
-                formatter.bind(
-                    "option",
-                    option.id,
-                    format!("q{}_o{}", index + 1, order + 1),
-                )?;
-            }
-        }
-    }
-    for (index, variable) in logic.variables.iter().enumerate() {
-        formatter.bind("variable", variable.id, format!("v{}", index + 1))?;
-    }
-    if let Some(flow) = &logic.flow {
-        for (index, node) in flow.nodes.iter().enumerate() {
-            formatter.bind("node", node.id(), format!("n{}", index + 1))?;
-        }
+    let targets = binding_targets(logic, questions);
+    let aliases = assign_aliases(logic, &targets)?;
+    let mut formatter = Formatter::new(&logic.dsl_version, &logic.semantics_version, aliases);
+    for target in &targets {
+        formatter.bind(target.category, target.id)?;
     }
     // 绑定与定义之间、以及输出末尾各保留一个空行，对应原实现的 `lines.join("\n")`。
     formatter.output.push('\n');

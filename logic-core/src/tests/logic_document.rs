@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::domain::MAX_QUESTIONS;
+use crate::flow::{FlowDefinition, FlowNode, FlowOutcome};
 use crate::logic::{LogicErrorCode, LogicValueType};
 use crate::logic_document::{
     CompiledDocumentLogic, ComputedVariable, DocumentLogic, QuestionRule, rewrite,
@@ -31,6 +32,7 @@ fn 逻辑(variables: Vec<ComputedVariable>, rules: Vec<QuestionRule>) -> Documen
         semantics_version: 版本(),
         variables,
         rules,
+        aliases: BTreeMap::new(),
     }
 }
 
@@ -274,4 +276,80 @@ fn 规则必须指向已知题目且至少配置一个字段() {
     assert_eq!(错误.code, LogicErrorCode::InvalidSyntax);
     assert_eq!(错误.path, "$.logic.rules[0]");
     assert_eq!(错误.question_id, Some(id(1)));
+}
+
+#[test]
+fn 别名值必须是合法且互不重复的标识符() {
+    let questions = [数字题(1, false, None, None)];
+    for alias in ["", "1bad", "has-dash", "中文", "if", "contains_any"] {
+        let mut logic = 逻辑(Vec::new(), Vec::new());
+        logic.aliases.insert(id(1), alias.to_owned());
+        let 错误 = logic.compile(&questions).unwrap_err();
+        assert_eq!(错误.code, LogicErrorCode::InvalidReference, "别名 {alias}");
+        assert_eq!(错误.path, "$.logic.aliases", "别名 {alias}");
+    }
+
+    let mut 重复 = 逻辑(Vec::new(), Vec::new());
+    重复.aliases.insert(id(1), "topic".to_owned());
+    重复.aliases.insert(id(2), "topic".to_owned());
+    let 错误 = 重复.compile(&questions).unwrap_err();
+    assert_eq!(错误.code, LogicErrorCode::InvalidReference);
+    assert_eq!(错误.path, "$.logic.aliases");
+
+    // 键可以指向已删除实体；合法且不重复的别名不因引用缺失而失败。
+    let mut 合法 = 逻辑(Vec::new(), Vec::new());
+    合法.aliases.insert(id(999), "ghost".to_owned());
+    assert!(合法.compile(&questions).is_ok());
+}
+
+#[test]
+fn 重签身份时别名键随实体改写() {
+    let 旧题目 = id(1);
+    let 旧选项 = id(101);
+    let 旧变量 = id(201);
+    let 旧节点 = id(301);
+    let mut logic = 逻辑(
+        vec![变量(201, LogicValueType::Number, 数字("1"))],
+        Vec::new(),
+    );
+    logic.flow = Some(FlowDefinition {
+        entry: 旧节点,
+        nodes: vec![FlowNode::End {
+            id: 旧节点,
+            outcome: FlowOutcome::Complete,
+        }],
+    });
+    logic.aliases = BTreeMap::from([
+        (旧题目, "topic".to_owned()),
+        (旧选项, "yes".to_owned()),
+        (旧变量, "total".to_owned()),
+        (旧节点, "finish".to_owned()),
+        (id(999), "ghost".to_owned()),
+    ]);
+
+    let 新题目 = id(11);
+    let 新选项 = id(111);
+    logic.renew_references(
+        &BTreeMap::from([(旧题目, 新题目)]),
+        &BTreeMap::from([(旧选项, 新选项)]),
+    );
+
+    let 新变量 = logic.variables[0].id;
+    let 新节点 = logic.flow.as_ref().unwrap().entry;
+    assert_eq!(
+        logic.aliases.get(&新题目).map(String::as_str),
+        Some("topic")
+    );
+    assert_eq!(logic.aliases.get(&新选项).map(String::as_str), Some("yes"));
+    assert_eq!(
+        logic.aliases.get(&新变量).map(String::as_str),
+        Some("total")
+    );
+    assert_eq!(
+        logic.aliases.get(&新节点).map(String::as_str),
+        Some("finish")
+    );
+    assert_eq!(logic.aliases.len(), 4, "已删除实体的别名必须丢弃");
+    assert!(!logic.aliases.contains_key(&旧题目));
+    assert!(!logic.aliases.contains_key(&旧节点));
 }

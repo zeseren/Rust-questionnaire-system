@@ -495,3 +495,135 @@ fn 文本函数与单选相等比较遵循静态类型() {
         LogicValue::Missing
     );
 }
+
+#[test]
+fn 选项字面量匹配与舍入算子遵守跨模块契约() {
+    let fixtures = fixtures();
+    let base = |expression: Value| {
+        json!({
+            "dsl_version": 1,
+            "semantics_version": 1,
+            "expression": expression,
+        })
+    };
+    let choice_question = fixtures.questions[0].id;
+    let option = fixtures.questions[0].kind.options().unwrap()[0].id;
+    let text_question = fixtures.questions[2].id;
+    let number_question = fixtures.questions[3].id;
+
+    // 选项字面量是独立的单选身份，可与同题答案比较。
+    let compiled = compile_expression(
+        &base(json!({
+            "op": "compare",
+            "comparison": "eq",
+            "left": { "op": "answer", "question_id": choice_question },
+            "right": { "op": "option", "option_id": option },
+        })),
+        &fixtures.questions,
+    )
+    .unwrap();
+    let mut answers = BTreeMap::new();
+    answers.insert(choice_question, json!(option));
+    assert_eq!(
+        compiled.evaluate(&answers).unwrap(),
+        LogicValue::Boolean(true)
+    );
+
+    // 两道单选题的选项域不同，比较在编译期拒绝。
+    let 单选 = |id_value: u128, option_value: u128| Question {
+        id: Uuid::from_u128(id_value),
+        title: "单选".into(),
+        required: false,
+        kind: QuestionKind::SingleChoice {
+            options: vec![Choice {
+                id: Uuid::from_u128(option_value),
+                label: "选项".into(),
+            }],
+        },
+    };
+    let questions = [单选(1, 101), 单选(2, 201)];
+    let error = compile_expression(
+        &base(json!({
+            "op": "compare",
+            "comparison": "ne",
+            "left": { "op": "answer", "question_id": Uuid::from_u128(1) },
+            "right": { "op": "option", "option_id": Uuid::from_u128(201) },
+        })),
+        &questions,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, LogicErrorCode::TypeMismatch);
+
+    // 正则按整串匹配，非法模式在编译期拒绝。
+    let compiled = compile_expression(
+        &base(json!({
+            "op": "matches",
+            "text": { "op": "answer", "question_id": text_question },
+            "pattern": "反.",
+        })),
+        &fixtures.questions,
+    )
+    .unwrap();
+    let mut answers = BTreeMap::new();
+    answers.insert(text_question, json!("反馈"));
+    assert_eq!(
+        compiled.evaluate(&answers).unwrap(),
+        LogicValue::Boolean(true)
+    );
+    answers.insert(text_question, json!("反馈后"));
+    assert_eq!(
+        compiled.evaluate(&answers).unwrap(),
+        LogicValue::Boolean(false)
+    );
+    let error = compile_expression(
+        &base(json!({
+            "op": "matches",
+            "text": { "op": "answer", "question_id": text_question },
+            "pattern": "[",
+        })),
+        &fixtures.questions,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, LogicErrorCode::InvalidSyntax);
+
+    // 舍入在十进制缩放下消除浮点噪声；位数越界与溢出分别拒绝。
+    let compiled = compile_expression(
+        &base(json!({
+            "op": "round",
+            "value": {
+                "op": "arithmetic",
+                "operator": "add",
+                "left": { "op": "number", "value": "0.1" },
+                "right": { "op": "number", "value": "0.2" },
+            },
+            "digits": 2,
+        })),
+        &fixtures.questions,
+    )
+    .unwrap();
+    assert_eq!(
+        compiled.evaluate(&BTreeMap::new()).unwrap(),
+        LogicValue::Number(0.3)
+    );
+    let error = compile_expression(
+        &base(json!({ "op": "floor", "value": { "op": "number", "value": "1" }, "digits": 7 })),
+        &fixtures.questions,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, LogicErrorCode::InvalidSyntax);
+    let overflow = compile_expression(
+        &base(json!({
+            "op": "ceil",
+            "value": { "op": "answer", "question_id": number_question },
+            "digits": 2,
+        })),
+        &fixtures.questions,
+    )
+    .unwrap();
+    let mut answers = BTreeMap::new();
+    answers.insert(number_question, json!(1e308));
+    assert_eq!(
+        overflow.evaluate(&answers).unwrap_err().code,
+        LogicErrorCode::ArithmeticError
+    );
+}

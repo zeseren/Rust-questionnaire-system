@@ -225,6 +225,8 @@ export interface DocumentLogic {
   semantics_version: number
   variables: ComputedVariable[]
   rules: QuestionRule[]
+  /** 文本 DSL 的展示别名：键为题目、选项、变量或流程节点 ID，值为合法标识符。 */
+  aliases?: Record<string, string>
 }
 
 export type FlowOutcome = 'complete' | 'screen_out'

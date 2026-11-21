@@ -127,12 +127,13 @@ impl FlowDefinition {
             .map(|branch| &branch.when)
     }
 
+    /// 改写流程引用的身份，并返回旧节点身份到新身份的映射。
     pub fn renew_ids(
         &mut self,
         questions: &BTreeMap<Uuid, Uuid>,
         options: &BTreeMap<Uuid, Uuid>,
         variables: &BTreeMap<Uuid, Uuid>,
-    ) {
+    ) -> BTreeMap<Uuid, Uuid> {
         let nodes: BTreeMap<_, _> = self
             .nodes
             .iter()
@@ -174,6 +175,7 @@ impl FlowDefinition {
                 FlowNode::End { id, .. } => remap(id),
             }
         }
+        nodes
     }
 }
 
@@ -823,8 +825,8 @@ impl CompiledPlan {
     /// 处理单题：可见性、动态必填、答案规范化与自定义校验。
     ///
     /// 同一题的错误按先到先得记录：`required_if` 求值失败时规则不可信，直接记录
-    /// 该错误码并跳过规范化与校验；其余失败只撤销本题答案并失效依赖变量，
-    /// 保留既有错误供修正。
+    /// 该错误码并跳过规范化与校验；求值为未知时按“不必填”处理，不阻断填写。
+    /// 其余失败只撤销本题答案并失效依赖变量，保留既有错误供修正。
     fn project_question(
         &self,
         document: &Document,
@@ -891,7 +893,7 @@ impl CompiledPlan {
             LogicValue::Boolean(true) if value.is_none() => {
                 result.fail(id, LogicErrorCode::RequiredAnswer);
             }
-            LogicValue::Missing => result.fail(id, LogicErrorCode::UnknownCondition),
+            // 未知的 required_if 视为不必填，不阻断填写。
             _ => {}
         }
         let Some(value) = value else {

@@ -778,6 +778,7 @@ fn 有逻辑版本的_csv_带状态列且多选保持_json_数组() {
         semantics_version: 1u32.into(),
         variables: Vec::new(),
         rules: Vec::new(),
+        aliases: BTreeMap::new(),
     };
     let (文档, 多选, 文本, 甲, 乙) = 导出文档(Some(逻辑));
     let 时间 = 时刻("2026-10-20T00:00:00Z");

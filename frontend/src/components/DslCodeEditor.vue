@@ -52,12 +52,15 @@ const snippets = [
   ['contains_all', 'contains_all(${题目}, [${选项}])', '选中全部选项'],
   ['contains', 'contains(${文本}, ${子串})', '文本包含子串'],
   ['starts_with', 'starts_with(${文本}, ${前缀})', '文本以指定前缀开头'],
-  ['variable', 'variable(${变量})', '读取计算变量'],
+  ['matches', 'matches(${文本}, "${正则}")', '正则整串匹配'],
   ['coalesce', 'coalesce(${值}, ${默认值})', '缺失时使用默认值'],
   ['length', 'length(${值})', '文本长度或选项数量'],
+  ['round', 'round(${数字}, ${位数})', '四舍五入到指定小数位'],
+  ['floor', 'floor(${数字})', '向下取整'],
+  ['ceil', 'ceil(${数字})', '向上取整'],
   ['all', 'all(${条件一}, ${条件二})', '全部条件成立'],
   ['any', 'any(${条件一}, ${条件二})', '任一条件成立'],
-  ['if', 'if ${条件} then ${真值} else ${假值}', '三元条件表达式'],
+  ['if', 'if ${条件} then ${真值} else ${假值} end', '条件选择表达式'],
   ['number', 'number("${0}")', '保留原文的数字常量'],
   ['visible', 'visible ${题目} = ${条件};', '题目显示条件'],
   ['required', 'required ${题目} = ${条件};', '动态必填条件'],
@@ -87,6 +90,8 @@ function complete(context: CompletionContext) {
         snippetCompletion(template, { label, detail, type: 'keyword' }),
       ),
       ...[
+        'dsl',
+        'semantics',
         'true',
         'false',
         'boolean',
@@ -98,8 +103,13 @@ function complete(context: CompletionContext) {
         'screen_out',
         'then',
         'else',
+        'end',
         'entry',
         'bind',
+        'question',
+        'option',
+        'variable',
+        'node',
       ].map((label) => ({ label, type: 'keyword' })),
     ],
     validFor: /^[A-Za-z_][A-Za-z_0-9]*$/,
@@ -116,7 +126,7 @@ const language = StreamLanguage.define({
     if (stream.match(/(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/)) return 'number'
     if (
       stream.match(
-        /\b(?:dsl|semantics|bind|question|option|variable|node|let|visible|required|validate|entry|page|branch|when|if|then|else|end|complete|screen_out)\b/,
+        /\b(?:dsl|semantics|bind|question|option|variable|node|let|visible|required|validate|entry|page|branch|when|if|then|else|end|complete|screen_out|contains_any|contains_all|starts_with|answered|selected|coalesce|matches|length|round|floor|ceil|contains|answer|all|any)\b/,
       )
     )
       return 'keyword'

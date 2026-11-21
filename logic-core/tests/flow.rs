@@ -553,6 +553,35 @@ fn 题目隐藏后不保留答案校验说明() {
     assert!(!snapshot.answers.contains_key(&id(3)));
 }
 
+#[test]
+fn 动态必填未知按不必填重建答卷() {
+    let document = document("dynamic");
+    let mut session = FlowSession::new(&document).unwrap();
+    let snapshot = session.snapshot();
+    assert!(snapshot.errors.is_empty(), "未知 required_if 不产生错误");
+    assert!(!snapshot.required.contains(&id(2)));
+
+    session
+        .dispatch(FlowEvent::Change {
+            question_id: id(2),
+            value: json!("保留输入"),
+        })
+        .unwrap();
+    assert_eq!(session.snapshot().answers[&id(2)], json!("保留输入"));
+    session.dispatch(FlowEvent::Next).unwrap();
+    assert_eq!(session.snapshot().outcome, Some(FlowOutcome::Complete));
+
+    let evaluated = FlowEvaluator::new(&document)
+        .unwrap()
+        .evaluate_answers(vec![Answer {
+            question_id: id(2),
+            value: json!("保留输入"),
+        }])
+        .unwrap();
+    assert_eq!(evaluated.outcome, FlowOutcome::Complete);
+    assert_eq!(evaluated.answers[&id(2)], json!("保留输入"));
+}
+
 // JSON 的整数与浮点表示不影响数值语义，其他字段仍严格比较。
 fn equivalent(actual: &Value, expected: &Value) -> bool {
     match (actual, expected) {

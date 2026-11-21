@@ -1,8 +1,10 @@
 //! 流程状态机内部不变量：结构校验、分支数量边界与当前页可见题目的改答约束。
 
+use std::collections::BTreeMap;
+
 use serde_json::json;
 
-use crate::domain::{Document, DocumentLogic, Question, QuestionKind, QuestionRule};
+use crate::domain::{Answer, Document, DocumentLogic, Question, QuestionKind, QuestionRule};
 use crate::flow::{
     CompiledFlow, FlowBranch, FlowDefinition, FlowEvent, FlowNode, FlowOutcome, FlowSession,
     MAX_BRANCHES, Node,
@@ -18,6 +20,15 @@ fn 单选题(value: u128, options: &[u128]) -> Question {
         kind: QuestionKind::SingleChoice {
             options: options.iter().map(|option| 选项(*option)).collect(),
         },
+    }
+}
+
+fn 文本题(value: u128) -> Question {
+    Question {
+        id: id(value),
+        title: format!("文本题 {value}"),
+        required: false,
+        kind: QuestionKind::Text { max_length: 200 },
     }
 }
 
@@ -43,6 +54,7 @@ fn 逻辑带规则(flow: FlowDefinition, rules: Vec<QuestionRule>) -> DocumentLo
         semantics_version: 版本(),
         variables: Vec::new(),
         rules,
+        aliases: BTreeMap::new(),
     }
 }
 
@@ -207,4 +219,83 @@ fn 改答只接受当前页面的可见题目() {
         .unwrap_err();
     assert_eq!(错误.code, LogicErrorCode::InvalidEvent, "不能改答隐藏题目");
     assert_eq!(错误.path, "$.event");
+}
+
+#[test]
+fn 动态必填未知视为不必填且不阻断填写() {
+    let questions = vec![单选题(1, &[101, 102]), 文本题(2)];
+    let logic = 逻辑带规则(
+        FlowDefinition {
+            entry: id(201),
+            nodes: vec![页面(201, &[1, 2], 202), 结束(202)],
+        },
+        vec![QuestionRule {
+            question_id: id(2),
+            visible_if: None,
+            required_if: Some(json!({
+                "op": "selected",
+                "question_id": id(1).to_string(),
+                "option_id": id(101).to_string(),
+            })),
+            validate: None,
+        }],
+    );
+    let 问卷 = 文档(questions, Some(logic));
+
+    // q1 未答时 required_if 未知：q2 不被标记必填，也不记录错误。
+    let mut 会话 = FlowSession::new(&问卷).unwrap();
+    let snapshot = 会话.snapshot();
+    assert!(
+        snapshot.errors.is_empty(),
+        "未知的 required_if 不能产生错误"
+    );
+    assert!(!snapshot.required.contains(&id(2)));
+
+    // 未知不阻断填写，输入正常进入答案集合。
+    会话
+        .dispatch(FlowEvent::Change {
+            question_id: id(2),
+            value: json!("保留输入"),
+        })
+        .unwrap();
+    assert_eq!(会话.snapshot().answers[&id(2)], json!("保留输入"));
+    会话.dispatch(FlowEvent::Next).unwrap();
+    assert_eq!(会话.snapshot().outcome, Some(FlowOutcome::Complete));
+
+    // 服务端重建同样把未知的 required_if 当作不必填。
+    let evaluated = 会话
+        .evaluate_answers(vec![Answer {
+            question_id: id(2),
+            value: json!("保留输入"),
+        }])
+        .unwrap();
+    assert_eq!(evaluated.outcome, FlowOutcome::Complete);
+    assert_eq!(evaluated.answers[&id(2)], json!("保留输入"));
+
+    // q1 明确选中触发选项后，q2 才成为必填。
+    let mut 触发 = FlowSession::new(&问卷).unwrap();
+    触发
+        .dispatch(FlowEvent::Change {
+            question_id: id(1),
+            value: json!(id(101).to_string()),
+        })
+        .unwrap();
+    assert!(触发.snapshot().required.contains(&id(2)));
+}
+
+#[test]
+fn 流程续写身份返回旧新节点映射() {
+    let mut flow = FlowDefinition {
+        entry: id(201),
+        nodes: vec![页面(201, &[1], 202), 结束(202)],
+    };
+    let 旧身份: Vec<_> = flow.nodes.iter().map(FlowNode::id).collect();
+    let 映射 = flow.renew_ids(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+    assert_eq!(映射.len(), 2);
+    for 旧 in 旧身份 {
+        assert!(映射.contains_key(&旧), "缺少旧节点身份 {旧}");
+    }
+    assert_eq!(flow.entry, 映射[&id(201)]);
+    assert_eq!(flow.nodes[0].id(), 映射[&id(201)]);
+    assert_eq!(flow.nodes[1].id(), 映射[&id(202)]);
 }

@@ -5,12 +5,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::domain::{MAX_CHOICES, Question};
+use crate::domain::{MAX_CHOICES, Question, QuestionKind};
 use crate::logic::{
-    Binding, CompiledExpression, LogicErrorCode, LogicValueType, compile_expression, error,
-    numeric, read_answer, selection,
+    Binding, CompiledExpression, LogicErrorCode, LogicValue, LogicValueType, compile_expression,
+    error, numeric, read_answer, selection,
 };
-use crate::tests::support::{id, 数字题};
+use crate::tests::support::{id, 数字题, 选项};
 
 fn 编译(expression: &Value, questions: &[Question]) -> CompiledExpression {
     compile_expression(
@@ -18,6 +18,14 @@ fn 编译(expression: &Value, questions: &[Question]) -> CompiledExpression {
         questions,
     )
     .expect("测试表达式应可编译")
+}
+
+fn 编译失败(expression: &Value, questions: &[Question]) -> crate::logic::LogicError {
+    compile_expression(
+        &json!({"dsl_version": 1, "semantics_version": 1, "expression": expression}),
+        questions,
+    )
+    .expect_err("测试表达式应编译失败")
 }
 
 #[test]
@@ -295,5 +303,269 @@ fn 存在性守护决定必然读取的题目集合() {
     assert_eq!(
         回退.required_reads(&BTreeMap::new()),
         BTreeSet::from([id(2)])
+    );
+}
+
+fn 单选题(value: u128, options: &[u128]) -> Question {
+    Question {
+        id: id(value),
+        title: format!("单选题 {value}"),
+        required: false,
+        kind: QuestionKind::SingleChoice {
+            options: options.iter().map(|option| 选项(*option)).collect(),
+        },
+    }
+}
+
+fn 文本题(value: u128) -> Question {
+    Question {
+        id: id(value),
+        title: format!("文本题 {value}"),
+        required: false,
+        kind: QuestionKind::Text { max_length: 200 },
+    }
+}
+
+#[test]
+fn 选项字面量绑定所属题目并拒绝跨题比较() {
+    let questions = [单选题(1, &[101, 102]), 单选题(2, &[201, 202])];
+    let 选项101 = json!({"op": "option", "option_id": id(101).to_string()});
+
+    let compiled = 编译(&选项101, &questions);
+    assert_eq!(compiled.value_type(), LogicValueType::Choice);
+    assert_eq!(
+        compiled.evaluate(&BTreeMap::new()).unwrap(),
+        LogicValue::Choice(id(101)),
+        "选项字面量不依赖答案即可求值"
+    );
+    assert!(
+        compiled.required_reads(&BTreeMap::new()).is_empty(),
+        "字面量不读取任何答案"
+    );
+
+    // 同题答案与选项字面量可以比较；缺失答案保持未知。
+    let 同题 = 编译(
+        &json!({
+            "op": "compare",
+            "comparison": "eq",
+            "left": {"op": "answer", "question_id": id(1).to_string()},
+            "right": 选项101,
+        }),
+        &questions,
+    );
+    let mut answers = BTreeMap::new();
+    answers.insert(id(1), json!(id(101).to_string()));
+    assert_eq!(同题.evaluate(&answers).unwrap(), LogicValue::Boolean(true));
+    assert_eq!(
+        同题.evaluate(&BTreeMap::new()).unwrap(),
+        LogicValue::Missing
+    );
+
+    // 跨题选项域不同，编译期即拒绝。
+    let 跨题 = 编译失败(
+        &json!({
+            "op": "compare",
+            "comparison": "eq",
+            "left": {"op": "answer", "question_id": id(1).to_string()},
+            "right": {"op": "option", "option_id": id(201).to_string()},
+        }),
+        &questions,
+    );
+    assert_eq!(跨题.code, LogicErrorCode::TypeMismatch);
+    assert_eq!(跨题.path, "$.expression");
+
+    // 未知选项无法确定所属题目。
+    let 未知 = 编译失败(
+        &json!({"op": "option", "option_id": id(999).to_string()}),
+        &questions,
+    );
+    assert_eq!(未知.code, LogicErrorCode::InvalidReference);
+    assert_eq!(未知.path, "$.expression");
+
+    // 选项域只约束单选身份：不同数字题、不同文本题之间照常比较。
+    let 跨题数字与文本 = [
+        文本题(3),
+        文本题(5),
+        数字题(4, false, None, None),
+        数字题(6, false, None, None),
+    ];
+    for (左, 右, comparison) in [(4, 6, "ge"), (4, 6, "eq"), (3, 5, "eq")] {
+        let compiled = 编译(
+            &json!({
+                "op": "compare",
+                "comparison": comparison,
+                "left": {"op": "answer", "question_id": id(左).to_string()},
+                "right": {"op": "answer", "question_id": id(右).to_string()},
+            }),
+            &跨题数字与文本,
+        );
+        assert_eq!(compiled.value_type(), LogicValueType::Boolean);
+    }
+}
+
+#[test]
+fn 正则匹配要求整串且模式在编译期验证() {
+    let questions = [文本题(3), 数字题(4, false, None, None)];
+    let 文本 = || json!({"op": "answer", "question_id": id(3).to_string()});
+
+    let compiled = 编译(
+        &json!({"op": "matches", "text": 文本(), "pattern": "反.*馈"}),
+        &questions,
+    );
+    assert_eq!(compiled.value_type(), LogicValueType::Boolean);
+    assert_eq!(
+        compiled.required_reads(&BTreeMap::new()),
+        BTreeSet::from([id(3)])
+    );
+    let 答 = |text: &str| {
+        let mut answers = BTreeMap::new();
+        answers.insert(id(3), json!(text));
+        answers
+    };
+    assert_eq!(
+        compiled.evaluate(&答("反 馈")).unwrap(),
+        LogicValue::Boolean(true)
+    );
+    // 整串锚定：尾部多余字符不再命中。
+    assert_eq!(
+        compiled.evaluate(&答("反馈之后")).unwrap(),
+        LogicValue::Boolean(false)
+    );
+    assert_eq!(
+        compiled.evaluate(&BTreeMap::new()).unwrap(),
+        LogicValue::Missing
+    );
+
+    // 非法正则与超长原文都在编译期拒绝。
+    let 非法 = 编译失败(
+        &json!({"op": "matches", "text": 文本(), "pattern": "("}),
+        &questions,
+    );
+    assert_eq!(非法.code, LogicErrorCode::InvalidSyntax);
+    assert_eq!(非法.path, "$.expression");
+
+    let 超长 = "a".repeat(257);
+    let 超限 = 编译失败(
+        &json!({"op": "matches", "text": 文本(), "pattern": 超长}),
+        &questions,
+    );
+    assert_eq!(超限.code, LogicErrorCode::LimitExceeded);
+
+    // 非文本操作数不进入匹配。
+    let 类型 = 编译失败(
+        &json!({"op": "matches", "text": {"op": "number", "value": "1"}, "pattern": "1"}),
+        &questions,
+    );
+    assert_eq!(类型.code, LogicErrorCode::TypeMismatch);
+
+    // 原文不平衡时不能被锚定包裹“修复”成可编译且失去整串语义的模式。
+    let 不平衡 = 编译失败(
+        &json!({"op": "matches", "text": 文本(), "pattern": "a)|(b"}),
+        &questions,
+    );
+    assert_eq!(不平衡.code, LogicErrorCode::InvalidSyntax);
+}
+
+#[test]
+fn 舍入算子按十进制缩放并校验位数() {
+    let questions = [数字题(4, false, None, None)];
+    let 数字 = |raw: &str| json!({"op": "number", "value": raw});
+    let 求值 = |expression: Value| {
+        编译(&expression, &questions)
+            .evaluate(&BTreeMap::new())
+            .unwrap()
+    };
+
+    // 0.1 + 0.2 在 2 位小数下舍入回 0.3。
+    assert_eq!(
+        求值(json!({
+            "op": "round",
+            "value": {
+                "op": "arithmetic",
+                "operator": "add",
+                "left": 数字("0.1"),
+                "right": 数字("0.2"),
+            },
+            "digits": 2,
+        })),
+        LogicValue::Number(0.3)
+    );
+    // 负数四舍五入远离零；floor/ceil 分别向两侧取整。
+    assert_eq!(
+        求值(json!({"op": "round", "value": 数字("-2.5"), "digits": 0})),
+        LogicValue::Number(-3.0)
+    );
+    assert_eq!(
+        求值(json!({"op": "floor", "value": 数字("-1.5"), "digits": 0})),
+        LogicValue::Number(-2.0)
+    );
+    assert_eq!(
+        求值(json!({"op": "ceil", "value": 数字("-1.5"), "digits": 0})),
+        LogicValue::Number(-1.0)
+    );
+    assert_eq!(
+        求值(json!({"op": "floor", "value": 数字("1.239"), "digits": 2})),
+        LogicValue::Number(1.23)
+    );
+    assert_eq!(
+        求值(json!({"op": "ceil", "value": 数字("1.231"), "digits": 2})),
+        LogicValue::Number(1.24)
+    );
+    // 已落在目标精度上的值缩放后带二进制误差，floor/ceil 不能再跳一格。
+    for (op, raw, expected) in [
+        ("floor", "0.29", 0.29),
+        ("floor", "4.35", 4.35),
+        ("floor", "0.57", 0.57),
+        ("ceil", "0.07", 0.07),
+        ("ceil", "0.14", 0.14),
+    ] {
+        assert_eq!(
+            求值(json!({"op": op, "value": 数字(raw), "digits": 2})),
+            LogicValue::Number(expected),
+            "{op}({raw}, 2)"
+        );
+    }
+
+    // 舍入读取其数字子表达式，缺失操作数保持未知。
+    let 缺失 = 编译(
+        &json!({"op": "round", "value": {"op": "answer", "question_id": id(4).to_string()}, "digits": 2}),
+        &questions,
+    );
+    assert_eq!(
+        缺失.required_reads(&BTreeMap::new()),
+        BTreeSet::from([id(4)])
+    );
+    assert_eq!(
+        缺失.evaluate(&BTreeMap::new()).unwrap(),
+        LogicValue::Missing
+    );
+
+    // 越界、非整数或缺失位数均拒绝。
+    for digits in [json!(7), json!(1.5), json!(-1)] {
+        let 错误 = 编译失败(
+            &json!({"op": "round", "value": 数字("1"), "digits": digits}),
+            &questions,
+        );
+        assert_eq!(错误.code, LogicErrorCode::InvalidSyntax, "{digits}");
+    }
+    let 缺位数 = compile_expression(
+        &json!({
+            "dsl_version": 1,
+            "semantics_version": 1,
+            "expression": {"op": "round", "value": 数字("1")},
+        }),
+        &questions,
+    )
+    .unwrap_err();
+    assert_eq!(缺位数.code, LogicErrorCode::InvalidSyntax);
+
+    // 缩放后溢出按算术错误拒绝。
+    let 溢出 = 编译(
+        &json!({"op": "round", "value": 数字("1e308"), "digits": 2}),
+        &questions,
+    );
+    assert_eq!(
+        溢出.evaluate(&BTreeMap::new()).unwrap_err().code,
+        LogicErrorCode::ArithmeticError
     );
 }
