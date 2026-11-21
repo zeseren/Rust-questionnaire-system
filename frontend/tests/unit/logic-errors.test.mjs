@@ -24,7 +24,8 @@ const messages = {
   screened_out: '筛选结束已作为甄别记录落库，不计入各题统计',
 }
 
-test('每种错误码映射唯一中文文案并保留定位', () => {
+// 每种错误码映射唯一中文文案并保留定位
+test('each error code maps to a unique Chinese message and keeps its location', () => {
   assert.equal(Object.keys(messages).length, 18)
   for (const [code, message] of Object.entries(messages)) {
     const error = new LogicError(code, '$.logic.rules[0]')
@@ -41,7 +42,8 @@ test('每种错误码映射唯一中文文案并保留定位', () => {
   assert.equal(forwarded.message, messages.required_answer)
 })
 
-test('LogicError 保留后端传入的自定义文案', () => {
+// LogicError 保留后端传入的自定义文案
+test('LogicError keeps the custom message passed from the backend', () => {
   const error = new LogicError('invalid_flow', '$.logic.flow', null, '自定义后端文案')
   assert.equal(error.message, '自定义后端文案')
   assert.equal(error.code, 'invalid_flow')
@@ -49,7 +51,8 @@ test('LogicError 保留后端传入的自定义文案', () => {
   assert.equal(error.question_id, null)
 })
 
-test('LogicTextError 追加从 1 开始的行列后缀', () => {
+// LogicTextError 追加从 1 开始的行列后缀
+test('LogicTextError appends a one-based line and column suffix', () => {
   const error = new LogicTextError('invalid_syntax', 3, 7, '$.logic', 'question-1')
   assert.equal(error.name, 'LogicTextError')
   assert.ok(error instanceof Error)
@@ -61,7 +64,8 @@ test('LogicTextError 追加从 1 开始的行列后缀', () => {
   assert.equal(error.message, '规则结构或字段无效（第 3 行，第 7 列）')
 })
 
-test('LogicTextError 保留解析器给出的自定义消息', () => {
+// LogicTextError 保留解析器给出的自定义消息
+test('LogicTextError keeps the parser-provided custom message', () => {
   const error = new LogicTextError('invalid_reference', 1, 2, '$.logic', null, '未知别名 choose')
   assert.equal(error.message, '未知别名 choose（第 1 行，第 2 列）')
   assert.equal(error.code, 'invalid_reference')

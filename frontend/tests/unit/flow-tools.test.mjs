@@ -22,7 +22,8 @@ function linearFlow() {
   }
 }
 
-test('在页面后插入页面会回接前驱并返回新身份', () => {
+// 在页面后插入页面会回接前驱并返回新身份
+test('inserting a page after a page reconnects the predecessor and returns a new identity', () => {
   const flow = linearFlow()
   const [p1, p2, end] = flow.nodes.map((node) => node.id)
   const inserted = insertFlowNode(flow, 0, 'page')
@@ -35,7 +36,8 @@ test('在页面后插入页面会回接前驱并返回新身份', () => {
   assert.deepEqual(flow.nodes[1], { type: 'page', id: inserted, question_ids: [], next: p2 })
 })
 
-test('在分支后插入分支只接管兜底出口', () => {
+// 在分支后插入分支只接管兜底出口
+test('inserting a branch after a branch takes over only the fallback exit', () => {
   const [p1, branch, p2, p3, end] = [id('c1'), id('c2'), id('c3'), id('c4'), id('c5')]
   const flow = {
     entry: p1,
@@ -71,7 +73,8 @@ test('在分支后插入分支只接管兜底出口', () => {
   })
 })
 
-test('插入页面时只接管分支的兜底出口', () => {
+// 插入页面时只接管分支的兜底出口
+test('inserting a page takes over only the branch fallback exit', () => {
   const [p1, branch, p2, end] = [id('d1'), id('d2'), id('d3'), id('d4')]
   const flow = {
     entry: p1,
@@ -100,7 +103,8 @@ test('插入页面时只接管分支的兜底出口', () => {
   assert.equal(flow.nodes[2].next, p2)
 })
 
-test('插入结束节点仍回接前驱出口', () => {
+// 插入结束节点仍回接前驱出口
+test('inserting an end node still reconnects the predecessor exit', () => {
   const flow = linearFlow()
   const [p1, p2, end] = flow.nodes.map((node) => node.id)
   const inserted = insertFlowNode(flow, 1, 'end')
@@ -113,7 +117,8 @@ test('插入结束节点仍回接前驱出口', () => {
   assert.equal(flow.nodes[1].next, inserted, '前驱出口回接到新节点')
 })
 
-test('在结束节点后插入被拒绝', () => {
+// 在结束节点后插入被拒绝
+test('inserting after an end node is rejected', () => {
   const flow = linearFlow()
   const before = flow.nodes.map((node) => node.id)
   for (const type of ['page', 'branch', 'end']) {
@@ -126,7 +131,8 @@ test('在结束节点后插入被拒绝', () => {
   )
 })
 
-test('页面出口为空时拒绝插入', () => {
+// 页面出口为空时拒绝插入
+test('insertion is rejected when the page exit is empty', () => {
   const flow = {
     entry: id('e1'),
     nodes: [{ type: 'page', id: id('e1'), question_ids: [], next: '' }],
@@ -135,7 +141,8 @@ test('页面出口为空时拒绝插入', () => {
   assert.equal(flow.nodes.length, 1)
 })
 
-test('插入分支时页面出口指向新分支', () => {
+// 插入分支时页面出口指向新分支
+test('inserting a branch points the page exit at the new branch', () => {
   const flow = linearFlow()
   const [, p2] = flow.nodes.map((node) => node.id)
   const inserted = insertFlowNode(flow, 0, 'branch')
@@ -144,7 +151,8 @@ test('插入分支时页面出口指向新分支', () => {
   assert.equal(flow.nodes[1].otherwise, p2)
 })
 
-test('在汇合页后插入页面时接管实际出边而不是数组后继', () => {
+// 在汇合页后插入页面时接管实际出边而不是数组后继
+test('inserting a page after a merge page takes over actual outgoing edges instead of array successors', () => {
   // 与 routing 模板同构：分支两侧先汇合到 join，再统一结束。
   const [entry, branch, returning, newcomer, join, end] = [
     id('f1'),
@@ -183,7 +191,8 @@ test('在汇合页后插入页面时接管实际出边而不是数组后继', ()
   assert.equal(flow.nodes[5].next, end)
 })
 
-test('insertionExit 只对已接出口的页面与分支给出可接管的目标', () => {
+// insertionExit 只对已接出口的页面与分支给出可接管的目标
+test('insertionExit only offers takeover targets for pages and branches with a connected exit', () => {
   const [p1, branch, end] = [id('a1'), id('a2'), id('a3')]
   assert.equal(insertionExit({ type: 'page', id: p1, question_ids: [], next: end }), end)
   assert.equal(insertionExit({ type: 'page', id: p1, question_ids: [], next: '' }), null)
@@ -207,7 +216,8 @@ function pagedFlow(groups) {
 }
 const questions = ['q1', 'q2', 'q3'].map((name) => ({ id: name }))
 
-test('每题一页时题目可以并入相邻页面，但不能越过其他题目', () => {
+// 每题一页时题目可以并入相邻页面，但不能越过其他题目
+test('with one page per question, questions can merge into adjacent pages but not skip other questions', () => {
   const flow = pagedFlow([['q1'], ['q2'], ['q3']])
   const [p1, p2, p3] = flow.nodes.map((node) => node.id)
   assert.deepEqual([...assignablePageIds(flow, questions, 'q1')], [p1, p2])
@@ -230,7 +240,8 @@ test('每题一页时题目可以并入相邻页面，但不能越过其他题�
   assert.deepEqual([...assignablePageIds(flow, questions, 'q3')], [p1, p2, p3])
 })
 
-test('未归属的题目按全局顺序落位，页内保持题目顺序', () => {
+// 未归属的题目按全局顺序落位，页内保持题目顺序
+test('unassigned questions land in global order while page-local order is preserved', () => {
   const flow = pagedFlow([['q1'], ['q3']])
   const [p1, p2] = flow.nodes.map((node) => node.id)
   assert.deepEqual([...assignablePageIds(flow, questions, 'q2')], [p1, p2])

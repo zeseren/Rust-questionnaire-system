@@ -18,8 +18,9 @@ use crate::{
     tests::support::{error_json, send_raw_http, test_state},
 };
 
+/// 业务错误构造器映射稳定状态码与错误体
 #[tokio::test]
-async fn 业务错误构造器映射稳定状态码与错误体() {
+async fn business_error_constructors_map_stable_status_and_body() {
     let 题目 = Uuid::new_v4();
     for (错误, 状态, 码, 消息, 题目编号) in [
         (
@@ -76,8 +77,9 @@ async fn 业务错误构造器映射稳定状态码与错误体() {
     }
 }
 
+/// 内部错误生成十六位十六进制标识且不泄露原文
 #[tokio::test]
-async fn 内部错误生成十六位十六进制标识且不泄露原文() {
+async fn internal_error_generates_hex_id_without_leaking_details() {
     let (status, headers, body) = error_json(AppError::internal("password=秘密 输入原文")).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body["error"]["code"], "internal_error");
@@ -94,8 +96,9 @@ async fn 内部错误生成十六位十六进制标识且不泄露原文() {
     assert!(!响应文本.contains("password"), "响应体不能泄露原始错误");
 }
 
+/// 非内部错误不生成检索标识
 #[tokio::test]
-async fn 非内部错误不生成检索标识() {
+async fn non_internal_error_has_no_error_id() {
     for 错误 in [
         AppError::validation("字段错误"),
         AppError::not_found(),
@@ -109,8 +112,9 @@ async fn 非内部错误不生成检索标识() {
     }
 }
 
+/// 外部错误统一收敛为不泄露细节的内部错误
 #[tokio::test]
-async fn 外部错误统一收敛为不泄露细节的内部错误() {
+async fn external_errors_converge_to_detail_free_internal_error() {
     let 题目 = Uuid::new_v4();
     // 三类外部错误都走同一个收敛分支，完整信封已由内部错误用例覆盖。
     let 数据库错误: AppError = sea_orm::DbErr::RecordNotFound("用户 42".to_owned()).into();
@@ -154,8 +158,9 @@ async fn json_提取(内容类型: Option<&str>, body: &str) -> (StatusCode, Hea
     error_json(error).await
 }
 
+/// 非法_json_统一映射为四百_invalid_json
 #[tokio::test]
-async fn 非法_json_统一映射为四百_invalid_json() {
+async fn invalid_json_maps_to_bad_request_invalid_json() {
     for (说明, 内容类型, 原文) in [
         ("语法错误", Some("application/json"), r#"{"username":"#),
         (
@@ -181,8 +186,9 @@ async fn 注册回显(ApiJson(请求): ApiJson<RegisterRequest>) -> Json<String>
     Json(请求.username)
 }
 
+/// 超过请求体上限映射为四百一十三
 #[tokio::test]
-async fn 超过请求体上限映射为四百一十三() {
+async fn oversized_body_maps_to_payload_too_large() {
     let router = Router::new()
         .route("/api/auth/register", post(注册回显))
         .layer(DefaultBodyLimit::max(64))
@@ -202,8 +208,9 @@ async fn 超过请求体上限映射为四百一十三() {
     assert_eq!(body["error"]["message"], "请求体超出允许的大小限制");
 }
 
+/// 查询参数解析失败映射为四百_invalid_query
 #[tokio::test]
-async fn 查询参数解析失败映射为四百_invalid_query() {
+async fn query_parse_failure_maps_to_bad_request_invalid_query() {
     let state = test_state();
     let mut parts = Request::builder()
         .uri("/api/surveys?page=2&page_size=50")
@@ -239,8 +246,9 @@ async fn 显示路径(ApiPath(id): ApiPath<Uuid>) -> Json<String> {
     Json(id.to_string())
 }
 
+/// 路径参数解析失败映射为四百_invalid_path
 #[tokio::test]
-async fn 路径参数解析失败映射为四百_invalid_path() {
+async fn path_parse_failure_maps_to_bad_request_invalid_path() {
     let 编号 = Uuid::new_v4();
     let 合法 =
         format!("GET /api/items/{编号} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
@@ -265,8 +273,9 @@ fn 分页(page: Option<u64>, page_size: Option<u64>) -> Pagination {
     Pagination { page, page_size }
 }
 
+/// 分页默认值为第一页二十条
 #[test]
-fn 分页默认值为第一页二十条() {
+fn pagination_defaults_to_first_page_of_twenty() {
     assert_eq!(
         分页(None, None).bounds().expect("默认分页合法"),
         PageBounds {
@@ -278,8 +287,9 @@ fn 分页默认值为第一页二十条() {
     );
 }
 
+/// 分页边界为一与一百
 #[test]
-fn 分页边界为一与一百() {
+fn pagination_bounds_are_one_and_one_hundred() {
     for (page, size, offset) in [(1, 1, 0), (5, 100, 400), (1, 100, 0)] {
         assert_eq!(
             分页(Some(page), Some(size)).bounds().expect("边界值合法"),
@@ -293,8 +303,9 @@ fn 分页边界为一与一百() {
     }
 }
 
+/// 非法页码与页大小被拒绝
 #[tokio::test]
-async fn 非法页码与页大小被拒绝() {
+async fn invalid_page_and_page_size_rejected() {
     for (page, size) in [
         (Some(0), Some(20)),
         (Some(1), Some(0)),
@@ -311,8 +322,9 @@ async fn 非法页码与页大小被拒绝() {
     }
 }
 
+/// 偏移量必须能放进_i64
 #[tokio::test]
-async fn 偏移量必须能放进_i64() {
+async fn offset_must_fit_in_i64() {
     // (page - 1) * page_size 恰好等于 i64::MAX 的最邻近可行值仍然合法。
     let 边界 = 分页(Some(92_233_720_368_547_759), Some(100))
         .bounds()
@@ -329,8 +341,9 @@ async fn 偏移量必须能放进_i64() {
     }
 }
 
+/// 分页字段兼容数字与十进制字符串并拒绝非纯十进制
 #[test]
-fn 分页字段兼容数字与十进制字符串并拒绝非纯十进制() {
+fn pagination_fields_accept_numbers_and_decimal_strings_rejecting_non_decimal() {
     let 期望 = PageBounds {
         page: 2,
         page_size: 50,

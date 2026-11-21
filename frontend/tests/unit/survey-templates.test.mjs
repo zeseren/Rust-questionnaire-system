@@ -4,13 +4,15 @@ import test from 'node:test'
 import { createSurveyTemplate, surveyTemplates } from '../../src/survey-templates.ts'
 import { FlowSession, compileDocumentLogic } from '../../src/wasm/index.ts'
 
-test('不选模板时生成不含规则的空文档', () => {
+// 不选模板时生成不含规则的空文档
+test('generates an empty document without logic when no template is selected', () => {
   const document = createSurveyTemplate(null)
   assert.deepEqual(document.questions, [])
   assert.equal(document.logic, undefined)
 })
 
-test('满意度回访按低分追问并传播缺失值', () => {
+// 满意度回访按低分追问并传播缺失值
+test('satisfaction follow-up probes on low scores and propagates missing values', () => {
   const document = createSurveyTemplate('feedback')
   assert.deepEqual(
     document.questions.map((question) => question.type),
@@ -48,7 +50,8 @@ test('满意度回访按低分追问并传播缺失值', () => {
   assert.equal(missing.errors[reason.id], undefined)
 })
 
-test('产品体验调研按使用经历分流并在结束页汇合', () => {
+// 产品体验调研按使用经历分流并在结束页汇合
+test('product experience survey branches by usage history and merges at the end page', () => {
   const document = createSurveyTemplate('routing')
   const [used, experience, expectation, interest] = document.questions
   const flow = document.logic.flow
@@ -77,7 +80,8 @@ test('产品体验调研按使用经历分流并在结束页汇合', () => {
   assert.equal(newcomer.next, join.id)
 })
 
-test('活动报名约束人数并仅按接送需求显示地址', () => {
+// 活动报名约束人数并仅按接送需求显示地址
+test('event registration limits headcount and shows address only for pickup needs', () => {
   const document = createSurveyTemplate('registration')
   const [count, transport, address] = document.questions
   assert.equal(count.type, 'number')
@@ -95,7 +99,8 @@ test('活动报名约束人数并仅按接送需求显示地址', () => {
   assert.equal(visibility.snapshot().errors[address.id], undefined)
 })
 
-test('每次创建模板都使用全新配置身份', () => {
+// 每次创建模板都使用全新配置身份
+test('each template creation uses a fresh config identity', () => {
   const identities = new Set()
   for (const template of surveyTemplates) {
     for (let generation = 0; generation < 2; generation++) {
@@ -116,6 +121,7 @@ test('每次创建模板都使用全新配置身份', () => {
   }
 })
 
-test('未知模板立即拒绝', () => {
+// 未知模板立即拒绝
+test('unknown template is rejected immediately', () => {
   assert.throws(() => createSurveyTemplate('unknown'))
 })

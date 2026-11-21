@@ -6,7 +6,8 @@ import { LogicTextError } from '../../src/logic.ts'
 import { formatLogicText, inspectLogicText } from '../../src/wasm/index.ts'
 import { readFlowDocument } from '../helpers/fixtures.mjs'
 
-test('inspectLogicText 同时返回绑定与诊断，注释与字符串不参与扫描', () => {
+// inspectLogicText 同时返回绑定与诊断，注释与字符串不参与扫描
+test('inspectLogicText returns bindings and diagnostics while skipping comments and strings', () => {
   const document = readFlowDocument('diamond')
   const [question] = document.questions
   const variable = document.logic.variables[0]
@@ -42,7 +43,8 @@ test('inspectLogicText 同时返回绑定与诊断，注释与字符串不参与
   assert.equal(inspection.column, inspection.error.column)
 })
 
-test('合法文本不返回诊断，绑定覆盖四类身份并带可读名称', () => {
+// 合法文本不返回诊断，绑定覆盖四类身份并带可读名称
+test('valid text yields no diagnostics and bindings cover four identity kinds with readable labels', () => {
   const document = readFlowDocument('diamond')
   const source = formatLogicText(document.logic, document.questions)
   const inspection = inspectLogicText(source, document.questions)
@@ -64,7 +66,8 @@ test('合法文本不返回诊断，绑定覆盖四类身份并带可读名称',
   assert.equal(textBindingLabel(missing, document.questions), '未命名或已删除题目')
 })
 
-test('textErrorOffset 按行起始与 Unicode 标量换算', () => {
+// textErrorOffset 按行起始与 Unicode 标量换算
+test('textErrorOffset converts using line starts and Unicode scalars', () => {
   assert.equal(textErrorOffset('abc\ndef', 1, 1), 0)
   assert.equal(textErrorOffset('abc\ndef', 1, 2), 1)
   assert.equal(textErrorOffset('abc\ndef', 2, 1), 4)

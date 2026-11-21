@@ -114,6 +114,7 @@ pnpm run wasm:build                                           # 仅在改动 log
 
 共享夹具约定：`flows.json`、`documents.json` 顶层 `fragments` 存放被多处引用的题目、变量与规则，`questions`/`variables`/`rules` 数组里的字符串即片段名，未知名称两端都立即报错；`texts.json` 的格式样例用 `logic_overrides` 在命名文档规则或 `format_base_logic` 上按一级键覆盖。夹具按宽 100 的紧凑排版保存（能放进一行的对象与数组不换行）。
 
+- **测试命名**：用例名统一用英文（Rust 测试函数 `snake_case`；前端 `test()`/`it()` 标题用小写英文短语），原中文名称以紧邻上方的注释保留（Rust `///`，前端 `//`）；辅助函数、断言消息与说明文案仍用中文。
 - 修改 Rust 代码必跑：受影响的 `cargo test`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 与 `rustfmt`。
 - 修改前端代码必跑：`pnpm run test:regression`（递归执行 `frontend/tests/` 下的分层测试）、`pnpm run typecheck`（或 `pnpm run build`）与 `prettier`。
 - 修改 `logic-core/` 或 `logic-wasm/` 必跑：先在 `frontend/` 执行 `pnpm run wasm:build` 同步 `src/wasm/pkg/`，再运行两端测试验证语义一致。

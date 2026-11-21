@@ -30,7 +30,8 @@ const sessionDocument = {
   questions: [{ id: Q_NAME, title: '姓名', required: true, type: 'text', max_length: 200 }],
 }
 
-test('parseLogicText 语法错误还原为带行列号的 LogicTextError', () => {
+// parseLogicText 语法错误还原为带行列号的 LogicTextError
+test('parseLogicText syntax errors are restored as LogicTextError with line and column', () => {
   assert.throws(
     () => parseLogicText('dsl1 semantics 1;', []),
     (error) => {
@@ -45,7 +46,8 @@ test('parseLogicText 语法错误还原为带行列号的 LogicTextError', () =>
   )
 })
 
-test('formatLogicText 失败信封还原为 LogicError 并保留规则路径', () => {
+// formatLogicText 失败信封还原为 LogicError 并保留规则路径
+test('formatLogicText failure envelope is restored as LogicError keeping the rule path', () => {
   const logic = {
     dsl_version: 1,
     semantics_version: 1,
@@ -66,7 +68,8 @@ test('formatLogicText 失败信封还原为 LogicError 并保留规则路径', (
   )
 })
 
-test('FlowSession 构造失败还原为领域错误并保留重复的题目身份', () => {
+// FlowSession 构造失败还原为领域错误并保留重复的题目身份
+test('FlowSession construction failure is restored as a domain error keeping duplicate question ids', () => {
   const duplicated = {
     ...sessionDocument,
     questions: [{ ...sessionDocument.questions[0] }, { ...sessionDocument.questions[0] }],
@@ -84,7 +87,8 @@ test('FlowSession 构造失败还原为领域错误并保留重复的题目身�
   )
 })
 
-test('FlowSession 快照、改答与非法回退遵循契约', () => {
+// FlowSession 快照、改答与非法回退遵循契约
+test('FlowSession snapshot, reanswer and illegal rollback follow the contract', () => {
   const session = new FlowSession(sessionDocument)
 
   const initial = session.snapshot()

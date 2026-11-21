@@ -15,7 +15,8 @@ const isNetworkError = (message) => (error) =>
   error.code === 'network_error' &&
   error.message === message
 
-test('message 优先返回 Error 实例的文案，其余输入回退到默认或自定义文案', () => {
+// message 优先返回 Error 实例的文案，其余输入回退到默认或自定义文案
+test('message prefers Error text and falls back for other inputs', () => {
   assert.equal(message(new Error('接口读取失败')), '接口读取失败')
   assert.equal(message('非 Error 值'), '操作未完成，请稍后重试。')
   assert.equal(message(null, '自定义回退'), '自定义回退')
@@ -23,7 +24,8 @@ test('message 优先返回 Error 实例的文案，其余输入回退到默认�
   assert.equal(new ApiError(500, 'internal_error', '内部错误').question_id, null)
 })
 
-test('query 过滤空值、保留假值并编码中文与保留字符', () => {
+// query 过滤空值、保留假值并编码中文与保留字符
+test('query drops empty values, keeps falsy values, and encodes Chinese and reserved characters', () => {
   assert.equal(query({}), '')
   assert.equal(query({ a: undefined, b: null, c: '' }), '')
   // 0 与 false 是有效筛选条件，不能按“空值”丢弃。
@@ -34,7 +36,8 @@ test('query 过滤空值、保留假值并编码中文与保留字符', () => {
   assert.equal(query({ q: 'a&b=c/d?e f' }), '?q=a%26b%3Dc%2Fd%3Fe+f')
 })
 
-test('GET 请求不携带 CSRF 标记并固定缓存与凭据策略', async (t) => {
+// GET 请求不携带 CSRF 标记并固定缓存与凭据策略
+test('GET requests omit CSRF and fix cache and credentials policy', async (t) => {
   const env = installBrowserEnv(t)
   let captured
   env.fetch = async (path, init) => {
@@ -52,7 +55,8 @@ test('GET 请求不携带 CSRF 标记并固定缓存与凭据策略', async (t) 
   assert.ok(captured.init.signal instanceof AbortSignal)
 })
 
-test('写请求统一附加 CSRF 标记，仅在携带请求体时声明 JSON', async (t) => {
+// 写请求统一附加 CSRF 标记，仅在携带请求体时声明 JSON
+test('write requests attach CSRF and declare JSON only with a body', async (t) => {
   const env = installBrowserEnv(t)
   const calls = []
   env.fetch = async (_path, init) => {
@@ -75,7 +79,8 @@ test('写请求统一附加 CSRF 标记，仅在携带请求体时声明 JSON', 
   assert.equal(withBody.body, JSON.stringify({ revision: 2 }))
 })
 
-test('写请求可窄传预期账号，同时保留 CSRF 与 JSON 头', async (t) => {
+// 写请求可窄传预期账号，同时保留 CSRF 与 JSON 头
+test('write requests can declare an expected account while keeping CSRF and JSON headers', async (t) => {
   const env = installBrowserEnv(t)
   let captured
   env.fetch = async (path, init) => {
@@ -95,7 +100,8 @@ test('写请求可窄传预期账号，同时保留 CSRF 与 JSON 头', async (t
   assert.equal(captured.init.body, JSON.stringify(payload))
 })
 
-test('未声明预期账号时不发送该头，匿名提交保持原请求形状', async (t) => {
+// 未声明预期账号时不发送该头，匿名提交保持原请求形状
+test('expected account header is omitted when unset and anonymous submissions keep their request shape', async (t) => {
   const env = installBrowserEnv(t)
   const calls = []
   env.fetch = async (_path, init) => {
@@ -112,13 +118,15 @@ test('未声明预期账号时不发送该头，匿名提交保持原请求形�
   assert.equal(calls.at(-1).headers['X-CSRF-Protection'], '1')
 })
 
-test('204 No Content 按无正文处理并返回 undefined', async (t) => {
+// 204 No Content 按无正文处理并返回 undefined
+test('204 No Content is treated as bodyless and returns undefined', async (t) => {
   const env = installBrowserEnv(t)
   env.fetch = async () => new Response(null, { status: 204 })
   assert.equal(await api('/api/surveys/1/close', 'POST'), undefined)
 })
 
-test('错误信封还原为带题目定位的 ApiError', async (t) => {
+// 错误信封还原为带题目定位的 ApiError
+test('error envelopes become ApiError with question location', async (t) => {
   const env = installBrowserEnv(t)
   env.fetch = async () =>
     errorResponse(422, {
@@ -137,7 +145,8 @@ test('错误信封还原为带题目定位的 ApiError', async (t) => {
   })
 })
 
-test('错误体不是 JSON 或缺字段时回退到通用状态文案', async (t) => {
+// 错误体不是 JSON 或缺字段时回退到通用状态文案
+test('non-JSON or incomplete error bodies fall back to generic status text', async (t) => {
   const env = installBrowserEnv(t)
   for (const [body, status] of [
     ['<html>网关错误</html>', 502],
@@ -157,7 +166,8 @@ test('错误体不是 JSON 或缺字段时回退到通用状态文案', async (t
   }
 })
 
-test('非认证探测请求的 unauthorized 触发一次会话过期事件', async (t) => {
+// 非认证探测请求的 unauthorized 触发一次会话过期事件
+test('unauthorized on non-auth-probe requests emits one session expiry event', async (t) => {
   const env = installBrowserEnv(t)
   let expired = 0
   env.window.addEventListener('session-expired', () => {
@@ -172,7 +182,8 @@ test('非认证探测请求的 unauthorized 触发一次会话过期事件', asy
   assert.equal(expired, 1)
 })
 
-test('认证探测请求的 401 不触发会话过期事件', async (t) => {
+// 认证探测请求的 401 不触发会话过期事件
+test('401 on auth probe requests does not emit a session expiry event', async (t) => {
   const env = installBrowserEnv(t)
   let expired = 0
   env.window.addEventListener('session-expired', () => {
@@ -187,7 +198,8 @@ test('认证探测请求的 401 不触发会话过期事件', async (t) => {
   assert.equal(expired, 0)
 })
 
-test('网络异常按读写语义给出不同文案', async (t) => {
+// 网络异常按读写语义给出不同文案
+test('network failures use distinct messages for read and write semantics', async (t) => {
   const env = installBrowserEnv(t)
   env.fetch = async () => {
     throw new TypeError('fetch failed')
@@ -200,7 +212,8 @@ test('网络异常按读写语义给出不同文案', async (t) => {
   )
 })
 
-test('30 秒截止会中止请求、归为网络失败并清除定时器', async (t) => {
+// 30 秒截止会中止请求、归为网络失败并清除定时器
+test('30-second deadline aborts the request as a network failure and clears the timer', async (t) => {
   const env = installBrowserEnv(t, { timers: 'manual' })
   env.fetch = (_path, init) =>
     new Promise((_resolve, reject) => {
@@ -216,7 +229,8 @@ test('30 秒截止会中止请求、归为网络失败并清除定时器', async
   assert.deepEqual(env.timers.pending, [])
 })
 
-test('成功响应正文非法 JSON 时给出无效响应错误', async (t) => {
+// 成功响应正文非法 JSON 时给出无效响应错误
+test('invalid JSON in a successful response body yields an invalid response error', async (t) => {
   const env = installBrowserEnv(t)
   env.fetch = async () => new Response('{ 不是 JSON', { status: 200 })
 
@@ -230,7 +244,8 @@ test('成功响应正文非法 JSON 时给出无效响应错误', async (t) => {
   )
 })
 
-test('download 以 GET 拉取并触发锚点下载，延时撤销对象地址', async (t) => {
+// download 以 GET 拉取并触发锚点下载，延时撤销对象地址
+test('download fetches via GET, triggers an anchor download, and revokes the object URL later', async (t) => {
   const env = installBrowserEnv(t, { timers: 'manual' })
   let request
   env.fetch = async (path, init) => {
@@ -252,7 +267,8 @@ test('download 以 GET 拉取并触发锚点下载，延时撤销对象地址', 
   assert.deepEqual(env.objectUrls.revoked, [anchor.href])
 })
 
-test('download 遇到错误信封时抛出 ApiError 且不创建下载链路', async (t) => {
+// download 遇到错误信封时抛出 ApiError 且不创建下载链路
+test('download throws ApiError on error envelopes and creates no download chain', async (t) => {
   const env = installBrowserEnv(t, { timers: 'manual' })
   env.fetch = async () =>
     errorResponse(409, {
@@ -275,7 +291,8 @@ test('download 遇到错误信封时抛出 ApiError 且不创建下载链路', a
   assert.deepEqual(env.timers.pending, [])
 })
 
-test('download 读取响应正文失败时报告中文网络错误并清理截止定时器', async (t) => {
+// download 读取响应正文失败时报告中文网络错误并清理截止定时器
+test('download reports a Chinese network error when reading the body fails and clears the deadline timer', async (t) => {
   const env = installBrowserEnv(t, { timers: 'manual' })
   env.fetch = async () => ({
     ok: true,

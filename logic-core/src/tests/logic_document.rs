@@ -45,8 +45,9 @@ fn 恒显规则(question: u128) -> QuestionRule {
     }
 }
 
+/// 空规则包不产生变量规则与流程
 #[test]
-fn 空规则包不产生变量规则与流程() {
+fn empty_rule_package_produces_no_variables_rules_or_flow() {
     let 空 = CompiledDocumentLogic::empty();
     assert_eq!(空.variable_order(), &[] as &[Uuid]);
     assert!(空.rules().is_empty());
@@ -57,8 +58,9 @@ fn 空规则包不产生变量规则与流程() {
     assert!(值.rules.is_empty());
 }
 
+/// 同层变量按身份升序
 #[test]
-fn 同层变量按身份升序() {
+fn variables_in_same_layer_sort_by_identity_ascending() {
     let logic = 逻辑(
         vec![
             变量(303, LogicValueType::Number, 数字("3")),
@@ -75,8 +77,9 @@ fn 同层变量按身份升序() {
     );
 }
 
+/// 重写覆盖全部表达式引用路径并保留未映射身份
 #[test]
-fn 重写覆盖全部表达式引用路径并保留未映射身份() {
+fn rewrite_covers_all_expression_reference_paths_and_keeps_unmapped_identities() {
     let questions = BTreeMap::from([(id(1), id(11)), (id(2), id(12))]);
     let options = BTreeMap::from([(id(101), id(201)), (id(102), id(202))]);
     let variables = BTreeMap::from([(id(301), id(401)), (id(302), id(402))]);
@@ -204,8 +207,9 @@ fn 重写覆盖全部表达式引用路径并保留未映射身份() {
     );
 }
 
+/// 变量与规则数量遵守题目上限边界
 #[test]
-fn 变量与规则数量遵守题目上限边界() {
+fn variable_and_rule_counts_respect_question_upper_bound() {
     let 变量超限: Vec<_> = (0..=MAX_QUESTIONS)
         .map(|index| 变量(1000 + index as u128, LogicValueType::Number, 数字("1")))
         .collect();
@@ -239,8 +243,9 @@ fn 变量与规则数量遵守题目上限边界() {
     assert_eq!(编译结果.rules().len(), MAX_QUESTIONS);
 }
 
+/// 变量身份必须唯一
 #[test]
-fn 变量身份必须唯一() {
+fn variable_identities_must_be_unique() {
     let 重复 = 逻辑(
         vec![
             变量(301, LogicValueType::Number, 数字("1")),
@@ -254,8 +259,9 @@ fn 变量身份必须唯一() {
     assert_eq!(错误.question_id, None);
 }
 
+/// 规则必须指向已知题目且至少配置一个字段
 #[test]
-fn 规则必须指向已知题目且至少配置一个字段() {
+fn rule_must_target_known_question_and_configure_at_least_one_field() {
     let questions = [数字题(1, false, None, None)];
     let 未知题目 = 逻辑(Vec::new(), vec![恒显规则(999)]);
     let 错误 = 未知题目.compile(&questions).unwrap_err();
@@ -278,8 +284,9 @@ fn 规则必须指向已知题目且至少配置一个字段() {
     assert_eq!(错误.question_id, Some(id(1)));
 }
 
+/// 别名值必须是合法且互不重复的标识符
 #[test]
-fn 别名值必须是合法且互不重复的标识符() {
+fn alias_values_must_be_valid_and_unique_identifiers() {
     let questions = [数字题(1, false, None, None)];
     for alias in ["", "1bad", "has-dash", "中文", "if", "contains_any"] {
         let mut logic = 逻辑(Vec::new(), Vec::new());
@@ -302,8 +309,9 @@ fn 别名值必须是合法且互不重复的标识符() {
     assert!(合法.compile(&questions).is_ok());
 }
 
+/// 重签身份时别名键随实体改写
 #[test]
-fn 重签身份时别名键随实体改写() {
+fn resigning_identity_rewrites_alias_keys_with_entities() {
     let 旧题目 = id(1);
     let 旧选项 = id(101);
     let 旧变量 = id(201);

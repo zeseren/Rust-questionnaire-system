@@ -11,7 +11,8 @@ function document() {
 /** 诊断只需定位到可聚焦目标；文案本身由领域错误测试覆盖，这里不逐字镜像。 */
 const focusOf = (diagnostic) => ({ target: diagnostic.target, path: diagnostic.path })
 
-test('无流程规则与合法流程都不产生诊断', () => {
+// 无流程规则与合法流程都不产生诊断
+test('rule-free and valid flows produce no diagnostics', () => {
   assert.equal(
     logicDiagnostic({ dsl_version: 1, semantics_version: 1, variables: [], rules: [] }, []),
     null,
@@ -20,7 +21,8 @@ test('无流程规则与合法流程都不产生诊断', () => {
   assert.equal(logicDiagnostic(valid.logic, valid.questions), null)
 })
 
-test('结构错误返回题目归属、节点或整体流程的精确目标', () => {
+// 结构错误返回题目归属、节点或整体流程的精确目标
+test('structural errors report precise targets for question ownership, nodes, or the whole flow', () => {
   const cases = [
     {
       name: '入口不是第一个页面',
@@ -102,7 +104,8 @@ test('结构错误返回题目归属、节点或整体流程的精确目标', ()
   }
 })
 
-test('编译错误按路径映射到变量、规则、节点、题目或编辑器兜底', () => {
+// 编译错误按路径映射到变量、规则、节点、题目或编辑器兜底
+test('compile errors map paths to variables, rules, nodes, questions, or the editor fallback', () => {
   const variable = document()
   const variableId = variable.logic.variables[0].id
   variable.logic.variables[0].expression = {
@@ -147,7 +150,8 @@ test('编译错误按路径映射到变量、规则、节点、题目或编辑�
   })
 })
 
-test('非领域异常原样重抛', () => {
+// 非领域异常原样重抛
+test('non-domain exceptions are rethrown unchanged', () => {
   const logic = { dsl_version: 1, semantics_version: 1, variables: [], rules: [] }
   logic.self = logic
   assert.throws(() => logicDiagnostic(logic, []), TypeError)

@@ -46,8 +46,9 @@ async fn 时间错误(from: Option<&str>, to: Option<&str>) -> String {
         .to_owned()
 }
 
+/// 时间范围省略任一端都合法
 #[test]
-fn 时间范围省略任一端都合法() {
+fn time_range_allows_missing_either_end() {
     let 仅起 = TimeRange::parse(&过滤(Some("2026-10-20T08:00:00Z"), None)).expect("只有开始时间");
     assert_eq!(仅起.from, Some(时刻("2026-10-20T08:00:00Z")));
     assert_eq!(仅起.to, None);
@@ -69,8 +70,9 @@ fn 时间范围省略任一端都合法() {
     assert_eq!(空.to, None);
 }
 
+/// 时间必须携带时区且由标准解析器换算
 #[tokio::test]
-async fn 时间必须携带时区且由标准解析器换算() {
+async fn timestamps_require_timezone_and_use_standard_parser() {
     let 微秒 =
         TimeRange::parse(&过滤(Some("2026-10-20T08:00:00.123456Z"), None)).expect("6 位小数合法");
     let 别区写法 = TimeRange::parse(&过滤(Some("2026-10-20T16:00:00.123456+08:00"), None))
@@ -92,8 +94,9 @@ async fn 时间必须携带时区且由标准解析器换算() {
     );
 }
 
+/// 开始时间必须严格早于结束时间
 #[tokio::test]
-async fn 开始时间必须严格早于结束时间() {
+async fn start_must_be_strictly_before_end() {
     for (from, to) in [
         ("2026-10-20T08:00:00Z", "2026-10-20T08:00:00Z"),
         ("2026-10-20T09:00:00Z", "2026-10-20T08:00:00Z"),
@@ -106,8 +109,9 @@ async fn 开始时间必须严格早于结束时间() {
     }
 }
 
+/// 报表选择把时间换算为展示时区
 #[test]
-fn 报表选择把时间换算为展示时区() {
+fn report_selection_converts_times_to_display_timezone() {
     let range = TimeRange::parse(&过滤(
         Some("2026-10-20T00:00:00Z"),
         Some("2026-10-21T00:00:00Z"),
@@ -125,8 +129,9 @@ fn 报表选择把时间换算为展示时区() {
     assert_eq!(from.offset().local_minus_utc(), 8 * 3_600);
 }
 
+/// 版本解析优先显式参数再回退当前版本
 #[tokio::test]
-async fn 版本解析优先显式参数再回退当前版本() {
+async fn version_resolution_prefers_explicit_then_falls_back_to_current() {
     let 当前 = Uuid::new_v4();
     let 显式 = Uuid::new_v4();
     assert_eq!(
@@ -241,8 +246,9 @@ fn 单题文档(题: Question) -> Document {
     }
 }
 
+/// 统计区分完成与筛选结束且题目只统计完成样本
 #[test]
-fn 统计区分完成与筛选结束且题目只统计完成样本() {
+fn statistics_separate_complete_and_screen_out_and_questions_count_complete_only() {
     let (题, 甲, _) = 单选题目();
     let 文档 = 单题文档(题.clone());
     let 时间 = 时刻("2026-10-20T00:00:00Z");
@@ -275,8 +281,9 @@ fn 统计区分完成与筛选结束且题目只统计完成样本() {
     assert_eq!(题统计.skipped_count, 0);
 }
 
+/// 单选统计按选项计数并以外答数为分母
 #[test]
-fn 单选统计按选项计数并以外答数为分母() {
+fn single_choice_counts_by_option_using_answered_as_denominator() {
     let (题, 甲, 乙) = 单选题目();
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let rows = vec![
@@ -306,8 +313,9 @@ fn 单选统计按选项计数并以外答数为分母() {
     }
 }
 
+/// 多选占比合计可以超过百分之百
 #[test]
-fn 多选占比合计可以超过百分之百() {
+fn multiple_choice_proportions_can_exceed_one_hundred_percent() {
     let 甲 = 选项("甲");
     let 乙 = 选项("乙");
     let 题 = 题目(
@@ -347,8 +355,9 @@ fn 多选占比合计可以超过百分之百() {
     }
 }
 
+/// 文本题统计只返回计数不再内联正文
 #[test]
-fn 文本题统计只返回计数不再内联正文() {
+fn text_question_statistics_return_counts_only_without_inlining_bodies() {
     let 单行 = 题目(
         Uuid::new_v4(),
         "单行文本",
@@ -390,8 +399,9 @@ fn 文本题统计只返回计数不再内联正文() {
     assert_eq!(统计.answered_count, 1);
 }
 
+/// 数字统计排除缺失但把零当作有效值
 #[test]
-fn 数字统计排除缺失但把零当作有效值() {
+fn number_statistics_exclude_missing_but_treat_zero_as_valid() {
     let 题 = 数字题目("数字题");
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let rows = vec![
@@ -415,8 +425,9 @@ fn 数字统计排除缺失但把零当作有效值() {
     }
 }
 
+/// 评分统计按分值升序给出分布与均值
 #[test]
-fn 评分统计按分值升序给出分布与均值() {
+fn rating_statistics_report_distribution_in_ascending_order_with_mean() {
     let 题 = 题目(
         Uuid::new_v4(),
         "评分题",
@@ -459,8 +470,9 @@ fn 评分统计按分值升序给出分布与均值() {
     }
 }
 
+/// 空样本集返回零计数与空统计
 #[test]
-fn 空样本集返回零计数与空统计() {
+fn empty_sample_set_returns_zero_counts_and_empty_statistics() {
     let (单选, ..) = 单选题目();
     let 多选 = 题目(
         Uuid::new_v4(),
@@ -514,8 +526,9 @@ fn 空样本集返回零计数与空统计() {
     }
 }
 
+/// 三态计数满足适用加跳过等于完成样本数
 #[test]
-fn 三态计数满足适用加跳过等于完成样本数() {
+fn three_state_counts_satisfy_applicable_plus_skipped_equals_complete() {
     let (题, 甲, _) = 单选题目();
     let 时间 = 时刻("2026-10-20T00:00:00Z");
     let rows = vec![
@@ -540,8 +553,9 @@ fn 三态计数满足适用加跳过等于完成样本数() {
     );
 }
 
+/// 损坏的已存答案返回内部错误且不回显内容
 #[tokio::test]
-async fn 损坏的已存答案返回内部错误且不回显内容() {
+async fn corrupted_stored_answer_returns_internal_error_without_echoing_content() {
     let (单选, ..) = 单选题目();
     let 数字 = 数字题目("数字");
     let 时间 = 时刻("2026-10-20T00:00:00Z");
@@ -565,8 +579,9 @@ async fn 损坏的已存答案返回内部错误且不回显内容() {
     }
 }
 
+/// 公式前缀与前导不可见字符被加上单引号
 #[test]
-fn 公式前缀与前导不可见字符被加上单引号() {
+fn formula_prefixes_and_leading_invisible_chars_get_single_quote() {
     assert_eq!(
         formula_safe("普通文本").as_ref(),
         "普通文本",
@@ -649,8 +664,10 @@ fn 导出文档(logic: Option<DocumentLogic>) -> (Document, Question, Question, 
     (文档, 多选, 文本, 甲, 乙)
 }
 
+/// 无逻辑版本的_csv_覆盖全部六种题型且防护表头公式与空值留空
 #[test]
-fn 无逻辑版本的_csv_覆盖全部六种题型且防护表头公式与空值留空() {
+fn csv_without_logic_covers_all_six_question_kinds_and_escapes_formula_headers_and_blanks_empties()
+{
     let (mut 文档, 多选, 文本, 甲, 乙) = 导出文档(None);
     let 单甲 = 选项("甲");
     let 单乙 = 选项("乙");
@@ -770,8 +787,9 @@ fn 无逻辑版本的_csv_覆盖全部六种题型且防护表头公式与空值
     }
 }
 
+/// 有逻辑版本的_csv_带状态列且多选保持_json_数组
 #[test]
-fn 有逻辑版本的_csv_带状态列且多选保持_json_数组() {
+fn csv_with_logic_includes_state_columns_and_multiple_choice_keeps_json_array() {
     let 逻辑 = DocumentLogic {
         flow: None,
         dsl_version: 1u32.into(),
@@ -833,8 +851,9 @@ fn 有逻辑版本的_csv_带状态列且多选保持_json_数组() {
     assert_eq!(&记录[1][8], "规则跳过");
 }
 
+/// 导出把表头与行批次分开且批次不带重复表头
 #[test]
-fn 导出把表头与行批次分开且批次不带重复表头() {
+fn export_splits_header_from_row_batches_and_batches_omit_duplicate_header() {
     let (文档, 多选, ..) = 导出文档(None);
     let 表头 =
         String::from_utf8(encode_csv_header(&文档).expect("表头编码成功")).expect("表头是 UTF-8");
@@ -860,8 +879,9 @@ fn 导出把表头与行批次分开且批次不带重复表头() {
     );
 }
 
+/// 均值更新在异号大数之间不溢出
 #[test]
-fn 均值更新在异号大数之间不溢出() {
+fn mean_update_does_not_overflow_between_large_opposite_sign_numbers() {
     let mut 均值 = 0.0;
     update_mean(&mut 均值, 4.0, 1);
     assert_eq!(均值, 4.0);
@@ -876,8 +896,9 @@ fn 均值更新在异号大数之间不溢出() {
     assert_eq!(极值, 0.0);
 }
 
+/// 均值更新对重复出现的同一数值保持精确
 #[test]
-fn 均值更新对重复出现的同一数值保持精确() {
+fn mean_update_stays_exact_for_repeated_identical_values() {
     // 每一步 `value / n` 与 `mean / n` 逐位相同，差值恰为 0，均值不能被舍入推离原值。
     for value in [0.1, 3.0, 5.0, 7.5, 1e300] {
         let mut 均值 = 0.0;
@@ -888,8 +909,9 @@ fn 均值更新对重复出现的同一数值保持精确() {
     }
 }
 
+/// 均值更新在两次同号最大值之间保持有限
 #[test]
-fn 均值更新在两次同号最大值之间保持有限() {
+fn mean_update_stays_finite_between_two_max_values() {
     let mut 均值 = 0.0;
     update_mean(&mut 均值, f64::MAX, 1);
     update_mean(&mut 均值, f64::MAX, 2);

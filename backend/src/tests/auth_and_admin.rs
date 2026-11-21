@@ -39,8 +39,9 @@ async fn 断言校验失败(error: AppError, 场景: &str, 期望消息: &str) {
     assert_eq!(body["error"]["message"], 期望消息, "{场景}");
 }
 
+/// 用户名必须为三到三十二个_ascii_字母数字下划线
 #[tokio::test]
-async fn 用户名必须为三到三十二个_ascii_字母数字下划线() {
+async fn username_must_be_three_to_thirty_two_alphanumeric_or_underscore() {
     assert_eq!(
         normalize_username("abc".to_owned()).expect("最短用户名合法"),
         "abc"
@@ -74,8 +75,9 @@ async fn 用户名必须为三到三十二个_ascii_字母数字下划线() {
     }
 }
 
+/// 密码按字符数限制在八到一百二十八之间
 #[tokio::test]
-async fn 密码按字符数限制在八到一百二十八之间() {
+async fn password_limited_to_eight_to_one_hundred_twenty_eight_characters() {
     validate_password("12345678").expect("最短密码合法");
     validate_password(&"x".repeat(128)).expect("最长密码合法");
     validate_password(&"😀".repeat(8)).expect("8 个 Emoji 按字符计数合法");
@@ -86,8 +88,9 @@ async fn 密码按字符数限制在八到一百二十八之间() {
     }
 }
 
+/// argon2id_哈希随机加盐并可验证
 #[tokio::test]
-async fn argon2id_哈希随机加盐并可验证() {
+async fn argon2id_hash_is_salted_and_verifiable() {
     let 密码 = "正确的马电池订书钉".to_owned();
     let 第一份 = hash_password(密码.clone()).await.expect("哈希成功");
     let 第二份 = hash_password(密码.clone()).await.expect("哈希成功");
@@ -107,8 +110,9 @@ async fn argon2id_哈希随机加盐并可验证() {
     );
 }
 
+/// 损坏的密码摘要被识别为内部错误
 #[tokio::test]
-async fn 损坏的密码摘要被识别为内部错误() {
+async fn corrupted_password_hash_is_internal_error() {
     let error = verify_password("任意密码".to_owned(), "不是 PHC 字符串".to_owned())
         .await
         .expect_err("损坏摘要必须报错");
@@ -118,8 +122,9 @@ async fn 损坏的密码摘要被识别为内部错误() {
     assert!(!body.to_string().contains("PHC"), "不能泄露摘要原文");
 }
 
+/// 会话秘密为六十四位小写十六进制且不可预测
 #[test]
-fn 会话秘密为六十四位小写十六进制且不可预测() {
+fn session_secret_is_sixty_four_lowercase_hex_and_unpredictable() {
     let 第一份 = new_session_token().expect("随机源可用");
     let 第二份 = new_session_token().expect("随机源可用");
     assert_eq!(第一份.len(), 64);
@@ -132,8 +137,9 @@ fn 会话秘密为六十四位小写十六进制且不可预测() {
     assert_ne!(第一份, 第二份, "每次登录必须生成新的秘密");
 }
 
+/// 秘密摘要为确定性的_sha256
 #[test]
-fn 秘密摘要为确定性的_sha256() {
+fn secret_digest_is_deterministic_sha256() {
     let 摘要 = hash_secret("abc");
     assert_eq!(
         摘要, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
@@ -144,8 +150,9 @@ fn 秘密摘要为确定性的_sha256() {
     assert_ne!(hash_secret("abc"), hash_secret("abd"));
 }
 
+/// 会话_cookie_只从唯一且格式正确的_cookie_中读取
 #[test]
-fn 会话_cookie_只从唯一且格式正确的_cookie_中读取() {
+fn session_cookie_read_only_from_single_well_formed_cookie() {
     let 秘密 = 会话秘密();
     let 单个 = format!("session={秘密}");
     assert_eq!(
@@ -188,8 +195,9 @@ fn 会话_cookie_只从唯一且格式正确的_cookie_中读取() {
     }
 }
 
+/// 会话_cookie_固定安全属性
 #[test]
-fn 会话_cookie_固定安全属性() {
+fn session_cookie_sets_fixed_security_attributes() {
     let 秘密 = 会话秘密();
     let 明文 = session_cookie(&秘密, 3_600, false)
         .expect("Cookie 头合法")
@@ -217,8 +225,9 @@ fn 会话_cookie_固定安全属性() {
     assert!(清除.contains("Secure"), "HTTPS 部署必须带 Secure：{清除}");
 }
 
+/// 账号资料只暴露身份与角色
 #[test]
-fn 账号资料只暴露身份与角色() {
+fn account_profile_exposes_only_identity_and_role() {
     let 资料 = UserProfile::from(user_model());
     let json = serde_json::to_value(&资料).expect("资料可序列化");
     let 键集合: std::collections::BTreeSet<&str> = json
@@ -233,8 +242,9 @@ fn 账号资料只暴露身份与角色() {
     assert!(!json.to_string().contains("argon2"), "序列化结果不能带摘要");
 }
 
+/// 治理接口只允许管理员
 #[tokio::test]
-async fn 治理接口只允许管理员() {
+async fn admin_endpoints_allow_only_administrators() {
     let 管理员 = AuthUser {
         id: Uuid::new_v4(),
         username: "root".to_owned(),
@@ -252,8 +262,9 @@ async fn 治理接口只允许管理员() {
     assert_eq!(body["error"]["message"], "没有执行此操作的权限");
 }
 
+/// 治理原因必须是一到五百个可显示字符
 #[tokio::test]
-async fn 治理原因必须是一到五百个可显示字符() {
+async fn admin_reason_must_be_one_to_five_hundred_displayable_characters() {
     for 合法 in [
         "x".to_owned(),
         "好".to_owned(),
@@ -281,8 +292,9 @@ async fn 治理原因必须是一到五百个可显示字符() {
     }
 }
 
+/// 治理列表筛选接受标题状态下架与审计条件
 #[test]
-fn 治理列表筛选接受标题状态下架与审计条件() {
+fn admin_list_filters_accept_title_status_takedown_and_audit_conditions() {
     let 筛选: AdminSurveyFilters = serde_json::from_str(
         r#"{"title":"甲","status":"closed","taken_down":true,"page":2,"page_size":50}"#,
     )
@@ -311,8 +323,9 @@ fn 治理列表筛选接受标题状态下架与审计条件() {
     assert!(serde_json::from_str::<AuditFilters>(r#"{"action":"launch_missile"}"#).is_err());
 }
 
+/// 治理列表按到期时间物化状态并保留字段
 #[test]
-fn 治理列表按到期时间物化状态并保留字段() {
+fn admin_list_materializes_status_by_deadline_and_preserves_fields() {
     let now = Utc::now();
     let 到期 = now - Duration::seconds(1);
     let 编号 = Uuid::new_v4();

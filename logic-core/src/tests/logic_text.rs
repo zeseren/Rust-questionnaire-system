@@ -16,8 +16,9 @@ fn 位置(source: &str, offset: usize) -> (usize, usize) {
     (错误.line, 错误.column)
 }
 
+/// 定位按字节偏移换算行列
 #[test]
-fn 定位按字节偏移换算行列() {
+fn location_converts_byte_offset_to_line_and_column() {
     // LF 与 CRLF 的行号都只统计 `\n`，列号从 1 开始。
     assert_eq!(位置("abc\ndef", 0), (1, 1));
     assert_eq!(位置("abc\ndef", 3), (1, 4));
@@ -31,8 +32,9 @@ fn 定位按字节偏移换算行列() {
     assert_eq!(位置("a\n中文😀", 12), (2, 4));
 }
 
+/// 文法保留字与校验表逐一一致
 #[test]
-fn 文法保留字与校验表逐一一致() {
+fn grammar_reserved_words_match_validation_table_exactly() {
     // pest 的 reserved 与 Rust 的 RESERVED_WORDS 各维护一份；集合必须完全相同，
     // 否则只加在一侧的词会让别名校验与解析器分歧，格式化出无法解析的文本。
     let 文法 = include_str!("../logic_text.pest");
@@ -53,8 +55,9 @@ fn 文法保留字与校验表逐一一致() {
     }
 }
 
+/// 文本预算超限错误定位到精确行列
 #[test]
-fn 文本预算超限错误定位到精确行列() {
+fn text_budget_exceeded_error_points_to_exact_line_and_column() {
     // 字节预算：多一个字节立即拒绝并定位到首行首列。
     let 错误 = check_text_budget(&" ".repeat(1_048_577)).unwrap_err();
     assert_eq!(错误.error.code, LogicErrorCode::LimitExceeded);
@@ -81,8 +84,9 @@ fn 文本预算超限错误定位到精确行列() {
     );
 }
 
+/// 三元条件按显式end统计嵌套层
 #[test]
-fn 三元条件按显式end统计嵌套层() {
+fn ternary_condition_counts_nesting_by_explicit_end() {
     // `end` 关闭同层条件，`all` 下 63 个并列 if 不应被当成嵌套。
     let 并列 = format!(
         "all({})",
@@ -114,8 +118,9 @@ fn 三元条件按显式end统计嵌套层() {
     );
 }
 
+/// 巡检在后续语法错误时仍返回已扫描绑定
 #[test]
-fn 巡检在后续语法错误时仍返回已扫描绑定() {
+fn inspection_still_returns_scanned_bindings_after_later_syntax_error() {
     let source = concat!(
         "dsl 1 semantics 1;\n",
         "// 注释中的 bind 不算绑定\n",

@@ -39,7 +39,8 @@ after(() => {
   env?.restore()
 })
 
-test('safeReturn 只放行以单个斜杠开头的站内路径', () => {
+// safeReturn 只放行以单个斜杠开头的站内路径
+test('safeReturn allows only site paths starting with a single slash', () => {
   const accepted = [
     '/',
     '/surveys',
@@ -52,7 +53,8 @@ test('safeReturn 只放行以单个斜杠开头的站内路径', () => {
   for (const value of accepted) assert.equal(safeReturn(value), value, value)
 })
 
-test('safeReturn 拒绝非字符串、相对、协议相对、反斜杠与换行路径', () => {
+// safeReturn 拒绝非字符串、相对、协议相对、反斜杠与换行路径
+test('safeReturn rejects non-string, relative, protocol-relative, backslash and newline paths', () => {
   const rejected = [
     undefined,
     'surveys',
@@ -66,7 +68,8 @@ test('safeReturn 拒绝非字符串、相对、协议相对、反斜杠与换行
   for (const value of rejected) assert.equal(safeReturn(value), '/', String(value))
 })
 
-test('safeReturn 拒绝回跳登录与注册页自身', () => {
+// safeReturn 拒绝回跳登录与注册页自身
+test('safeReturn rejects login and register pages as redirect targets', () => {
   const rejected = [
     '/login',
     '/login?redirect=/x',
@@ -78,7 +81,8 @@ test('safeReturn 拒绝回跳登录与注册页自身', () => {
   for (const value of rejected) assert.equal(safeReturn(value), '/', value)
 })
 
-test('路由表配置完整：懒加载、唯一名称与关键权限元数据', () => {
+// 路由表配置完整：懒加载、唯一名称与关键权限元数据
+test('route table is fully configured: lazy loading, unique names and key permission metadata', () => {
   const routes = router.options.routes
   const byName = new Map(routes.map((route) => [route.name, route]))
 
@@ -103,7 +107,8 @@ test('路由表配置完整：懒加载、唯一名称与关键权限元数据',
     assert.equal(byName.get(name).meta.standalone, true, `${name} 必须使用独立布局`)
 })
 
-test('未登录访问受保护路由会重定向到登录页并保留回跳地址', async () => {
+// 未登录访问受保护路由会重定向到登录页并保留回跳地址
+test('unauthenticated access to a protected route redirects to login and keeps the return path', async () => {
   setActivePinia(createPinia())
   env.fetch = async () => errorResponse(401, { code: 'unauthorized', message: '未登录' })
 
@@ -115,7 +120,8 @@ test('未登录访问受保护路由会重定向到登录页并保留回跳地�
   assert.equal(route.query.redirect, '/surveys')
 })
 
-test('普通用户访问平台管理被重定向到工作台并展示权限提示', async () => {
+// 普通用户访问平台管理被重定向到工作台并展示权限提示
+test('regular user accessing platform admin is redirected to workspace with a permission notice', async () => {
   setActivePinia(createPinia())
   env.fetch = async () => jsonResponse(USER)
 
@@ -125,7 +131,8 @@ test('普通用户访问平台管理被重定向到工作台并展示权限提�
   assert.ok(useNotice().text.length > 0)
 })
 
-test('管理员访问平台管理放行，并由 afterEach 更新页面标题', async () => {
+// 管理员访问平台管理放行，并由 afterEach 更新页面标题
+test('admin access to platform admin is allowed and afterEach updates the page title', async () => {
   setActivePinia(createPinia())
   env.fetch = async () => jsonResponse(ADMIN)
 

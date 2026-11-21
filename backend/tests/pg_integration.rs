@@ -174,8 +174,9 @@ async fn 读取整数(db: &DatabaseConnection, sql: &str, values: Vec<Value>) ->
     row.try_get("", "value").expect("聚合查询必须返回整数")
 }
 
+/// 真实_postgresql_迁移与契约
 #[tokio::test]
-async fn 真实_postgresql_迁移与契约() {
+async fn real_postgresql_migration_and_contract() {
     let Some(db) = 测试库().await else {
         return;
     };

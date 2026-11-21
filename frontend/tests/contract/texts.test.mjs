@@ -38,7 +38,8 @@ function buildSource(item) {
   return source + (item.append ?? '')
 }
 
-test('共享文本样例保持身份优先级、解析结果与错误行列一致', () => {
+// 共享文本样例保持身份优先级、解析结果与错误行列一致
+test('shared text fixtures keep identity precedence, parse results and error positions consistent', () => {
   for (const item of fixtures.cases) {
     const source = buildSource(item)
     if (item.error) {
@@ -61,7 +62,8 @@ test('共享文本样例保持身份优先级、解析结果与错误行列一�
   }
 })
 
-test('共享格式化样例逐字节输出、二次解析等值且二次格式化幂等', () => {
+// 共享格式化样例逐字节输出、二次解析等值且二次格式化幂等
+test('shared formatting fixtures produce byte-exact output, equal reparse and idempotent reformat', () => {
   for (const item of fixtures.format_cases) {
     const questions = formatCaseField(item, 'questions')
     const logic = formatCaseLogic(item)
@@ -73,7 +75,8 @@ test('共享格式化样例逐字节输出、二次解析等值且二次格式�
   }
 })
 
-test('全部共享流程文档的规则可以格式化后无损还原', () => {
+// 全部共享流程文档的规则可以格式化后无损还原
+test('all shared flow document rules survive formatting losslessly', () => {
   for (const [name, entry] of Object.entries(loadFixture('flows').documents)) {
     if (!entry.logic) continue
     const text = formatLogicText(entry.logic, entry.questions)

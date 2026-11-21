@@ -3,13 +3,15 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { isAnswered, isSubmission } from '../../src/answers.ts'
 
-test('isAnswered 按空白、数组长度与原生类型判断', () => {
+// isAnswered 按空白、数组长度与原生类型判断
+test('isAnswered respects whitespace, array length, and primitive types', () => {
   for (const value of [null, undefined, '', '  ', []])
     assert.equal(isAnswered(value), false, JSON.stringify(value))
   for (const value of [0, -0, ['a']]) assert.equal(isAnswered(value), true, JSON.stringify(value))
 })
 
-test('isSubmission 只接受字段完整且答案值类型合法的提交载荷', () => {
+// isSubmission 只接受字段完整且答案值类型合法的提交载荷
+test('isSubmission accepts only complete submissions with valid answer value types', () => {
   const submission = {
     version_id: 'v1',
     idempotency_key: 'k1',

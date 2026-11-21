@@ -43,8 +43,9 @@ fn 转发请求(转发: &str) -> axum::extract::Request {
     )
 }
 
+/// 安全方法免于_csrf_与限流
 #[tokio::test]
-async fn 安全方法免于_csrf_与限流() {
+async fn safe_methods_bypass_csrf_and_rate_limiting() {
     let state = test_state();
     // 连续 9 次安全请求远超认证配额，仍必须全部通过。
     for _ in 0..3 {
@@ -67,8 +68,9 @@ async fn 安全方法免于_csrf_与限流() {
     assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
 }
 
+/// 写方法必须携带同源来源与防护头
 #[tokio::test]
-async fn 写方法必须携带同源来源与防护头() {
+async fn write_methods_require_same_origin_and_protection_header() {
     let state = test_state();
     // 4 种拒绝原因都在 POST 上覆盖，其余写方法只验证同样受保护且能通过。
     for (说明, 头) in [
@@ -124,8 +126,9 @@ async fn 写方法必须携带同源来源与防护头() {
     }
 }
 
+/// csrf_失败不占用限流配额
 #[tokio::test]
-async fn csrf_失败不占用限流配额() {
+async fn csrf_failure_does_not_consume_rate_limit_quota() {
     let state = test_state();
     let error = security::check(&state, &raw_request("POST", "/api/auth/login", &[]))
         .expect_err("缺少来源头的写请求必须被 CSRF 拒绝");
@@ -148,8 +151,9 @@ async fn csrf_失败不占用限流配额() {
     assert_eq!(body["error"]["message"], "请求过于频繁，请稍后重试");
 }
 
+/// 认证与提交使用互不干扰的限流桶
 #[tokio::test]
-async fn 认证与提交使用互不干扰的限流桶() {
+async fn auth_and_submission_use_independent_rate_limit_buckets() {
     let state = test_state();
     let 提交路径 = format!("/api/public/surveys/{}/responses", Uuid::new_v4());
     for _ in 0..2 {
@@ -185,9 +189,10 @@ async fn 认证与提交使用互不干扰的限流桶() {
     }
 }
 
+/// 信任代理时按转发头分桶
 /// 信任代理时按转发头区分客户端；认证桶对每个 IP 独立计数。
 #[tokio::test]
-async fn 信任代理时按转发头分桶() {
+async fn trusted_proxy_buckets_by_forwarded_header() {
     let mut config = test_config();
     config.trust_proxy = true;
     let state = AppState {
@@ -253,9 +258,10 @@ async fn 信任代理时按转发头分桶() {
     assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
 }
 
+/// 未信任代理时忽略转发头
 /// 未信任代理时忽略转发头，所有请求落在一个哨兵桶，客户端无法伪造 IP 绕过。
 #[tokio::test]
-async fn 未信任代理时忽略转发头() {
+async fn untrusted_proxy_ignores_forwarded_header() {
     let state = test_state();
     security::check(&state, &转发请求("203.0.113.1")).expect("第一次请求在配额内");
     security::check(&state, &转发请求("203.0.113.2")).expect("伪造不同 IP 不产生新桶");
@@ -264,8 +270,9 @@ async fn 未信任代理时忽略转发头() {
     assert_eq!(error_json(error).await.0, StatusCode::TOO_MANY_REQUESTS);
 }
 
+/// 提交桶按问卷独立计数
 #[tokio::test]
-async fn 提交桶按问卷独立计数() {
+async fn submission_buckets_count_independently_per_survey() {
     let state = test_state();
     let 路径 = |id: Uuid| format!("/api/public/surveys/{id}/responses");
     let 第一份 = 路径(Uuid::new_v4());
@@ -288,8 +295,9 @@ async fn 提交桶按问卷独立计数() {
     );
 }
 
+/// 普通写路径不进入任何限流桶
 #[test]
-fn 普通写路径不进入任何限流桶() {
+fn plain_write_paths_enter_no_rate_limit_bucket() {
     let state = test_state();
     // 4 轮已超过提交桶上限 3：普通写路径若被计数，这里必然出现 429。
     for _ in 0..4 {
@@ -304,8 +312,9 @@ fn 普通写路径不进入任何限流桶() {
     }
 }
 
+/// 限流窗口满六十秒后重置
 #[tokio::test]
-async fn 限流窗口满六十秒后重置() {
+async fn rate_limit_window_resets_after_sixty_seconds() {
     let 基准 = Instant::now();
     let window = Mutex::new(Window {
         started: 基准,
@@ -323,8 +332,9 @@ async fn 限流窗口满六十秒后重置() {
     assert_eq!(error_json(再次超限).await.0, StatusCode::TOO_MANY_REQUESTS);
 }
 
+/// 活跃桶达到上限时淘汰最早窗口
 #[tokio::test]
-async fn 活跃桶达到上限时淘汰最早窗口() {
+async fn evicts_oldest_window_when_active_buckets_hit_limit() {
     let 基准 = Instant::now();
     let buckets = Mutex::new(std::collections::HashMap::new());
     // 三个键都在同一窗口内活跃，`retain` 一条也删不掉；started 递增表示最旧的是 0。
@@ -345,8 +355,9 @@ async fn 活跃桶达到上限时淘汰最早窗口() {
     assert!(剩余.contains_key(&99), "新键必须插入");
 }
 
+/// 互斥锁中毒后限流仍可恢复
 #[tokio::test]
-async fn 互斥锁中毒后限流仍可恢复() {
+async fn rate_limiting_recovers_after_mutex_poisoning() {
     let state = test_state();
     let 中毒 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = state.limits.auth.lock().expect("首次加锁成功");
@@ -372,8 +383,9 @@ fn 路由() -> axum::Router {
     crate::router(test_state())
 }
 
+/// 开放文档包含完整路由表与_cookie_认证方案
 #[tokio::test]
-async fn 开放文档包含完整路由表与_cookie_认证方案() {
+async fn openapi_document_contains_full_route_table_and_cookie_auth_scheme() {
     let (状态, _, 文档) = send_raw_http(路由(), &报文("GET", "/api/openapi.json", "")).await;
     assert_eq!(状态, StatusCode::OK);
     assert_eq!(文档["info"]["title"], "问卷调查系统 API");
@@ -436,31 +448,35 @@ async fn 开放文档包含完整路由表与_cookie_认证方案() {
     assert_eq!(方案["in"], "cookie");
 }
 
+/// 未知路径返回四百零四_not_found
 #[tokio::test]
-async fn 未知路径返回四百零四_not_found() {
+async fn unknown_path_returns_404_not_found() {
     let (状态, _, body) = send_raw_http(路由(), &报文("GET", "/api/does-not-exist", "")).await;
     assert_eq!(状态, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], "not_found");
 }
 
+/// 已知路径的错误方法返回四百零五
 #[tokio::test]
-async fn 已知路径的错误方法返回四百零五() {
+async fn wrong_method_on_known_path_returns_405() {
     let (状态, _, body) = send_raw_http(路由(), &报文("GET", "/api/auth/login", "")).await;
     assert_eq!(状态, StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(body["error"]["code"], "method_not_allowed");
     assert_eq!(body["error"]["message"], "不支持此请求方法");
 }
 
+/// 数据库未连接时健康检查返回五百零三
 #[tokio::test]
-async fn 数据库未连接时健康检查返回五百零三() {
+async fn health_check_returns_503_when_database_disconnected() {
     let (状态, _, body) = send_raw_http(路由(), &报文("GET", "/health", "")).await;
     assert_eq!(状态, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"]["code"], "not_ready");
     assert_eq!(body["error"]["message"], "数据库尚未就绪");
 }
 
+/// 所有响应都带统一安全响应头且不开放_cors
 #[tokio::test]
-async fn 所有响应都带统一安全响应头且不开放_cors() {
+async fn all_responses_carry_uniform_security_headers_and_no_cors() {
     let 匿名登录 = 报文("POST", "/api/auth/login", "{}");
     for (说明, 请求) in [
         ("开放文档", 报文("GET", "/api/openapi.json", "")),

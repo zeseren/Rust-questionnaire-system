@@ -17,7 +17,8 @@ import {
 } from '../helpers/documents.mjs'
 import { installBrowserEnv } from '../helpers/browser.mjs'
 
-test('dateTime 对空值与非法日期返回未设置，有效时间按上海时区展示', () => {
+// dateTime 对空值与非法日期返回未设置，有效时间按上海时区展示
+test('dateTime returns unset for empty or invalid dates and shows valid times in Shanghai time', () => {
   for (const value of [null, undefined, '', 'not-a-date'])
     assert.equal(dateTime(value), '未设置', String(value))
   const formatted = dateTime('2024-01-02T03:04:00Z')
@@ -25,13 +26,15 @@ test('dateTime 对空值与非法日期返回未设置，有效时间按上海�
   assert.match(formatted, /11:04/)
 })
 
-test('exact 保留零值并只对空值降级', () => {
+// exact 保留零值并只对空值降级
+test('exact keeps zero and degrades only for empty values', () => {
   assert.equal(exact(0), '0')
   assert.equal(exact(null), '暂无数据')
   assert.equal(exact(undefined), '暂无数据')
 })
 
-test('answerText 映射选项标签并回退未知身份', () => {
+// answerText 映射选项标签并回退未知身份
+test('answerText maps option labels and falls back for unknown identities', () => {
   const single = singleChoiceQuestion()
   const multiple = multipleChoiceQuestion()
   assert.equal(answerText(single, null), '未作答')
@@ -51,7 +54,8 @@ test('answerText 映射选项标签并回退未知身份', () => {
   assert.equal(answerText(numberQuestion(), 12.5), '12.5')
 })
 
-test('localInput 与 toTimestamp 在 +08:00 上往返', () => {
+// localInput 与 toTimestamp 在 +08:00 上往返
+test('localInput and toTimestamp round-trip at +08:00', () => {
   assert.equal(localInput(null), '')
   assert.equal(localInput(''), '')
   assert.equal(localInput('2024-01-02T03:04:00Z'), '2024-01-02T11:04')
@@ -63,7 +67,8 @@ test('localInput 与 toTimestamp 在 +08:00 上往返', () => {
   assert.equal(new Date(timestamp).toISOString(), '2024-01-02T03:04:00.000Z')
 })
 
-test('shareLink 以当前站点来源拼接并转义身份', (t) => {
+// shareLink 以当前站点来源拼接并转义身份
+test('shareLink joins the current site origin and escapes the identity', (t) => {
   const env = installBrowserEnv(t)
   // 环境桩统一管理全局 `location`，这里固定一个带端口的来源验证拼接。
   env.location.origin = 'https://survey.example:8443'

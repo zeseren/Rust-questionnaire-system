@@ -12,7 +12,8 @@ import { surveyDocument, textareaQuestion } from '../helpers/documents.mjs'
 
 const contracts = loadFixture('input-contracts')
 
-test('配置身份的每个引用位置只接受规范小写 UUID', () => {
+// 配置身份的每个引用位置只接受规范小写 UUID
+test('every configuration identity reference accepts only canonical lowercase UUID', () => {
   const source = readFlowDocument(contracts.document)
   for (const path of contracts.configuration_paths) {
     const segments = path.slice(1).split('/')
@@ -30,7 +31,8 @@ test('配置身份的每个引用位置只接受规范小写 UUID', () => {
   }
 })
 
-test('选项答案只接受规范 UUID，大写归一、无连字符与零值记录错误', () => {
+// 选项答案只接受规范 UUID，大写归一、无连字符与零值记录错误
+test('option answers accept only canonical UUIDs and record errors for uppercase, unhyphenated and nil values', () => {
   const document = readFlowDocument(contracts.document)
   delete document.logic
   document.questions.length = 1
@@ -50,7 +52,8 @@ test('选项答案只接受规范 UUID，大写归一、无连字符与零值记
   }
 })
 
-test('题目身份在交互事件中只接受规范且已声明的 UUID', () => {
+// 题目身份在交互事件中只接受规范且已声明的 UUID
+test('question identities in interaction events accept only canonical declared UUIDs', () => {
   const source = readFlowDocument(contracts.document)
   const document = readFlowDocument(contracts.document)
   delete document.logic
@@ -81,7 +84,8 @@ test('题目身份在交互事件中只接受规范且已声明的 UUID', () => 
   )
 })
 
-test('共享文本样例在引擎答案归一上保持一致', () => {
+// 共享文本样例在引擎答案归一上保持一致
+test('shared text fixtures stay consistent with engine answer normalization', () => {
   for (const item of contracts.text_cases) {
     for (const required of [false, true]) {
       const question = textareaQuestion({ required })

@@ -8,7 +8,8 @@ import { applyEdits, loadFixture, readFlowDocument } from '../helpers/fixtures.m
 
 const fixtures = loadFixture('flows')
 
-test('共享流程编译样例保持拓扑错误码一致', () => {
+// 共享流程编译样例保持拓扑错误码一致
+test('shared flow compilation fixtures keep topology error codes consistent', () => {
   for (const item of fixtures.compilation) {
     const document = applyEdits(readFlowDocument(item.document), item.edits)
     let code = null
@@ -22,7 +23,8 @@ test('共享流程编译样例保持拓扑错误码一致', () => {
   }
 })
 
-test('共享事件序列保持路径清理、回退与三态一致', () => {
+// 共享事件序列保持路径清理、回退与三态一致
+test('shared event sequences keep path cleanup, rollback and tri-state consistent', () => {
   for (const item of fixtures.sessions) {
     const session = new FlowSession(readFlowDocument(item.document))
     item.steps.forEach((step, index) => {

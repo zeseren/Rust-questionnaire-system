@@ -50,8 +50,9 @@ async fn 断言冲突(error: AppError, 期望码: &str, 期望消息: &str) {
     assert_eq!(消息, 期望消息);
 }
 
+/// 问卷状态在截止时间边界上物化
 #[test]
-fn 问卷状态在截止时间边界上物化() {
+fn survey_status_materializes_at_deadline_boundary() {
     let now = Utc::now();
     let 未来 = now + Duration::seconds(1);
     let 过去 = now - Duration::seconds(1);
@@ -81,8 +82,9 @@ fn 问卷状态在截止时间边界上物化() {
     }
 }
 
+/// 实体枚举与数据库检查和序列化值严格对齐
 #[test]
-fn 实体枚举与数据库检查和序列化值严格对齐() {
+fn entity_enums_align_with_database_checks_and_serialized_values() {
     /// 从 schema.sql 的 CHECK 约束解析允许的文本集合。
     fn 约束值集合(列名: &str) -> std::collections::BTreeSet<String> {
         let 前缀 = format!("{列名} IN (");
@@ -156,8 +158,9 @@ fn 实体枚举与数据库检查和序列化值严格对齐() {
     );
 }
 
+/// 新提交资格按问卷状态给出具体错误
 #[tokio::test]
-async fn 新提交资格按问卷状态给出具体错误() {
+async fn new_submission_eligibility_reports_specific_error_per_survey_status() {
     let now = Utc::now();
     let 未来 = now + Duration::seconds(60);
     let 过去 = now - Duration::seconds(60);
@@ -230,8 +233,9 @@ async fn 新提交资格按问卷状态给出具体错误() {
     }
 }
 
+/// 回收设置的截止时间区分省略清空与设定
 #[test]
-fn 回收设置的截止时间区分省略清空与设定() {
+fn collection_settings_deadline_distinguishes_omitted_cleared_and_set() {
     let 省略 = serde_json::from_str::<CollectionSettings>(r#"{"mode":"anonymous"}"#)
         .expect("省略 deadline 合法");
     assert_eq!(省略.mode, Some(FillingMode::Anonymous));
@@ -260,8 +264,9 @@ fn 回收设置的截止时间区分省略清空与设定() {
     );
 }
 
+/// 归档问卷不能编辑或发布
 #[tokio::test]
-async fn 归档问卷不能编辑或发布() {
+async fn archived_survey_cannot_be_edited_or_published() {
     let mut record = survey_model();
     ensure_editable(&SurveyMetaRow::from(&record)).expect("未发布草稿可编辑");
     record.status = SurveyStatus::Collecting;
@@ -278,8 +283,9 @@ async fn 归档问卷不能编辑或发布() {
     .await;
 }
 
+/// 修订号必须与读取时一致
 #[tokio::test]
-async fn 修订号必须与读取时一致() {
+async fn revision_must_match_the_value_read() {
     let record = survey_model();
     let meta = SurveyMetaRow::from(&record);
     ensure_revision(&meta, 1).expect("修订号一致");
@@ -293,8 +299,9 @@ async fn 修订号必须与读取时一致() {
     }
 }
 
+/// 恢复与首次发布要求截止时间未到
 #[tokio::test]
-async fn 恢复与首次发布要求截止时间未到() {
+async fn resume_and_first_publish_require_future_deadline() {
     let now = Utc::now();
     ensure_future_deadline(None, now).expect("没有截止时间合法");
     ensure_future_deadline(Some(now + Duration::seconds(1)), now).expect("未来时间合法");
@@ -308,8 +315,9 @@ async fn 恢复与首次发布要求截止时间未到() {
     }
 }
 
+/// 管理详情不包含分享链接字段且按读取时刻物化状态
 #[test]
-fn 管理详情不包含分享链接字段且按读取时刻物化状态() {
+fn admin_detail_omits_share_url_and_materializes_status_at_read_time() {
     let now = Utc::now();
     let record = survey_model();
     let 编号 = record.id;
@@ -347,8 +355,9 @@ fn 管理详情不包含分享链接字段且按读取时刻物化状态() {
     );
 }
 
+/// 状态转移矩阵覆盖三个动作与四个状态
 #[tokio::test]
-async fn 状态转移矩阵覆盖三个动作与四个状态() {
+async fn status_transition_matrix_covers_three_actions_and_four_states() {
     let now = Utc::now();
     let 未来 = now + Duration::seconds(60);
     for (动作, action, current, 期望) in [
@@ -430,8 +439,9 @@ async fn 状态转移矩阵覆盖三个动作与四个状态() {
     );
 }
 
+/// 填写模式在首次发布后冻结
 #[tokio::test]
-async fn 填写模式在首次发布后冻结() {
+async fn filling_mode_freezes_after_first_publish() {
     let 版本 = Uuid::new_v4();
     validate_mode_change(None, None, Some(FillingMode::Anonymous)).expect("未发布可设置模式");
     validate_mode_change(None, None, None).expect("可以省略模式");
@@ -463,8 +473,9 @@ async fn 填写模式在首次发布后冻结() {
     }
 }
 
+/// 列表筛选接受标题状态与分页
 #[test]
-fn 列表筛选接受标题状态与分页() {
+fn list_filters_accept_title_status_and_pagination() {
     let 筛选: SurveyFilters =
         serde_json::from_str(r#"{"title":"甲","status":"closed","page":2,"page_size":50}"#)
             .expect("合法筛选必须解析");
@@ -486,8 +497,9 @@ fn 带版本(version: u8, variant: u8) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
+/// 幂等秘密接受_uuidv4_与_uuidv7
 #[tokio::test]
-async fn 幂等秘密接受_uuidv4_与_uuidv7() {
+async fn idempotency_key_accepts_uuidv4_and_uuidv7() {
     validate_idempotency_key(Uuid::new_v4()).expect("UUIDv4 合法");
     validate_idempotency_key(Uuid::now_v7()).expect("UUIDv7 合法");
     validate_idempotency_key(带版本(7, 0x80)).expect("RFC 变体的 UUIDv7 合法");
@@ -508,8 +520,9 @@ async fn 幂等秘密接受_uuidv4_与_uuidv7() {
     }
 }
 
+/// 载荷摘要只取决于版本与规范化答案
 #[test]
-fn 载荷摘要只取决于版本与规范化答案() {
+fn payload_digest_depends_only_on_version_and_normalized_answers() {
     let 版本 = Uuid::new_v4();
     let 题目 = Uuid::new_v4();
     let mut 答案 = BTreeMap::new();
@@ -541,8 +554,9 @@ fn 载荷摘要只取决于版本与规范化答案() {
     );
 }
 
+/// 隐私提示按填写模式区分且不宣称完全匿名
 #[test]
-fn 隐私提示按填写模式区分且不宣称完全匿名() {
+fn privacy_notice_varies_by_filling_mode_and_does_not_claim_full_anonymity() {
     let 匿名 = privacy_notice(FillingMode::Anonymous);
     let 登录 = privacy_notice(FillingMode::LoginOnce);
     assert_ne!(匿名.mode_notice, 登录.mode_notice, "两种模式的提示必须不同");
@@ -556,8 +570,9 @@ fn 隐私提示按填写模式区分且不宣称完全匿名() {
     );
 }
 
+/// 公开元信息只暴露声明的字段
 #[test]
-fn 公开元信息只暴露声明的字段() {
+fn public_meta_exposes_only_declared_fields() {
     let meta = PublicSurveyMeta {
         survey_id: Uuid::now_v7(),
         title: "标题".to_owned(),
@@ -590,8 +605,9 @@ fn 公开元信息只暴露声明的字段() {
     assert!(serialized.get("version_id").is_none());
 }
 
+/// 幂等冲突使用独立错误码
 #[tokio::test]
-async fn 幂等冲突使用独立错误码() {
+async fn idempotency_conflict_uses_dedicated_error_code() {
     let (状态, 码, _) = 三元组(idempotency_conflict()).await;
     assert_eq!(状态, StatusCode::CONFLICT);
     assert_eq!(码, "idempotency_conflict");
@@ -606,9 +622,10 @@ fn 预期账号头(值: &str) -> HeaderMap {
     headers
 }
 
+/// 预期账号头不替代认证且拒绝跨账号
 /// 声明头只在真实 Cookie 身份之后做条件核对：同账号重试放行，跨账号或匿名冒充拒绝。
 #[tokio::test]
-async fn 预期账号头不替代认证且拒绝跨账号() {
+async fn expected_account_header_does_not_replace_auth_and_rejects_cross_account() {
     let a = Uuid::new_v4();
     let b = Uuid::new_v4();
     assert!(
@@ -648,8 +665,9 @@ async fn 预期账号头不替代认证且拒绝跨账号() {
     );
 }
 
+/// 提交作用域匿名固定且登录账号稳定
 #[test]
-fn 提交作用域匿名固定且登录账号稳定() {
+fn submission_scope_is_fixed_anonymous_and_stable_per_account() {
     assert_eq!(submission_scope(None), "anonymous");
     let 账号 = Uuid::new_v4();
     assert_eq!(submission_scope(Some(账号)), 账号.to_string());
@@ -660,8 +678,9 @@ fn 提交作用域匿名固定且登录账号稳定() {
     );
 }
 
+/// 同账号同载荷重试复用回执而不同载荷冲突
 #[tokio::test]
-async fn 同账号同载荷重试复用回执而不同载荷冲突() {
+async fn same_account_same_payload_retry_reuses_receipt_but_payload_change_conflicts() {
     let 回执 = Uuid::now_v7();
     let 版本 = Uuid::new_v4();
     let 历史 = (回执, 版本, "载荷摘要".to_owned(), Outcome::ScreenOut);

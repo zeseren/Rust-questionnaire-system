@@ -29,8 +29,9 @@ struct 映射 {
     answers: BTreeMap<Uuid, u32>,
 }
 
+/// 解析接受十六进制大小写但拒绝非标准格式与零值
 #[test]
-fn 解析接受十六进制大小写但拒绝非标准格式与零值() {
+fn parse_accepts_hex_case_but_rejects_non_standard_format_and_zero() {
     assert_eq!(parse(合法), Some(Uuid::from_u128(1)));
     assert_eq!(
         parse("ffffffff-ffff-ffff-ffff-ffffffffffff"),
@@ -69,8 +70,9 @@ fn 解析接受十六进制大小写但拒绝非标准格式与零值() {
     assert_eq!(parse(&format!("{合法}0")), None, "37 字符应拒绝");
 }
 
+/// 单值反序列化复用严格解析文案
 #[test]
-fn 单值反序列化复用严格解析文案() {
+fn single_value_deserialization_reuses_strict_parse_message() {
     let 值: 单值 = serde_json::from_str(&format!(r#"{{"id":"{合法}"}}"#)).unwrap();
     assert_eq!(值.id, Uuid::from_u128(1));
 
@@ -85,8 +87,9 @@ fn 单值反序列化复用严格解析文案() {
     );
 }
 
+/// 数组反序列化逐元素校验并原样保留重复
 #[test]
-fn 数组反序列化逐元素校验并原样保留重复() {
+fn array_deserialization_validates_each_element_and_preserves_duplicates() {
     let 空: 数组 = serde_json::from_str(r#"{"ids":[]}"#).unwrap();
     assert!(空.ids.is_empty());
 
@@ -109,8 +112,9 @@ fn 数组反序列化逐元素校验并原样保留重复() {
     );
 }
 
+/// 映射反序列化校验键身份并按身份排序
 #[test]
-fn 映射反序列化校验键身份并按身份排序() {
+fn map_deserialization_validates_key_identity_and_sorts_by_identity() {
     let 答案: 映射 = serde_json::from_str(&format!(r#"{{"answers":{{"{合法}":7}}}}"#)).unwrap();
     assert_eq!(答案.answers.get(&Uuid::from_u128(1)), Some(&7));
 

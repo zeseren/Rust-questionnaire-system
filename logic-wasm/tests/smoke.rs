@@ -65,8 +65,9 @@ fn domain_envelope(output: &str) -> Value {
     envelope["error"].clone()
 }
 
+/// 四个导出函数成功时只返回_ok_信封
 #[test]
-fn 四个导出函数成功时只返回_ok_信封() {
+fn four_exported_functions_return_only_ok_envelope_on_success() {
     let expected = expected_text();
     let diamond = diamond();
     let questions = diamond["questions"].to_string();
@@ -94,8 +95,9 @@ fn 四个导出函数成功时只返回_ok_信封() {
     assert!(inspected.get("error_offset").is_some(), "{inspected}");
 }
 
+/// 非法_json_与错误_dto_结构按参数名归类为边界语法错误
 #[test]
-fn 非法_json_与错误_dto_结构按参数名归类为边界语法错误() {
+fn invalid_json_and_wrong_dto_are_boundary_syntax_errors_by_parameter_name() {
     let expected = expected_text();
     let diamond = diamond();
     let questions = diamond["questions"].to_string();
@@ -140,8 +142,9 @@ fn 非法_json_与错误_dto_结构按参数名归类为边界语法错误() {
     }
 }
 
+/// 领域错误字段原样穿透信封
 #[test]
-fn 领域错误字段原样穿透信封() {
+fn domain_error_fields_pass_through_envelope_unchanged() {
     let diamond = diamond();
     let questions_json = diamond["questions"].to_string();
     let question_id = diamond["questions"][0]["id"].as_str().unwrap();
@@ -183,8 +186,9 @@ fn 领域错误字段原样穿透信封() {
     assert!(error.get("column").is_none(), "领域错误不带行列：{error}");
 }
 
+/// 巡检信封在语法错误后仍返回已扫描绑定
 #[test]
-fn 巡检信封在语法错误后仍返回已扫描绑定() {
+fn inspection_envelope_returns_scanned_bindings_after_syntax_error() {
     let diamond = diamond();
     let questions = diamond["questions"].to_string();
     let question_id = diamond["questions"][0]["id"].as_str().unwrap();

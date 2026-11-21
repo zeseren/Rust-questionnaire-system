@@ -19,8 +19,10 @@ fn document(name: &str) -> Document {
     serde_json::from_value(support::flow_document(name)).unwrap()
 }
 
+/// 配置路径与答案身份接受标准格式并拒绝非规范_uuid且选项值仍规范化
 #[test]
-fn 配置路径与答案身份接受标准格式并拒绝非规范_uuid且选项值仍规范化() {
+fn config_paths_and_answer_ids_accept_canonical_uuids_reject_non_canonical_and_still_normalize_option_values()
+ {
     let contracts = support::input_contracts();
     let fixtures = support::flows();
     let document_name = contracts["document"].as_str().unwrap();
@@ -131,8 +133,9 @@ fn 配置路径与答案身份接受标准格式并拒绝非规范_uuid且选项
     }
 }
 
+/// 共享流程拒绝非法拓扑和未保护的分支依赖
 #[test]
-fn 共享流程拒绝非法拓扑和未保护的分支依赖() {
+fn shared_flows_reject_invalid_topologies_and_unprotected_branch_dependencies() {
     let fixtures = support::flows();
     for case in fixtures["compilation"].as_array().unwrap() {
         let mut document = support::flow_document(case["document"].as_str().unwrap());
@@ -156,8 +159,9 @@ fn 共享流程拒绝非法拓扑和未保护的分支依赖() {
     }
 }
 
+/// 流程节点数量上限允许_256_并拒绝_257
 #[test]
-fn 流程节点数量上限允许_256_并拒绝_257() {
+fn flow_node_limit_allows_256_and_rejects_257() {
     // 正向边界：节点总数恰好 256。页面必须逐题覆盖且不能为空，而文档题目上限为 100，
     // 因此 255 个页面不可达；这里用 4 个题目页面 + 251 个自动分支 + 1 个结束节点
     // 恰好填满 256 个节点，仍然固定 MAX_FLOW_NODES 的正向边界。
@@ -226,8 +230,9 @@ fn 流程节点数量上限允许_256_并拒绝_257() {
     assert_eq!(failure.question_id, None);
 }
 
+/// 共享事件序列保持路径清理回退和题型规范化一致
 #[test]
-fn 共享事件序列保持路径清理回退和题型规范化一致() {
+fn shared_event_sequences_keep_path_cleanup_fallbacks_and_question_type_normalization_consistent() {
     let fixtures = support::flows();
     for case in fixtures["sessions"].as_array().unwrap() {
         let document: Document =
@@ -266,8 +271,9 @@ fn 共享事件序列保持路径清理回退和题型规范化一致() {
     }
 }
 
+/// 最终提交样例只通过流程求值重建答卷
 #[test]
-fn 最终提交样例只通过流程求值重建答卷() {
+fn final_submission_fixtures_rebuild_responses_only_through_flow_evaluation() {
     let submissions = support::submissions();
     for case in submissions["cases"].as_array().unwrap() {
         let document: Document =
@@ -293,8 +299,9 @@ fn 最终提交样例只通过流程求值重建答卷() {
     }
 }
 
+/// 已存答案违反流程契约时返回对应错误路径
 #[test]
-fn 已存答案违反流程契约时返回对应错误路径() {
+fn stored_answers_violating_flow_contract_return_matching_error_paths() {
     let mut skipped = BTreeMap::new();
     skipped.insert(id(1), json!(id(101).to_string()));
     skipped.insert(id(3), json!("文本"));
@@ -326,8 +333,9 @@ fn 已存答案违反流程契约时返回对应错误路径() {
     );
 }
 
+/// 填写会话公开交互且不复用或改写外部输入
 #[test]
-fn 填写会话公开交互且不复用或改写外部输入() {
+fn filling_session_exposes_interactions_without_reusing_or_mutating_external_input() {
     let document = document("diamond");
     let mut session = FlowSession::new(&document).unwrap();
 
@@ -369,8 +377,9 @@ fn 填写会话公开交互且不复用或改写外部输入() {
     assert_eq!(serde_json::to_vec(&branched.snapshot()).unwrap(), before);
 }
 
+/// 校验细节进入快照_next_与提交错误并在更正后清除
 #[test]
-fn 校验细节进入快照_next_与提交错误并在更正后清除() {
+fn validation_details_enter_snapshot_next_and_submit_errors_and_clear_after_correction() {
     let mut document = self::document("diamond");
     let number = document
         .questions
@@ -501,8 +510,9 @@ fn 校验细节进入快照_next_与提交错误并在更正后清除() {
     );
 }
 
+/// 题目隐藏后不保留答案校验说明
 #[test]
-fn 题目隐藏后不保留答案校验说明() {
+fn hidden_questions_do_not_retain_answer_validation_messages() {
     let document = self::document("rollback");
     let mut session = FlowSession::new(&document).unwrap();
 
@@ -553,8 +563,9 @@ fn 题目隐藏后不保留答案校验说明() {
     assert!(!snapshot.answers.contains_key(&id(3)));
 }
 
+/// 动态必填未知按不必填重建答卷
 #[test]
-fn 动态必填未知按不必填重建答卷() {
+fn dynamic_required_unknown_rebuilds_responses_as_not_required() {
     let document = document("dynamic");
     let mut session = FlowSession::new(&document).unwrap();
     let snapshot = session.snapshot();

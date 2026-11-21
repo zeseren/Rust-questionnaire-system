@@ -5,7 +5,8 @@ import { newId } from '../../src/uuid.ts'
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
-test('newId 生成带版本与变体位的 UUIDv7，并嵌入当前毫秒时间戳', () => {
+// newId 生成带版本与变体位的 UUIDv7，并嵌入当前毫秒时间戳
+test('newId generates UUIDv7 with version and variant bits and embedded millisecond timestamp', () => {
   const before = Date.now()
   const ids = Array.from({ length: 512 }, () => newId())
   const after = Date.now()
@@ -19,7 +20,8 @@ test('newId 生成带版本与变体位的 UUIDv7，并嵌入当前毫秒时间�
   assert.equal(seen.size, ids.length, '随机位保证同一毫秒内不重复')
 })
 
-test('newId 生成的文本可被标准 UUID 解析并按 v7 读取', () => {
+// newId 生成的文本可被标准 UUID 解析并按 v7 读取
+test('newId output parses as a standard UUID and reads as v7', () => {
   const id = newId()
   const bytes = Uint8Array.from(id.replaceAll('-', '').match(/../g), (pair) =>
     Number.parseInt(pair, 16),

@@ -20,7 +20,8 @@ import {
 
 const questionTypes = ['single_choice', 'multiple_choice', 'text', 'textarea', 'number', 'rating']
 
-test('newQuestion 生成各题型的独立身份与默认约束', () => {
+// newQuestion 生成各题型的独立身份与默认约束
+test('newQuestion creates distinct identities and default constraints per question type', () => {
   const ids = []
   for (const type of questionTypes) {
     const first = newQuestion(type)
@@ -57,11 +58,13 @@ test('newQuestion 生成各题型的独立身份与默认约束', () => {
   )
 })
 
-test('newQuestion 拒绝未知题型', () => {
+// newQuestion 拒绝未知题型
+test('newQuestion rejects unknown question types', () => {
   assert.throws(() => newQuestion('unknown'), { message: '未知题型' })
 })
 
-test('duplicateQuestion 重写身份且不污染原题', () => {
+// duplicateQuestion 重写身份且不污染原题
+test('duplicateQuestion rewrites identities without mutating the original', () => {
   const source = singleChoiceQuestion()
   const document = surveyDocument([source])
   const before = structuredClone(source)
@@ -75,7 +78,8 @@ test('duplicateQuestion 重写身份且不污染原题', () => {
   assert.equal(source.options[0].label, '甲', '复制结果必须与原题完全隔离')
 })
 
-test('moveQuestion 同步流程页面与题目顺序', () => {
+// moveQuestion 同步流程页面与题目顺序
+test('moveQuestion keeps flow pages and question order in sync', () => {
   const document = readFlowDocument('diamond')
   document.logic.flow.nodes[0].question_ids.push(document.questions[1].id)
   document.logic.flow.nodes[2].question_ids = [document.questions[2].id]
@@ -98,7 +102,8 @@ test('moveQuestion 同步流程页面与题目顺序', () => {
   assert.deepEqual(compiled.variableOrder, [], '移动题目后流程仍应通过编译')
 })
 
-test('removeQuestion 清理题目、规则与流程归属', () => {
+// removeQuestion 清理题目、规则与流程归属
+test('removeQuestion cleans up questions, rules, and flow ownership', () => {
   const keep = textQuestion()
   const drop = textareaQuestion()
   const page = '00000000-0000-4000-8000-0000000000b1'
@@ -128,7 +133,8 @@ test('removeQuestion 清理题目、规则与流程归属', () => {
   assert.deepEqual(document.logic.flow.nodes[0].question_ids, [keep.id])
 })
 
-test('removeQuestion 对未知身份与无规则文档保持无副作用', () => {
+// removeQuestion 对未知身份与无规则文档保持无副作用
+test('removeQuestion is a no-op for unknown identities and rule-free documents', () => {
   const question = textQuestion()
   const document = surveyDocument([question])
   const snapshot = structuredClone(document)
@@ -138,7 +144,8 @@ test('removeQuestion 对未知身份与无规则文档保持无副作用', () =>
   assert.deepEqual(document.questions, [], '没有规则时仍删除题目本身')
 })
 
-test('duplicateQuestionRule 重写自身引用并保留上游依赖', () => {
+// duplicateQuestionRule 重写自身引用并保留上游依赖
+test('duplicateQuestionRule rewrites self references and keeps upstream dependencies', () => {
   const other = singleChoiceQuestion({ id: '00000000-0000-4000-8000-0000000000a1' })
   const source = multipleChoiceQuestion({
     id: '00000000-0000-4000-8000-0000000000a2',

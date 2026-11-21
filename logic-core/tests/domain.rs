@@ -63,8 +63,9 @@ fn node_id(node: &questionnaire_logic::domain::FlowNode) -> Uuid {
     }
 }
 
+/// 共享空白样例只通过答案校验验证必填与省略语义
 #[test]
-fn 共享空白样例只通过答案校验验证必填与省略语义() {
+fn shared_blank_fixtures_validate_required_and_omission_semantics() {
     let fixtures: Value = serde_json::from_str(include_str!(
         "../../fixtures/survey-logic/input-contracts.json"
     ))
@@ -96,8 +97,9 @@ fn 共享空白样例只通过答案校验验证必填与省略语义() {
     }
 }
 
+/// 草稿容量与长度上限成对生效
 #[test]
-fn 草稿容量与长度上限成对生效() {
+fn draft_capacity_and_length_limits_apply_together() {
     let text_questions = |count: usize| {
         (0..count)
             .map(|index| {
@@ -218,8 +220,9 @@ fn 草稿容量与长度上限成对生效() {
     assert_eq!(error.message, "最高分说明最多允许 100 个 Unicode 字符");
 }
 
+/// 规则编译失败映射为可定位的校验错误
 #[test]
-fn 规则编译失败映射为可定位的校验错误() {
+fn rule_compile_failure_maps_to_locatable_validation_error() {
     let mut doc = document(vec![question(
         1,
         true,
@@ -265,8 +268,9 @@ fn 规则编译失败映射为可定位的校验错误() {
     }
 }
 
+/// 发布态校验逐项拦截未完成内容
 #[test]
-fn 发布态校验逐项拦截未完成内容() {
+fn publish_validation_rejects_incomplete_content_item_by_item() {
     let base = || {
         document(vec![question(
             1,
@@ -460,8 +464,9 @@ fn 发布态校验逐项拦截未完成内容() {
     );
 }
 
+/// 答案顺序选项顺序和数值写法不影响规范化结果
 #[test]
-fn 答案顺序选项顺序和数值写法不影响规范化结果() {
+fn answer_order_option_order_and_number_notation_do_not_affect_normalization() {
     let doc = document(vec![
         question(
             1,
@@ -519,8 +524,9 @@ fn 答案顺序选项顺序和数值写法不影响规范化结果() {
     );
 }
 
+/// 重复和外来身份不能通过覆盖绕过校验
 #[test]
-fn 重复和外来身份不能通过覆盖绕过校验() {
+fn duplicate_and_foreign_ids_cannot_bypass_validation_by_overwrite() {
     let mut doc = document(vec![question(
         1,
         false,
@@ -546,8 +552,9 @@ fn 重复和外来身份不能通过覆盖绕过校验() {
     assert_eq!(doc.validate_draft().unwrap_err().question_id, Some(id(2)));
 }
 
+/// 可选空答案省略而零仍是有效必填答案
 #[test]
-fn 可选空答案省略而零仍是有效必填答案() {
+fn optional_empty_answers_are_omitted_while_zero_remains_valid_required_answer() {
     let doc = document(vec![
         question(
             1,
@@ -597,8 +604,9 @@ fn 可选空答案省略而零仍是有效必填答案() {
     assert_eq!(normalized[&id(1)].as_f64(), Some(0.0));
 }
 
+/// 文本按_unicode_标量计数且单行拒绝换行
 #[test]
-fn 文本按_unicode_标量计数且单行拒绝换行() {
+fn text_counts_unicode_scalars_and_single_line_rejects_newlines() {
     let doc = document(vec![question(
         1,
         true,
@@ -619,8 +627,9 @@ fn 文本按_unicode_标量计数且单行拒绝换行() {
     }
 }
 
+/// 文本题配置与答案遵守各自的字数上限
 #[test]
-fn 文本题配置与答案遵守各自的字数上限() {
+fn text_question_config_and_answer_follow_their_own_limits() {
     for (multiline, limit) in [
         (false, MAX_TEXT_ANSWER_LENGTH),
         (true, MAX_TEXTAREA_ANSWER_LENGTH),
@@ -663,8 +672,9 @@ fn 文本题配置与答案遵守各自的字数上限() {
     }
 }
 
+/// 问卷标题说明和目的遵守各自容量
 #[test]
-fn 问卷标题说明和目的遵守各自容量() {
+fn survey_title_description_and_purpose_follow_their_capacities() {
     let mut doc = document(vec![question(
         1,
         false,
@@ -684,8 +694,9 @@ fn 问卷标题说明和目的遵守各自容量() {
     assert_eq!(doc.validate_publish().unwrap_err().question_id, None);
 }
 
+/// 数值校验拒绝非整数答案并规范化数值写法
 #[test]
-fn 数值校验拒绝非整数答案并规范化数值写法() {
+fn number_validation_rejects_non_integer_answers_and_normalizes_notation() {
     let doc = document(vec![question(
         1,
         true,
@@ -709,8 +720,9 @@ fn 数值校验拒绝非整数答案并规范化数值写法() {
     }
 }
 
+/// 问卷和答案中的空字符在入库前拒绝
 #[test]
-fn 问卷和答案中的空字符在入库前拒绝() {
+fn null_characters_in_survey_and_answers_are_rejected_before_storage() {
     let mut doc = document(vec![question(
         1,
         true,
@@ -726,8 +738,9 @@ fn 问卷和答案中的空字符在入库前拒绝() {
     assert_eq!(error.question_id, Some(id(1)));
 }
 
+/// 题目拼错或多余字段不能被静默丢弃
 #[test]
-fn 题目拼错或多余字段不能被静默丢弃() {
+fn misspelled_or_extra_question_fields_are_not_silently_dropped() {
     let doc = document(vec![
         question(1, true, QuestionKind::SingleChoice { options: choices() }),
         question(
@@ -785,8 +798,9 @@ fn 题目拼错或多余字段不能被静默丢弃() {
     );
 }
 
+/// 普通文档复制后题目与选项身份全部重写
 #[test]
-fn 普通文档复制后题目与选项身份全部重写() {
+fn plain_document_copy_rewrites_all_question_and_option_ids() {
     let mut doc = document(vec![
         question(1, true, QuestionKind::Text { max_length: 20 }),
         question(2, false, QuestionKind::SingleChoice { options: choices() }),
@@ -834,8 +848,9 @@ fn 普通文档复制后题目与选项身份全部重写() {
     doc.validate_publish().unwrap();
 }
 
+/// 带规则与流程的文档复制后引用关系保持一致
 #[test]
-fn 带规则与流程的文档复制后引用关系保持一致() {
+fn document_copy_with_logic_and_flow_keeps_references_consistent() {
     let mut doc: Document = serde_json::from_value(support::flow_document("diamond")).unwrap();
 
     let old_question_ids: Vec<Uuid> = doc.questions.iter().map(|item| item.id).collect();

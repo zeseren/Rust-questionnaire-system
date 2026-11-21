@@ -26,7 +26,8 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-test('restore 成功写入用户，并让并发调用共享同一个挂起请求', async (t) => {
+// restore 成功写入用户，并让并发调用共享同一个挂起请求
+test('restore sets user and shares the same pending request between concurrent calls', async (t) => {
   const env = installBrowserEnv(t)
   let calls = 0
   const pending = deferred()
@@ -52,7 +53,8 @@ test('restore 成功写入用户，并让并发调用共享同一个挂起请求
   assert.equal(calls, 1)
 })
 
-test('/api/auth/me 返回 401 时静默置空用户且不记录恢复错误', async (t) => {
+// /api/auth/me 返回 401 时静默置空用户且不记录恢复错误
+test('/api/auth/me 401 silently clears user and records no restore error', async (t) => {
   const env = installBrowserEnv(t)
   env.fetch = async (path) => {
     assert.equal(path, '/api/auth/me')
@@ -67,7 +69,8 @@ test('/api/auth/me 返回 401 时静默置空用户且不记录恢复错误', as
   assert.equal(auth.expired, false)
 })
 
-test('restore 遇到非 401 失败时记录后端文案', async (t) => {
+// restore 遇到非 401 失败时记录后端文案
+test('restore records the backend message on non-401 failure', async (t) => {
   const env = installBrowserEnv(t)
   env.fetch = async () => errorResponse(500, { code: 'internal_error', message: '数据库暂不可用' })
   freshPinia()
@@ -78,7 +81,8 @@ test('restore 遇到非 401 失败时记录后端文案', async (t) => {
   assert.equal(auth.restoreError, '数据库暂不可用')
 })
 
-test('restore 瞬时失败后再次调用会重试并恢复用户', async (t) => {
+// restore 瞬时失败后再次调用会重试并恢复用户
+test('restore retries on a later call after a transient failure and recovers the user', async (t) => {
   const env = installBrowserEnv(t)
   let calls = 0
   env.fetch = async () => {
@@ -104,7 +108,8 @@ test('restore 瞬时失败后再次调用会重试并恢复用户', async (t) =>
   assert.equal(calls, 2)
 })
 
-test('login 成功后更新用户并清除过期与会话恢复错误', async (t) => {
+// login 成功后更新用户并清除过期与会话恢复错误
+test('successful login updates user and clears expired and restore errors', async (t) => {
   const env = installBrowserEnv(t)
   let logins = 0
   env.fetch = async (path, init) => {
@@ -128,7 +133,8 @@ test('login 成功后更新用户并清除过期与会话恢复错误', async (t
   assert.equal(auth.restoreError, '')
 })
 
-test('login 失败抛出领域错误且不清除现有会话', async (t) => {
+// login 失败抛出领域错误且不清除现有会话
+test('failed login throws a domain error and does not clear the existing session', async (t) => {
   const env = installBrowserEnv(t)
   env.fetch = async (path) => {
     if (path === '/api/auth/me') return jsonResponse(USER)
@@ -150,7 +156,8 @@ test('login 失败抛出领域错误且不清除现有会话', async (t) => {
   assert.equal(auth.expired, false)
 })
 
-test('logout 清空用户与过期标记', async (t) => {
+// logout 清空用户与过期标记
+test('logout clears the user and the expired flag', async (t) => {
   const env = installBrowserEnv(t)
   env.fetch = async (path) => {
     if (path === '/api/auth/me') return jsonResponse(USER)
@@ -167,7 +174,8 @@ test('logout 清空用户与过期标记', async (t) => {
   assert.equal(auth.expired, false)
 })
 
-test('外观偏好读取本地存储中的合法值', (t) => {
+// 外观偏好读取本地存储中的合法值
+test('appearance preference reads a valid value from local storage', (t) => {
   const env = installBrowserEnv(t)
   env.localStorage.setItem('wenxu-theme', 'dark')
   freshPinia()
@@ -177,7 +185,8 @@ test('外观偏好读取本地存储中的合法值', (t) => {
   assert.equal(appearance.dark, true)
 })
 
-test('外观偏好忽略非法值并回退到跟随系统', (t) => {
+// 外观偏好忽略非法值并回退到跟随系统
+test('appearance preference ignores invalid values and falls back to following the system', (t) => {
   const env = installBrowserEnv(t)
   env.localStorage.setItem('wenxu-theme', 'sepia')
   freshPinia()
@@ -187,7 +196,8 @@ test('外观偏好忽略非法值并回退到跟随系统', (t) => {
   assert.equal(appearance.dark, false)
 })
 
-test('本地存储读写抛错时外观偏好安全降级', (t) => {
+// 本地存储读写抛错时外观偏好安全降级
+test('appearance preference degrades safely when local storage read/write throws', (t) => {
   installBrowserEnv(t, { storageThrows: true })
   freshPinia()
 
@@ -199,7 +209,8 @@ test('本地存储读写抛错时外观偏好安全降级', (t) => {
   assert.equal(appearance.dark, true)
 })
 
-test('setTheme 同步 data-theme、theme-color 与本地存储', (t) => {
+// setTheme 同步 data-theme、theme-color 与本地存储
+test('setTheme syncs data-theme, theme-color and local storage', (t) => {
   const env = installBrowserEnv(t)
   freshPinia()
   const appearance = useAppearance()
@@ -219,7 +230,8 @@ test('setTheme 同步 data-theme、theme-color 与本地存储', (t) => {
   assert.equal(env.localStorage.getItem('wenxu-theme'), 'system')
 })
 
-test('系统深色偏好切换联动，显式浅色不受系统影响', (t) => {
+// 系统深色偏好切换联动，显式浅色不受系统影响
+test('system dark preference changes apply, while explicit light ignores the system', (t) => {
   const env = installBrowserEnv(t)
   freshPinia()
   const appearance = useAppearance()
@@ -236,7 +248,8 @@ test('系统深色偏好切换联动，显式浅色不受系统影响', (t) => {
   assert.equal(appearance.dark, false)
 })
 
-test('连续 show 重置计时器，只按最后一次提示计时', (t) => {
+// 连续 show 重置计时器，只按最后一次提示计时
+test('repeated show resets the timer and counts only from the latest toast', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   freshPinia()
   const notice = useNotice()

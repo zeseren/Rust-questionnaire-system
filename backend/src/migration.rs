@@ -145,15 +145,17 @@ fn parse_rebaseline(value: Option<&str>) -> Result<bool, DbErr> {
 mod tests {
     use super::digest_of;
 
+    /// 结构指纹忽略注释与空行
     #[test]
-    fn 结构指纹忽略注释与空行() {
+    fn schema_digest_ignores_comments_and_blank_lines() {
         let base = "CREATE TABLE a (id uuid);\nCREATE INDEX a_id ON a(id);";
         let decorated = "-- 说明\n\n  CREATE TABLE a (id uuid);  \n\n-- 另一条说明\nCREATE INDEX a_id ON a(id);\n";
         assert_eq!(digest_of(base), digest_of(decorated));
     }
 
+    /// 重新基线开关只认显式布尔值
     #[test]
-    fn 重新基线开关只认显式布尔值() {
+    fn rebaseline_switch_accepts_explicit_booleans_only() {
         use super::parse_rebaseline;
         for value in [None, Some(""), Some("0"), Some("false"), Some(" false ")] {
             assert!(parse_rebaseline(value).is_ok_and(|on| !on), "{value:?}");
@@ -165,8 +167,9 @@ mod tests {
         assert!(parse_rebaseline(Some("2")).is_err());
     }
 
+    /// 结构指纹随结构变化
     #[test]
-    fn 结构指纹随结构变化() {
+    fn schema_digest_changes_with_schema() {
         let base = "CREATE TABLE a (id uuid);";
         assert_ne!(
             digest_of(base),

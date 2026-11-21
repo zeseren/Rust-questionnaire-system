@@ -17,7 +17,8 @@ import {
 
 const describe = (operators) => operators.map((entry) => entry.value)
 
-test('conditionOperators 按题型提供可用运算符', () => {
+// conditionOperators 按题型提供可用运算符
+test('conditionOperators offers operators by question type', () => {
   const text = textQuestion()
   const cases = [
     { name: '未指定题型', question: undefined, operators: ['answered', 'not_answered'] },
@@ -47,7 +48,8 @@ test('conditionOperators 按题型提供可用运算符', () => {
   assert.deepEqual(conditionOperators(text)[2], { value: 'eq', label: '等于' })
 })
 
-test('changeConditionOperator 清空不适用的操作数并保留兼容值', () => {
+// changeConditionOperator 清空不适用的操作数并保留兼容值
+test('changeConditionOperator clears inapplicable operands and keeps compatible values', () => {
   const number = numberQuestion()
   const choice = singleChoiceQuestion()
   const text = textQuestion()
@@ -117,7 +119,8 @@ test('changeConditionOperator 清空不适用的操作数并保留兼容值', ()
   )
 })
 
-test('conditionExpression 生成四类原始节点', () => {
+// conditionExpression 生成四类原始节点
+test('conditionExpression builds four kinds of primitive nodes', () => {
   assert.deepEqual(conditionExpression({ questionId: 'q', operator: 'answered', value: '' }), {
     op: 'answered',
     question_id: 'q',
@@ -152,7 +155,8 @@ test('conditionExpression 生成四类原始节点', () => {
   )
 })
 
-test('groupExpression 保留作者选择的组合方式', () => {
+// groupExpression 保留作者选择的组合方式
+test('groupExpression preserves the author-chosen combination', () => {
   assert.deepEqual(groupExpression({ mode: 'always', conditions: [] }), {
     op: 'boolean',
     value: true,
@@ -172,7 +176,8 @@ test('groupExpression 保留作者选择的组合方式', () => {
   })
 })
 
-test('readConditionGroup 识别可无损表达的节点', () => {
+// readConditionGroup 识别可无损表达的节点
+test('readConditionGroup recognizes losslessly expressible nodes', () => {
   assert.deepEqual(readConditionGroup({ op: 'boolean', value: true }), {
     mode: 'always',
     conditions: [],
@@ -239,7 +244,8 @@ test('readConditionGroup 识别可无损表达的节点', () => {
   })
 })
 
-test('readConditionGroup 拒绝无法无损表达的节点', () => {
+// readConditionGroup 拒绝无法无损表达的节点
+test('readConditionGroup rejects nodes that cannot be expressed losslessly', () => {
   const rejected = [
     { op: 'all', expressions: [{ op: 'all', expressions: [] }] },
     { op: 'all', expressions: [{ op: 'boolean', value: true }] },

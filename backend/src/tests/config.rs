@@ -25,8 +25,9 @@ fn 拒绝原因(附加: &[(&str, &str)]) -> String {
     配置(附加).err().expect("该配置必须被拒绝").to_string()
 }
 
+/// 只设置数据库时采用开发默认值
 #[test]
-fn 只设置数据库时采用开发默认值() {
+fn database_only_config_uses_development_defaults() {
     let config = 配置(&[]).expect("仅 DATABASE_URL 即可启动");
     assert_eq!(config.database_url, 数据库);
     assert_eq!(
@@ -42,16 +43,18 @@ fn 只设置数据库时采用开发默认值() {
     assert_eq!(config.submissions_per_minute, 600);
 }
 
+/// 缺少数据库地址时给出配置项名称
 #[test]
-fn 缺少数据库地址时给出配置项名称() {
+fn missing_database_url_names_the_config_key() {
     let error = Config::from_lookup(查找(&[]))
         .err()
         .expect("必须要求 DATABASE_URL");
     assert_eq!(error.to_string(), "请设置 DATABASE_URL");
 }
 
+/// 数据库连接串必须是合法的_postgresql_url
 #[test]
-fn 数据库连接串必须是合法的_postgresql_url() {
+fn database_url_must_be_valid_postgresql_url() {
     assert_eq!(
         拒绝原因(&[("DATABASE_URL", "这不是 URL")]),
         "DATABASE_URL 格式错误"
@@ -68,8 +71,9 @@ fn 数据库连接串必须是合法的_postgresql_url() {
     );
 }
 
+/// 公开来源必须是裸_origin
 #[test]
-fn 公开来源必须是裸_origin() {
+fn public_origin_must_be_bare_origin() {
     for 来源 in [
         "http://localhost:3000/app",
         "http://localhost:3000/?x=1",
@@ -89,8 +93,9 @@ fn 公开来源必须是裸_origin() {
     );
 }
 
+/// 非本机的_http_来源被拒绝而本机地址允许
 #[test]
-fn 非本机的_http_来源被拒绝而本机地址允许() {
+fn non_local_http_origin_rejected_while_local_allowed() {
     assert_eq!(
         拒绝原因(&[("PUBLIC_ORIGIN", "http://example.com")]),
         "非本机部署必须使用 HTTPS"
@@ -132,8 +137,9 @@ fn 非本机的_http_来源被拒绝而本机地址允许() {
     );
 }
 
+/// https_与_cookie_安全标志必须一致
 #[test]
-fn https_与_cookie_安全标志必须一致() {
+fn https_and_cookie_secure_flag_must_agree() {
     let 安全 = 配置(&[
         ("PUBLIC_ORIGIN", "https://survey.example.com"),
         ("COOKIE_SECURE", "true"),
@@ -156,8 +162,9 @@ fn https_与_cookie_安全标志必须一致() {
     );
 }
 
+/// 监听地址必须是_ip_与端口
 #[test]
-fn 监听地址必须是_ip_与端口() {
+fn listen_address_must_be_ip_and_port() {
     assert_eq!(
         拒绝原因(&[("LISTEN_ADDR", "localhost:3000")]),
         "LISTEN_ADDR 必须是 IP:端口"
@@ -174,8 +181,9 @@ fn 监听地址必须是_ip_与端口() {
     );
 }
 
+/// 会话有效期与限流次数必须为正且在允许区间内
 #[test]
-fn 会话有效期与限流次数必须为正且在允许区间内() {
+fn session_ttl_and_rate_limits_must_be_positive_and_within_range() {
     for (值, 期望) in [("1", 1_i64), ("2592000", 2_592_000)] {
         assert_eq!(
             配置(&[("SESSION_TTL_SECONDS", 值)])
@@ -217,8 +225,9 @@ fn 会话有效期与限流次数必须为正且在允许区间内() {
     }
 }
 
+/// 不可解码的环境变量被视为非法文本
 #[test]
-fn 不可解码的环境变量被视为非法文本() {
+fn undecodable_environment_variable_treated_as_invalid_text() {
     let error = Config::from_lookup(move |名称| match 名称 {
         "DATABASE_URL" => Ok(数据库.to_owned()),
         _ => Err(env::VarError::NotUnicode("非 UTF-8 值".into())),

@@ -23,7 +23,8 @@ function deferred() {
 /** 组件外调用 `useResource` 会触发 Vue 的 “no active component instance” 告警，与断言无关。 */
 const silenceVueWarnings = (t) => t.mock.method(console, 'warn', () => {})
 
-test('创建即自动加载，成功时写入数据并结束加载态', async (t) => {
+// 创建即自动加载，成功时写入数据并结束加载态
+test('loads automatically on create and writes data then ends loading on success', async (t) => {
   silenceVueWarnings(t)
   const load = deferred()
   const resource = useResource(() => load.promise)
@@ -42,7 +43,8 @@ test('创建即自动加载，成功时写入数据并结束加载态', async (t
   assert.equal(resource.loading.value, false)
 })
 
-test('加载失败提取 Error.message 并清空旧数据与加载态', async (t) => {
+// 加载失败提取 Error.message 并清空旧数据与加载态
+test('load failure extracts Error.message and clears old data and loading state', async (t) => {
   silenceVueWarnings(t)
   const resource = useResource(async () => {
     throw new Error('接口读取失败')
@@ -54,7 +56,8 @@ test('加载失败提取 Error.message 并清空旧数据与加载态', async (t
   assert.equal(resource.loading.value, false)
 })
 
-test('刷新成功后清空上一次的错误文案', async (t) => {
+// 刷新成功后清空上一次的错误文案
+test('successful refresh clears the previous error message', async (t) => {
   silenceVueWarnings(t)
   let attempt = 0
   const resource = useResource(async () => {
@@ -74,7 +77,8 @@ test('刷新成功后清空上一次的错误文案', async (t) => {
   assert.equal(resource.loading.value, false)
 })
 
-test('慢请求后完成的过期成功结果不会覆盖最新数据', async (t) => {
+// 慢请求后完成的过期成功结果不会覆盖最新数据
+test('stale success completing after a slow request does not overwrite the latest data', async (t) => {
   silenceVueWarnings(t)
   const slow = deferred()
   const fast = deferred()
@@ -102,7 +106,8 @@ test('慢请求后完成的过期成功结果不会覆盖最新数据', async (t
   assert.equal(resource.error.value, '')
 })
 
-test('过期请求的失败不会写入错误或提前结束加载态', async (t) => {
+// 过期请求的失败不会写入错误或提前结束加载态
+test('stale request failure writes no error and does not end loading early', async (t) => {
   silenceVueWarnings(t)
   const slow = deferred()
   const latest = deferred()
@@ -124,7 +129,8 @@ test('过期请求的失败不会写入错误或提前结束加载态', async (t
   assert.equal(resource.loading.value, false)
 })
 
-test('响应式来源变化会重新加载并采用新来源的结果', async (t) => {
+// 响应式来源变化会重新加载并采用新来源的结果
+test('reactive source change reloads and adopts the new source result', async (t) => {
   silenceVueWarnings(t)
   const status = ref('全部')
   const requested = []
@@ -144,7 +150,8 @@ test('响应式来源变化会重新加载并采用新来源的结果', async (t
   assert.equal(resource.error.value, '')
 })
 
-test('组件卸载会作废挂起请求，卸载后完成的数据不再写入', async () => {
+// 组件卸载会作废挂起请求，卸载后完成的数据不再写入
+test('unmount invalidates pending requests and data completing afterwards is not written', async () => {
   const load = deferred()
   let resource
   const Root = defineComponent({

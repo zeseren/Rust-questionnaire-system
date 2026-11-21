@@ -30,8 +30,9 @@ fn 数值(answer: Result<Option<Value>, ValidationError>) -> f64 {
         .expect("规范化答案应为 JSON 数字")
 }
 
+/// 长度检查按_unicode_标量计数并携带题目定位
 #[test]
-fn 长度检查按_unicode_标量计数并携带题目定位() {
+fn length_check_counts_unicode_scalars_and_reports_question_location() {
     assert!(
         check_length("abcde", 5, None, "文本").is_ok(),
         "精确等于上限应通过"
@@ -59,8 +60,9 @@ fn 长度检查按_unicode_标量计数并携带题目定位() {
     assert_eq!(错误.message, "调查说明不能包含 U+0000 空字符");
 }
 
+/// 草稿校验拒绝非有限数值边界
 #[test]
-fn 草稿校验拒绝非有限数值边界() {
+fn draft_validation_rejects_non_finite_numeric_bounds() {
     for (min, max, 说明) in [
         (Some(f64::INFINITY), None, "正无穷下界"),
         (Some(f64::NEG_INFINITY), None, "负无穷下界"),
@@ -79,8 +81,9 @@ fn 草稿校验拒绝非有限数值边界() {
     );
 }
 
+/// 单选答案必须是本题选项的标准_uuid
 #[test]
-fn 单选答案必须是本题选项的标准_uuid() {
+fn single_choice_answer_must_be_standard_uuid_of_own_option() {
     let 题 = 题目(
         1,
         QuestionKind::SingleChoice {
@@ -120,8 +123,9 @@ fn 单选答案必须是本题选项的标准_uuid() {
     }
 }
 
+/// 多选答案校验数量归属重复并排序归一
 #[test]
-fn 多选答案校验数量归属重复并排序归一() {
+fn multi_choice_answer_validates_count_ownership_duplicates_and_sorts() {
     let 题 = 题目(
         1,
         QuestionKind::MultipleChoice {
@@ -174,8 +178,9 @@ fn 多选答案校验数量归属重复并排序归一() {
     assert_eq!(非法身份.message, "选项 ID 必须是合法的 UUID 字符串");
 }
 
+/// 单行文本拒绝七种换行并保留非空白原文
 #[test]
-fn 单行文本拒绝七种换行并保留非空白原文() {
+fn single_line_text_rejects_seven_line_breaks_and_keeps_non_blank_text() {
     let 题 = 题目(1, QuestionKind::Text { max_length: 5 });
     assert_eq!(题.normalize_answer(Some(&json!("   "))).unwrap(), None);
     assert_eq!(
@@ -208,8 +213,9 @@ fn 单行文本拒绝七种换行并保留非空白原文() {
     assert_eq!(超长.message, "文本答案最多允许 5 个 Unicode 字符");
 }
 
+/// 多行文本允许换行但拒绝空字符
 #[test]
-fn 多行文本允许换行但拒绝空字符() {
+fn multi_line_text_allows_line_breaks_but_rejects_null_characters() {
     let 题 = 题目(1, QuestionKind::Textarea { max_length: 10 });
     assert_eq!(
         题.normalize_answer(Some(&json!("第一行\n第二行"))).unwrap(),
@@ -224,8 +230,9 @@ fn 多行文本允许换行但拒绝空字符() {
     );
 }
 
+/// 数字答案校验有限性整数性闭区间与负零
 #[test]
-fn 数字答案校验有限性整数性闭区间与负零() {
+fn number_answer_validates_finiteness_integer_closed_range_and_negative_zero() {
     let 整数题 = 数字题(1, true, None, None);
     assert_eq!(数值(整数题.normalize_answer(Some(&json!(2)))), 2.0);
     assert_eq!(
@@ -280,8 +287,9 @@ fn 数字答案校验有限性整数性闭区间与负零() {
     assert_eq!(负零.to_bits(), 0.0_f64.to_bits(), "负零归一为正零");
 }
 
+/// 评分答案必须是区间内整数
 #[test]
-fn 评分答案必须是区间内整数() {
+fn rating_answer_must_be_integer_within_range() {
     let 题 = 题目(
         1,
         QuestionKind::Rating {

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { isBlank, trimWhitespace } from '../../src/value-contract.ts'
 
-test('isBlank 与 trimWhitespace 遵循跨端空白规则', () => {
+// isBlank 与 trimWhitespace 遵循跨端空白规则
+test('isBlank and trimWhitespace follow cross-platform whitespace rules', () => {
   for (const [value, blank, trimmed] of [
     ['', true, ''],
     ['\u0085', true, ''],

@@ -34,8 +34,9 @@ fn documents() -> Value {
     support::documents()
 }
 
+/// 表达式共享样例全部保持编译与三值求值语义
 #[test]
-fn 表达式共享样例全部保持编译与三值求值语义() {
+fn expression_shared_fixtures_preserve_compilation_and_three_valued_evaluation() {
     let fixtures = fixtures();
     for case in fixtures.cases {
         let answers: BTreeMap<Uuid, Value> = serde_json::from_str(&case.answers_json).unwrap();
@@ -57,8 +58,9 @@ fn 表达式共享样例全部保持编译与三值求值语义() {
     }
 }
 
+/// 文档共享样例保持变量排序和间接依赖规则一致
 #[test]
-fn 文档共享样例保持变量排序和间接依赖规则一致() {
+fn document_shared_fixtures_keep_variable_ordering_and_indirect_dependency_rules_consistent() {
     let fixtures = fixtures();
     let documents = documents();
     let base_logic = documents["base_logic"]
@@ -112,8 +114,9 @@ fn normalize_expected_numbers(value: &mut Value) {
     }
 }
 
+/// 深度和节点上限在编译之前拦截且允许边界
 #[test]
-fn 深度和节点上限在编译之前拦截且允许边界() {
+fn depth_and_node_limits_are_enforced_before_compilation_and_allow_boundaries() {
     for (depth, count, allowed) in [
         (16, 1, true),
         (17, 1, false),
@@ -141,8 +144,9 @@ fn 深度和节点上限在编译之前拦截且允许边界() {
     }
 }
 
+/// 版本号只接受整数_1
 #[test]
-fn 版本号只接受整数_1() {
+fn version_accepts_only_integer_one() {
     let cases = [
         (
             "表达式 DSL 版本过新",
@@ -216,8 +220,9 @@ fn 版本号只接受整数_1() {
     );
 }
 
+/// 编译结果公开类型依赖与求值契约
 #[test]
-fn 编译结果公开类型依赖与求值契约() {
+fn compiled_result_exposes_types_dependencies_and_evaluation_contract() {
     let fixtures = fixtures();
     let text_question = fixtures.questions[2].id;
     let number_question = fixtures.questions[3].id;
@@ -275,8 +280,9 @@ fn 编译结果公开类型依赖与求值契约() {
     );
 }
 
+/// 空规则包编译仍拦截重复或全零的题目与选项身份
 #[test]
-fn 空规则包编译仍拦截重复或全零的题目与选项身份() {
+fn empty_rule_pack_compilation_still_rejects_duplicate_or_all_zero_question_and_option_ids() {
     // 空规则包同样绑定题目身份，不能因没有表达式而跳过题目/选项唯一性检查。
     let empty: DocumentLogic = serde_json::from_value(json!({
         "dsl_version": 1,
@@ -329,8 +335,9 @@ fn 空规则包编译仍拦截重复或全零的题目与选项身份() {
     }
 }
 
+/// 三元条件短路未命中分支且负号保持有限数值契约
 #[test]
-fn 三元条件短路未命中分支且负号保持有限数值契约() {
+fn ternary_short_circuits_unselected_branch_and_negation_keeps_finite_number_contract() {
     let fixtures = fixtures();
     let questions = &fixtures.questions;
     let base = |expression: Value| {
@@ -405,8 +412,9 @@ fn 三元条件短路未命中分支且负号保持有限数值契约() {
     assert_eq!(error.code, LogicErrorCode::TypeMismatch);
 }
 
+/// 文本函数与单选相等比较遵循静态类型
 #[test]
-fn 文本函数与单选相等比较遵循静态类型() {
+fn text_functions_and_single_choice_equality_follow_static_types() {
     let fixtures = fixtures();
     let questions = &fixtures.questions;
     let base = |expression: Value| {
@@ -496,8 +504,9 @@ fn 文本函数与单选相等比较遵循静态类型() {
     );
 }
 
+/// 选项字面量匹配与舍入算子遵守跨模块契约
 #[test]
-fn 选项字面量匹配与舍入算子遵守跨模块契约() {
+fn option_literal_matching_and_rounding_operators_follow_cross_module_contract() {
     let fixtures = fixtures();
     let base = |expression: Value| {
         json!({

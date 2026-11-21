@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { copy } from '../../src/json.ts'
 
-test('copy 深拷贝嵌套对象与数组', () => {
+// copy 深拷贝嵌套对象与数组
+test('copy deep-clones nested objects and arrays', () => {
   const original = { list: [1, { deep: 'x' }], nested: { a: 1 } }
   const cloned = copy(original)
   assert.deepEqual(cloned, original)

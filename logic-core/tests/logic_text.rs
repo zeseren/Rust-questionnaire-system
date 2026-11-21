@@ -66,8 +66,9 @@ fn format_case_logic(item: &Value, fixture: &Value, flows: &Value) -> Value {
     Value::Object(logic)
 }
 
+/// 文本共享样例保留身份优先级并定位语法与语义错误
 #[test]
-fn 文本共享样例保留身份优先级并定位语法与语义错误() {
+fn text_shared_fixtures_preserve_id_precedence_and_locate_syntax_and_semantic_errors() {
     let fixture = support::texts();
     let document = document();
     for item in fixture["cases"].as_array().unwrap() {
@@ -120,8 +121,9 @@ fn 文本共享样例保留身份优先级并定位语法与语义错误() {
     }
 }
 
+/// 文本文法负例统一拒绝并保留行列位置
 #[test]
-fn 文本文法负例统一拒绝并保留行列位置() {
+fn text_grammar_negative_cases_are_uniformly_rejected_with_line_and_column() {
     let cases = [
         ("缺少头部结束符", "dsl 1 semantics 1", 1),
         ("未知结束结果", "dsl 1 semantics 1;\nend n1 = done;", 2),
@@ -154,8 +156,9 @@ fn 文本文法负例统一拒绝并保留行列位置() {
     }
 }
 
+/// 内置函数检查参数元数与引用种类
 #[test]
-fn 内置函数检查参数元数与引用种类() {
+fn builtin_functions_check_argument_arity_and_reference_kinds() {
     let prefix = "dsl 1 semantics 1; bind variable v = \"00000000-0000-4000-8000-000000002001\"; let v: number = ";
     for expression in [
         "number(1)",
@@ -205,8 +208,9 @@ fn parse_error(source: &str, questions: &[Question]) -> LogicTextError {
     parse_program(source, questions).unwrap_err()
 }
 
+/// 文本与表达式预算允许边界并拒绝长链和混合嵌套超限
 #[test]
-fn 文本与表达式预算允许边界并拒绝长链和混合嵌套超限() {
+fn text_and_expression_budgets_allow_boundaries_and_reject_long_chains_and_mixed_nesting() {
     let prefix = "dsl 1 semantics 1; bind variable v = \"00000000-0000-4000-8000-000000002001\"; let v: boolean = ";
     for expression in [
         format!("{}true{}", "(".repeat(63), ")".repeat(63)),
@@ -231,8 +235,9 @@ fn 文本与表达式预算允许边界并拒绝长链和混合嵌套超限() {
     );
 }
 
+/// 一元负号与三元条件解析为统一表达式节点
 #[test]
-fn 一元负号与三元条件解析为统一表达式节点() {
+fn unary_negation_and_ternary_parse_into_unified_expression_nodes() {
     let document = document();
     let prefix = concat!(
         "dsl 1 semantics 1;\n",
@@ -285,8 +290,9 @@ fn 一元负号与三元条件解析为统一表达式节点() {
     );
 }
 
+/// 保留关键字不能用作别名或引用名
 #[test]
-fn 保留关键字不能用作别名或引用名() {
+fn reserved_keywords_cannot_be_used_as_aliases_or_reference_names() {
     let document = document();
     let header = "dsl 1 semantics 1;\n";
     for alias in [
@@ -363,8 +369,9 @@ fn 保留关键字不能用作别名或引用名() {
     );
 }
 
+/// 巡检接口在语法错误后仍返回已扫描绑定
 #[test]
-fn 巡检接口在语法错误后仍返回已扫描绑定() {
+fn inspect_api_still_returns_scanned_bindings_after_syntax_error() {
     let document = document();
     let source = concat!(
         "dsl 1 semantics 1;\n",
@@ -388,8 +395,9 @@ fn 巡检接口在语法错误后仍返回已扫描绑定() {
     );
 }
 
+/// 共享格式化样例逐字节一致且二次解析与格式化幂等
 #[test]
-fn 共享格式化样例逐字节一致且二次解析与格式化幂等() {
+fn shared_format_fixtures_match_byte_for_byte_and_reparse_and_format_idempotently() {
     // 与前端同读 texts.json 的 format_cases；expected 为 TS 真实输出的字节快照。
     let fixture = support::texts();
     let flows = support::flows();
@@ -418,8 +426,9 @@ fn 共享格式化样例逐字节一致且二次解析与格式化幂等() {
     }
 }
 
+/// 三元条件作为二元操作数时显式闭合并往返一致
 #[test]
-fn 三元条件作为二元操作数时显式闭合并往返一致() {
+fn ternary_as_binary_operand_closes_explicitly_and_round_trips() {
     // 左右操作数都必须是三元条件：`end` 必须阻止 else 分支吞掉相邻运算符。
     let logic: DocumentLogic = serde_json::from_value(json!({
         "dsl_version": 1,
@@ -491,8 +500,9 @@ fn 三元条件作为二元操作数时显式闭合并往返一致() {
     assert_eq!(parse_logic_text(&formatted, &[]).unwrap(), logic);
 }
 
+/// 并列三元条件不触发解析嵌套预算且往返一致
 #[test]
-fn 并列三元条件不触发解析嵌套预算且往返一致() {
+fn adjacent_ternaries_do_not_trigger_parse_nesting_budget_and_round_trip() {
     // 63 个并列 if 只占 `all` 的参数层，不得按语句累加成 63 层嵌套。
     let expressions: Vec<Value> = (0..63)
         .map(|_| {
@@ -519,8 +529,9 @@ fn 并列三元条件不触发解析嵌套预算且往返一致() {
     assert_eq!(parse_logic_text(&formatted, &[]).unwrap(), logic);
 }
 
+/// 绑定校验按源码顺序定位到具体语句
 #[test]
-fn 绑定校验按源码顺序定位到具体语句() {
+fn binding_validation_locates_specific_statement_in_source_order() {
     // 第 2 行绑定了不存在的题目，错误必须定位到该 bind 行而不是头部。
     let source = concat!(
         "dsl 1 semantics 1;\n",
@@ -534,8 +545,9 @@ fn 绑定校验按源码顺序定位到具体语句() {
     assert_eq!(inspect_logic_text(source, &[]).error_offset, Some(offset));
 }
 
+/// 数字字面量原文超过字节上限时拒绝
 #[test]
-fn 数字字面量原文超过字节上限时拒绝() {
+fn numeric_literal_sources_exceeding_byte_limit_are_rejected() {
     // 数字字面量原文最多 64 字节，边界值仍可编译，超长原文按无效数字拒绝。
     let declaration = |literal: &str| {
         format!(
@@ -554,8 +566,9 @@ fn 数字字面量原文超过字节上限时拒绝() {
     assert_eq!(error.line, 3);
 }
 
+/// 题目与选项身份撞车时拒绝格式化
 #[test]
-fn 题目与选项身份撞车时拒绝格式化() {
+fn formatting_is_rejected_when_question_and_option_ids_collide() {
     // 第二个题目的身份与第一个题目的选项相同，生成别名时不得静默覆盖。
     let questions: Vec<Question> = serde_json::from_value(json!([
         {
@@ -587,8 +600,9 @@ fn 题目与选项身份撞车时拒绝格式化() {
     assert_eq!(error.path, "$");
 }
 
+/// 长逻辑链扁平化为单层all
 #[test]
-fn 长逻辑链扁平化为单层all() {
+fn long_logic_chain_flattens_into_single_all_node() {
     let prefix = "dsl 1 semantics 1; bind variable v = \"00000000-0000-4000-8000-000000007001\"; let v: boolean = ";
     let chain = (0..40)
         .map(|index| format!("number(\"{index}\") >= number(\"0\")"))
@@ -610,8 +624,9 @@ fn 长逻辑链扁平化为单层all() {
     assert_eq!(logic.variables[0].expression["expressions"][0]["op"], "all");
 }
 
+/// 三元条件显式闭合后可与相邻运算符组合
 #[test]
-fn 三元条件显式闭合后可与相邻运算符组合() {
+fn explicitly_closed_ternary_composes_with_adjacent_operators() {
     let prefix = "dsl 1 semantics 1; bind variable v = \"00000000-0000-4000-8000-000000007002\"; let v: number = ";
     let logic = parse_program(&format!("{prefix}if true then 1 else 2 end + 3;"), &[]).unwrap();
     assert_eq!(
@@ -633,8 +648,9 @@ fn 三元条件显式闭合后可与相邻运算符组合() {
     assert_eq!(error.error.code, LogicErrorCode::InvalidSyntax);
 }
 
+/// 自定义别名经格式化保留并参与往返
 #[test]
-fn 自定义别名经格式化保留并参与往返() {
+fn custom_aliases_survive_formatting_and_round_trip() {
     let document = document();
     let logic: DocumentLogic = serde_json::from_value(json!({
         "dsl_version": 1,
@@ -673,8 +689,9 @@ fn 自定义别名经格式化保留并参与往返() {
     );
 }
 
+/// 默认名与自定义别名冲突时追加后缀
 #[test]
-fn 默认名与自定义别名冲突时追加后缀() {
+fn suffix_is_appended_when_default_name_conflicts_with_custom_alias() {
     let document = document();
     let logic: DocumentLogic = serde_json::from_value(json!({
         "dsl_version": 1,
@@ -712,8 +729,9 @@ fn 默认名与自定义别名冲突时追加后缀() {
     );
 }
 
+/// 空逻辑组即使经运算符扁平化也拒绝
 #[test]
-fn 空逻辑组即使经运算符扁平化也拒绝() {
+fn empty_logic_group_is_rejected_even_after_operator_flattening() {
     let prefix = "dsl 1 semantics 1; bind variable v = \"00000000-0000-4000-8000-000000007003\"; let v: boolean = ";
     for body in ["all()", "all() && true", "any() || false"] {
         let error = parse_error(&format!("{prefix}{body};"), &[]);
@@ -721,8 +739,9 @@ fn 空逻辑组即使经运算符扁平化也拒绝() {
     }
 }
 
+/// 未闭合三元条件在语句结束后不累积嵌套预算
 #[test]
-fn 未闭合三元条件在语句结束后不累积嵌套预算() {
+fn unclosed_ternary_does_not_accumulate_nesting_budget_after_statement_end() {
     // 每条语句缺少 `end` 是语法错误，应定位到首条语句，而不是被累积成预算超限。
     let statement = "validate q = if true then true else false;\n";
     let source = format!(
@@ -734,8 +753,9 @@ fn 未闭合三元条件在语句结束后不累积嵌套预算() {
     assert_eq!(error.line, 3);
 }
 
+/// 解析只为偏离默认名的绑定保存别名
 #[test]
-fn 解析只为偏离默认名的绑定保存别名() {
+fn parser_saves_aliases_only_for_bindings_deviating_from_default_names() {
     let document = document();
     let source = concat!(
         "dsl 1 semantics 1;\n",
@@ -765,8 +785,9 @@ fn 解析只为偏离默认名的绑定保存别名() {
     assert_eq!(logic.aliases, expected, "默认名不应写入别名表");
 }
 
+/// 选项别名在表达式位置生成option节点并参与往返
 #[test]
-fn 选项别名在表达式位置生成option节点并参与往返() {
+fn option_aliases_generate_option_nodes_in_expression_position_and_round_trip() {
     let document = document();
     let source = concat!(
         "dsl 1 semantics 1;\n",
@@ -798,8 +819,9 @@ fn 选项别名在表达式位置生成option节点并参与往返() {
     assert_eq!(error.error.code, LogicErrorCode::InvalidReference);
 }
 
+/// 匹配与取整函数文本往返
 #[test]
-fn 匹配与取整函数文本往返() {
+fn match_and_rounding_functions_round_trip_in_text() {
     let document = document();
     let logic: DocumentLogic = serde_json::from_value(json!({
         "dsl_version": 1,

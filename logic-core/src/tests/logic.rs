@@ -28,15 +28,17 @@ fn 编译失败(expression: &Value, questions: &[Question]) -> crate::logic::Log
     .expect_err("测试表达式应编译失败")
 }
 
+/// 值类型名称拒绝未知名称
 #[test]
-fn 值类型名称拒绝未知名称() {
+fn value_type_name_rejects_unknown_names() {
     for 未知 in ["", "bool", "Choice", "choices ", "number2"] {
         assert_eq!(LogicValueType::from_name(未知), None, "{未知}");
     }
 }
 
+/// 错误路径重定位只替换表达式前缀
 #[test]
-fn 错误路径重定位只替换表达式前缀() {
+fn error_path_relocation_replaces_only_expression_prefix() {
     let 重定位 = error(
         LogicErrorCode::InvalidSyntax,
         "$.expression.left",
@@ -50,8 +52,9 @@ fn 错误路径重定位只替换表达式前缀() {
     assert_eq!(根.path, "$");
 }
 
+/// 数字常量只接受无空白_json_数字
 #[test]
-fn 数字常量只接受无空白_json_数字() {
+fn numeric_constant_accepts_only_whitespace_free_json_number() {
     for (原文, 期望) in [
         ("0", 0.0),
         ("1", 1.0),
@@ -114,8 +117,9 @@ fn 选择绑定() -> BTreeMap<Uuid, Binding> {
     .collect()
 }
 
+/// 选择器校验题型选项归属与重复
 #[test]
-fn 选择器校验题型选项归属与重复() {
+fn selector_validates_question_kind_option_ownership_and_duplicates() {
     let bindings = 选择绑定();
     let 路径 = "$.expression";
 
@@ -203,8 +207,9 @@ fn 选择器校验题型选项归属与重复() {
     );
 }
 
+/// 答案读取拒绝越界与超量选项
 #[test]
-fn 答案读取拒绝越界与超量选项() {
+fn answer_read_rejects_out_of_range_and_excess_options() {
     let 单选 = Binding {
         value_type: LogicValueType::Choice,
         options: vec![id(101)],
@@ -230,8 +235,9 @@ fn 答案读取拒绝越界与超量选项() {
     assert_eq!(超量.code, LogicErrorCode::InvalidAnswer);
 }
 
+/// 存在性守护决定必然读取的题目集合
 #[test]
-fn 存在性守护决定必然读取的题目集合() {
+fn existence_guard_determines_questions_that_must_be_read() {
     let questions = [数字题(1, false, None, None), 数字题(2, false, None, None)];
     let 答 = |question: u128| json!({"op": "answered", "question_id": id(question).to_string()});
     let 比较 = |question: u128| {
@@ -326,8 +332,9 @@ fn 文本题(value: u128) -> Question {
     }
 }
 
+/// 选项字面量绑定所属题目并拒绝跨题比较
 #[test]
-fn 选项字面量绑定所属题目并拒绝跨题比较() {
+fn option_literal_binds_to_own_question_and_rejects_cross_question_comparison() {
     let questions = [单选题(1, &[101, 102]), 单选题(2, &[201, 202])];
     let 选项101 = json!({"op": "option", "option_id": id(101).to_string()});
 
@@ -403,8 +410,9 @@ fn 选项字面量绑定所属题目并拒绝跨题比较() {
     }
 }
 
+/// 正则匹配要求整串且模式在编译期验证
 #[test]
-fn 正则匹配要求整串且模式在编译期验证() {
+fn regex_match_requires_whole_string_and_pattern_is_validated_at_compile_time() {
     let questions = [文本题(3), 数字题(4, false, None, None)];
     let 文本 = || json!({"op": "answer", "question_id": id(3).to_string()});
 
@@ -466,8 +474,9 @@ fn 正则匹配要求整串且模式在编译期验证() {
     assert_eq!(不平衡.code, LogicErrorCode::InvalidSyntax);
 }
 
+/// 舍入算子按十进制缩放并校验位数
 #[test]
-fn 舍入算子按十进制缩放并校验位数() {
+fn rounding_operator_scales_by_decimal_and_validates_digits() {
     let questions = [数字题(4, false, None, None)];
     let 数字 = |raw: &str| json!({"op": "number", "value": raw});
     let 求值 = |expression: Value| {

@@ -9,7 +9,8 @@ import { insertFlowNode } from '../../src/flow-tools.ts'
 import { createSurveyTemplate } from '../../src/survey-templates.ts'
 import { formatLogicText, parseLogicText } from '../../src/wasm/index.ts'
 
-test('从模板到可填写问卷的完整编纂闭环', () => {
+// 从模板到可填写问卷的完整编纂闭环
+test('full authoring loop from template to fillable survey', () => {
   const document = createSurveyTemplate('routing')
   const [used, experience, , interest] = document.questions
   const flow = document.logic.flow

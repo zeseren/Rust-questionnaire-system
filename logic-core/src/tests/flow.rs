@@ -96,8 +96,9 @@ fn 编译流程(questions: &[Question], logic: &DocumentLogic) -> CompiledFlow {
         .expect("配置了流程时必须产出编译结果")
 }
 
+/// 流程结构拒绝空节点非首页与空页面
 #[test]
-fn 流程结构拒绝空节点非首页与空页面() {
+fn flow_structure_rejects_empty_nodes_non_first_pages_and_empty_pages() {
     let questions = [单选题(1, &[101])];
 
     let 空节点 = FlowDefinition {
@@ -129,8 +130,9 @@ fn 流程结构拒绝空节点非首页与空页面() {
     assert_eq!(错误.question_id, None);
 }
 
+/// 分支数量与常量条件遵守边界
 #[test]
-fn 分支数量与常量条件遵守边界() {
+fn branch_count_and_constant_condition_respect_bounds() {
     let questions = [单选题(1, &[101])];
     let 守 = || json!({"op": "answered", "question_id": id(1).to_string()});
     let 真 = || json!({"op": "boolean", "value": true});
@@ -191,8 +193,9 @@ fn 分支数量与常量条件遵守边界() {
     );
 }
 
+/// 改答只接受当前页面的可见题目
 #[test]
-fn 改答只接受当前页面的可见题目() {
+fn answer_change_accepts_only_visible_questions_on_current_page() {
     // 当前页被显示规则隐藏的题目同样不能改答。
     let 隐藏问卷 = 文档(
         vec![单选题(1, &[101, 102]), 单选题(2, &[103, 104])],
@@ -221,8 +224,9 @@ fn 改答只接受当前页面的可见题目() {
     assert_eq!(错误.path, "$.event");
 }
 
+/// 动态必填未知视为不必填且不阻断填写
 #[test]
-fn 动态必填未知视为不必填且不阻断填写() {
+fn unknown_dynamic_required_is_treated_as_optional_and_does_not_block_filling() {
     let questions = vec![单选题(1, &[101, 102]), 文本题(2)];
     let logic = 逻辑带规则(
         FlowDefinition {
@@ -283,8 +287,9 @@ fn 动态必填未知视为不必填且不阻断填写() {
     assert!(触发.snapshot().required.contains(&id(2)));
 }
 
+/// 流程续写身份返回旧新节点映射
 #[test]
-fn 流程续写身份返回旧新节点映射() {
+fn flow_continuation_identity_returns_old_to_new_node_mapping() {
     let mut flow = FlowDefinition {
         entry: id(201),
         nodes: vec![页面(201, &[1], 202), 结束(202)],

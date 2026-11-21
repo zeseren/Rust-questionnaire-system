@@ -18,7 +18,8 @@ const logicFailure = (code, questionId) => (error) => {
   return true
 }
 
-test('评分原文转成原生数字，非法整数交给引擎报错', () => {
+// 评分原文转成原生数字，非法整数交给引擎报错
+test('rating raw text converts to native numbers and invalid integers are reported by the engine', () => {
   const question = ratingQuestion({ required: false })
   const form = new FlowInputs(surveyDocument([question]))
   form.change(question.id, '4')
@@ -28,7 +29,8 @@ test('评分原文转成原生数字，非法整数交给引擎报错', () => {
   assert.equal(form.snapshot().errors[question.id], 'invalid_answer')
 })
 
-test('空串转成缺失值，非法数字原文透传给引擎', () => {
+// 空串转成缺失值，非法数字原文透传给引擎
+test('empty string becomes missing value and invalid numeric raw text passes through to the engine', () => {
   const question = numberQuestion({ required: false })
   const form = new FlowInputs(surveyDocument([question]))
   form.change(question.id, '   ')
@@ -40,7 +42,8 @@ test('空串转成缺失值，非法数字原文透传给引擎', () => {
   assert.equal(form.snapshot().errors[question.id], 'invalid_answer')
 })
 
-test('数字过渡前缀暂不判错，失焦结算后才显示校验结果', () => {
+// 数字过渡前缀暂不判错，失焦结算后才显示校验结果
+test('numeric transitional prefixes are not errors until blur settlement shows validation results', () => {
   const question = numberQuestion({ required: false })
   const form = new FlowInputs(surveyDocument([question]))
   for (const prefix of ['-', '12.', '1e', '1e-', '1.5e+']) {
@@ -65,7 +68,8 @@ test('数字过渡前缀暂不判错，失焦结算后才显示校验结果', ()
   assert.equal(form.snapshot().errors[question.id], undefined)
 })
 
-test('永远补不成合法数字的写法不算输入中，立即交给引擎判错', () => {
+// 永远补不成合法数字的写法不算输入中，立即交给引擎判错
+test('text that can never become a valid number is not treated as input and is reported by the engine immediately', () => {
   const question = numberQuestion({ required: false })
   for (const raw of ['.', '.5', '-.5', '00', '01', '1.e']) {
     const form = new FlowInputs(surveyDocument([question]))
@@ -76,7 +80,8 @@ test('永远补不成合法数字的写法不算输入中，立即交给引擎�
   }
 })
 
-test('翻页前自动结算过渡前缀，残缺输入给出题目级错误', () => {
+// 翻页前自动结算过渡前缀，残缺输入给出题目级错误
+test('transitional prefixes settle automatically before paging and incomplete input yields question-level errors', () => {
   const question = numberQuestion({ required: false })
   const form = new FlowInputs(surveyDocument([question]))
   form.change(question.id, '12.')
@@ -89,7 +94,8 @@ test('翻页前自动结算过渡前缀，残缺输入给出题目级错误', ()
   assert.equal(form.submissionAnswers()[0].value, 12.5)
 })
 
-test('切换分支后镜像里的已跳过输入一并清理', () => {
+// 切换分支后镜像里的已跳过输入一并清理
+test('skipped mirror inputs are cleared after switching branches', () => {
   const document = readFlowDocument('diamond')
   const [choice, number, text, merge] = document.questions
   const [first, second] = choice.options
@@ -118,7 +124,8 @@ test('切换分支后镜像里的已跳过输入一并清理', () => {
   assert.equal(answers.find((answer) => answer.question_id === number.id).value, 1e20)
 })
 
-test('最终答案按题目字典序导出且数组彼此隔离', () => {
+// 最终答案按题目字典序导出且数组彼此隔离
+test('final answers export in question dictionary order with isolated arrays', () => {
   const document = readFlowDocument('plain')
   const [, multiple, text, , , rating] = document.questions
   const reversed = [multiple.options[1].id, multiple.options[0].id]
@@ -140,7 +147,8 @@ test('最终答案按题目字典序导出且数组彼此隔离', () => {
   assert.deepEqual(form.submissionAnswers()[0].value, exported, '多选答案数组彼此隔离')
 })
 
-test('未配置流程的问卷缺必填时拒绝前进，补全后可提交并退回编辑页', () => {
+// 未配置流程的问卷缺必填时拒绝前进，补全后可提交并退回编辑页
+test('survey without configured flow refuses to advance while required answers are missing and can submit after completion', () => {
   const required = textQuestion()
   const optional = numberQuestion({ required: false })
   const form = new FlowInputs(surveyDocument([required, optional]))
@@ -157,7 +165,8 @@ test('未配置流程的问卷缺必填时拒绝前进，补全后可提交并�
   assert.equal(form.values()[required.id], '补全后的回答')
 })
 
-test('合法暂存进度按真实会话完整回放', () => {
+// 合法暂存进度按真实会话完整回放
+test('valid staged progress replays completely against a real session', () => {
   const document = readFlowDocument('diamond')
   const [choice, number, , merge] = document.questions
   const form = new FlowInputs(document)
@@ -176,7 +185,8 @@ test('合法暂存进度按真实会话完整回放', () => {
   assert.equal(form.values()[merge.id], '汇合')
 })
 
-test('回放在首个不可应用事件处停止并保留成功前缀', () => {
+// 回放在首个不可应用事件处停止并保留成功前缀
+test('replay stops at the first non-applicable event and keeps the successful prefix', () => {
   const document = readFlowDocument('diamond')
   const [choice, number, skipped] = document.questions
   const form = new FlowInputs(document)
@@ -200,7 +210,8 @@ test('回放在首个不可应用事件处停止并保留成功前缀', () => {
   assert.equal(form.values()[skipped.id], undefined)
 })
 
-test('过渡数字前缀只接受当前页的题目', () => {
+// 过渡数字前缀只接受当前页的题目
+test('transitional numeric prefixes are accepted only for questions on the current page', () => {
   const document = readFlowDocument('diamond')
   const [choice, number] = document.questions
   const future = new FlowInputs(document)
@@ -235,7 +246,8 @@ test('过渡数字前缀只接受当前页的题目', () => {
   assert.equal(current.unsettled().has(number.id), true)
 })
 
-test('首个事件不可应用时 applied 为 0 且不改变会话', () => {
+// 首个事件不可应用时 applied 为 0 且不改变会话
+test('applied is zero and the session is unchanged when the first event is not applicable', () => {
   const document = readFlowDocument('diamond')
   const form = new FlowInputs(document)
   const before = form.snapshot()
@@ -264,7 +276,8 @@ test('首个事件不可应用时 applied 为 0 且不改变会话', () => {
   assert.equal(malformed.applied, 0, '数组里混入非字符串时拒绝整个值')
 })
 
-test('普通问卷只接受改答，非法导航与损坏事件不计数', () => {
+// 普通问卷只接受改答，非法导航与损坏事件不计数
+test('plain surveys accept only answer changes and do not count invalid navigation or corrupted events', () => {
   const document = readFlowDocument('plain')
   const text = document.questions[2].id
   const form = new FlowInputs(document)
@@ -295,7 +308,8 @@ test('普通问卷只接受改答，非法导航与损坏事件不计数', () =>
   assert.deepEqual(damaged.events, [{ type: 'change', question_id: text, value: '有效' }])
 })
 
-test('无答案但成功回放与领域标错的有效输入都算已回放', () => {
+// 无答案但成功回放与领域标错的有效输入都算已回放
+test('successful answerless replay and valid input with domain errors both count as replayed', () => {
   const number = numberQuestion({ required: false })
   const form = new FlowInputs(surveyDocument([number]))
   const transient = replayEvents(
@@ -318,7 +332,8 @@ test('无答案但成功回放与领域标错的有效输入都算已回放', ()
   assert.equal(wrong.snapshot().errors[short.id], 'invalid_answer')
 })
 
-test('快照为题级限制给出可直接展示的修正文案', () => {
+// 快照为题级限制给出可直接展示的修正文案
+test('snapshots provide displayable correction text for question-level restrictions', () => {
   const text = textQuestion({ max_length: 3 })
   const number = numberQuestion({ min: 1, max: 5 })
   const form = new FlowInputs(surveyDocument([text, number]))
